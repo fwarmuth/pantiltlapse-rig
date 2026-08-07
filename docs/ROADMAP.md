@@ -13,13 +13,13 @@
 - [x] Add shutter release delay (0.5s settle time) & USB RAM photo download preview
 - [x] **Verification Point 2**: Execute single step "Move -> Pause -> Shoot -> Confirm" test via Web UI (Verified on live hardware)
 
-## Phase 3: Time-lapse Engine & Sequence Planning
-- [ ] Implement event-driven time-lapse state machine in Backend
-- [ ] Define session data model (Start Pos, End Pos, Shot Count, Interval, Exposure Wait Time)
-- [ ] Web UI Time-lapse sequence setup wizard & live progress dashboard
-- [ ] **Verification Point 3**: Complete full automated time-lapse run
+## Phase 3: Time-lapse Engine & Sequence Planning (Completed)
+- [x] Implement event-driven time-lapse state machine in Backend (`TimelapseEngine`)
+- [x] Define session data model (Start Pos A, End Pos B, Shot Count, Interval, Settle Time)
+- [x] Web UI Time-lapse sequence setup wizard & live progress dashboard
+- [x] **Verification Point 3**: Complete full automated time-lapse run (Verified on live hardware)
 
-## Phase 4: User-Defined Functions, Presets & Mobile API Polish
-- [ ] Save & load movement presets / keyframes
-- [ ] Smooth easing curves (Linear, Ease-In-Out, S-curve)
-- [ ] Mobile-friendly app readiness (REST + WebSockets / SSE for real-time status)
+## Phase 4: Motion Easing & Mobile API Polish (Completed)
+- [x] Smooth motion easing curves (Ease-In-Out, Linear, S-curve)
+- [x] Real-time Server-Sent Events (SSE) streaming API (`GET /api/events`)
+- [x] Mobile-friendly responsive UI & touch optimization
