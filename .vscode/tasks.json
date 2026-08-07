@@ -1,0 +1,44 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Backend: Sync Dependencies (uv sync)",
+            "type": "shell",
+            "command": "uv sync",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "group": "build"
+        },
+        {
+            "label": "Backend: Lint with Ruff (uv run ruff check)",
+            "type": "shell",
+            "command": "uv run ruff check --fix .",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Backend: Run FastAPI Server (uv run)",
+            "type": "shell",
+            "command": "uv run python main.py",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Firmware: Build PlatformIO (pio run)",
+            "type": "shell",
+            "command": "pio run",
+            "options": {
+                "cwd": "${workspaceFolder}/firmware"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}
