@@ -1,21 +1,23 @@
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from camera_manager import CameraManager
 from serial_manager import SerialManager
+from timelapse_engine import TimelapseConfig, TimelapseEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("CameraCommander.Backend")
 
-# Hardware Managers
+# Hardware & Engine Managers
 serial_mgr = SerialManager(
     port=os.getenv("SERIAL_PORT", "/dev/ttyUSB0"),
     baudrate=int(os.getenv("SERIAL_BAUD", "9600")),
@@ -27,6 +29,8 @@ camera_mgr = CameraManager(
     capture_dir=os.path.join(os.path.dirname(__file__), "..", "output", "captures"),
 )
 
+timelapse_engine = TimelapseEngine(serial_mgr=serial_mgr, camera_mgr=camera_mgr)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -35,10 +39,11 @@ async def lifespan(app: FastAPI):
     await camera_mgr.initialize()
     yield
     logger.info("CameraCommander Backend shutting down...")
+    await timelapse_engine.cancel()
     camera_mgr.close()
 
 
-app = FastAPI(title="CameraCommander REST API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="CameraCommander REST API", version="0.4.0", lifespan=lifespan)
 
 # Allow CORS for mobile apps & web UI clients
 app.add_middleware(
@@ -91,6 +96,7 @@ async def move_motors(req: MoveRequest):
 
 @app.post("/api/motors/stop")
 async def stop_motors():
+    await timelapse_engine.cancel()
     return await serial_mgr.stop()
 
 
@@ -125,27 +131,23 @@ async def get_latest_preview():
     raise HTTPException(status_code=404, detail="No photo captured yet")
 
 
-# --- Integrated Sequence Step Endpoint ("Move -> Pause -> Shoot -> Confirm") ---
+# --- Integrated Sequence Step Endpoint ---
 @app.post("/api/sequence/step")
 async def execute_sequence_step(req: SequenceStepRequest):
     logger.info(f"Executing sequence step: move (pan={req.pan}, tilt={req.tilt}), pause={req.pause_s}s")
 
-    # Step 1: Move Motors
     if req.relative:
         move_res = await serial_mgr.move_relative(req.pan, req.tilt)
     else:
         move_res = await serial_mgr.move_absolute(req.pan, req.tilt)
 
-    # Step 2: Settle Delay Pause
     if req.pause_s > 0:
         await asyncio.sleep(req.pause_s)
 
-    # Step 3: Trigger Shutter Release (if requested)
     capture_res = None
     if req.capture:
         capture_res = await camera_mgr.trigger_capture()
 
-    # Step 4: Confirm Final Telemetry & Return
     motor_status = serial_mgr.get_status()
     camera_status = camera_mgr.get_status()
 
@@ -156,6 +158,50 @@ async def execute_sequence_step(req: SequenceStepRequest):
         "motors": motor_status,
         "camera": camera_status,
     }
+
+
+# --- Automated Time-lapse Engine API Endpoints ---
+@app.get("/api/timelapse/status")
+async def get_timelapse_status():
+    return timelapse_engine.get_status()
+
+
+@app.post("/api/timelapse/start")
+async def start_timelapse(config: TimelapseConfig):
+    return await timelapse_engine.start(config)
+
+
+@app.post("/api/timelapse/pause")
+async def pause_timelapse():
+    return await timelapse_engine.pause()
+
+
+@app.post("/api/timelapse/resume")
+async def resume_timelapse():
+    return await timelapse_engine.resume()
+
+
+@app.post("/api/timelapse/cancel")
+async def cancel_timelapse():
+    return await timelapse_engine.cancel()
+
+
+# --- Real-Time Server-Sent Events (SSE) Streaming ---
+@app.get("/api/events")
+async def stream_events():
+    """Stream real-time motor, camera, and time-lapse state events to frontend clients."""
+
+    async def event_generator():
+        while True:
+            payload = {
+                "motors": serial_mgr.get_status(),
+                "camera": camera_mgr.get_status(),
+                "timelapse": timelapse_engine.get_status(),
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # Serve Frontend static files if directory exists

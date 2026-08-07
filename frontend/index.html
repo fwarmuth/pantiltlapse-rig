@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>CameraCommander - Motor & Camera Controller</title>
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -132,12 +132,84 @@
                 </div>
             </section>
 
-            <!-- Integrated Motion-Shot Step Card -->
-            <section class="card sequence-card">
-                <h2>Integrated Step Test</h2>
-                <p class="subtitle">Move → Settle Pause (0.5s) → Shutter Release</p>
-                <div class="action-rows">
-                    <button class="btn btn-accent btn-block" onclick="executeMotionShotStep(5.0, 0.0)">▶ Test Motion-Shot Step (+5° Pan, Shoot)</button>
+            <!-- Automated Time-lapse Sequence Setup Card -->
+            <section class="card timelapse-card">
+                <h2>Time-lapse Sequence Wizard</h2>
+                
+                <!-- Keyframe A (Start) -->
+                <div class="keyframe-group">
+                    <div class="keyframe-header">
+                        <span>Point A (Start)</span>
+                        <button class="btn btn-small" onclick="setKeyframeA()">📍 Set Current (A)</button>
+                    </div>
+                    <div class="grid-2">
+                        <input type="number" id="inputStartPan" class="input-field" placeholder="Pan (°)" value="0.0" step="0.5">
+                        <input type="number" id="inputStartTilt" class="input-field" placeholder="Tilt (°)" value="0.0" step="0.5">
+                    </div>
+                </div>
+
+                <!-- Keyframe B (End) -->
+                <div class="keyframe-group">
+                    <div class="keyframe-header">
+                        <span>Point B (End)</span>
+                        <button class="btn btn-small" onclick="setKeyframeB()">📍 Set Current (B)</button>
+                    </div>
+                    <div class="grid-2">
+                        <input type="number" id="inputEndPan" class="input-field" placeholder="Pan (°)" value="15.0" step="0.5">
+                        <input type="number" id="inputEndTilt" class="input-field" placeholder="Tilt (°)" value="0.0" step="0.5">
+                    </div>
+                </div>
+
+                <!-- Sequence Parameters & Easing Profile -->
+                <div class="grid-2">
+                    <div class="control-group">
+                        <label>Total Shots</label>
+                        <input type="number" id="inputTotalShots" class="input-field" value="10" min="2" max="1000">
+                    </div>
+                    <div class="control-group">
+                        <label>Interval (Sec)</label>
+                        <input type="number" id="inputInterval" class="input-field" value="5.0" min="1" step="0.5">
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Motion Acceleration Profile</label>
+                    <select id="selectEasing" class="dropdown">
+                        <option value="ease_in_out" selected>Ease-In-Out (Smooth Sine)</option>
+                        <option value="linear">Linear (Constant Speed)</option>
+                        <option value="s_curve">S-Curve (Smootherstep)</option>
+                    </select>
+                </div>
+
+                <!-- Start Sequence Button -->
+                <button class="btn btn-accent btn-block" id="btnStartTimelapse" onclick="startTimelapse()">🚀 START TIMELAPSE</button>
+            </section>
+
+            <!-- Live Time-lapse Progress Dashboard Card -->
+            <section class="card progress-card" id="tlDashboard">
+                <h2>Live Time-lapse Progress</h2>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="tlProgressBar" style="width: 0%;"></div>
+                </div>
+                <div class="grid-2">
+                    <div class="metric">
+                        <span class="label">SHOT PROGRESS</span>
+                        <span class="value" id="tlValShot">0 / 0</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">ESTIMATED ETA</span>
+                        <span class="value" id="tlValEta">0.0s</span>
+                    </div>
+                </div>
+                <div class="mode-info">
+                    <span>State: <strong id="tlValState">IDLE</strong></span>
+                    <span>Elapsed: <strong id="tlValElapsed">0.0s</strong></span>
+                    <span>Percentage: <strong id="tlValPct">0%</strong></span>
+                </div>
+                <div class="grid-3 action-buttons">
+                    <button class="btn btn-secondary" id="btnTlPause" onclick="pauseTimelapse()">Pause</button>
+                    <button class="btn btn-secondary hidden" id="btnTlResume" onclick="resumeTimelapse()">Resume</button>
+                    <button class="btn btn-danger" id="btnTlCancel" onclick="cancelTimelapse()">Cancel</button>
                 </div>
             </section>
         </main>
