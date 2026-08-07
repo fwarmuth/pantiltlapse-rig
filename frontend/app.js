@@ -2,9 +2,12 @@ const API_BASE = "";
 
 let currentStepSize = 1.0;
 let driversEnabled = true;
+let isMoving = false;
 
 // Telemetry Polling
 async function fetchStatus() {
+    if (isMoving) return; // Skip background polling while a move is active
+    
     try {
         const res = await fetch(`${API_BASE}/api/motors/status`);
         if (!res.ok) throw new Error("API Offline");
@@ -51,28 +54,36 @@ function getStepSize() {
 }
 
 async function moveRelative(panDelta, tiltDelta) {
+    isMoving = true;
+    document.getElementById("valState").textContent = "MOVING";
     try {
         await fetch(`${API_BASE}/api/motors/move`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ pan: panDelta, tilt: tiltDelta, relative: true })
         });
-        fetchStatus();
     } catch (err) {
         console.error("Move relative failed:", err);
+    } finally {
+        isMoving = false;
+        fetchStatus();
     }
 }
 
 async function moveAbsolute(pan, tilt) {
+    isMoving = true;
+    document.getElementById("valState").textContent = "MOVING";
     try {
         await fetch(`${API_BASE}/api/motors/move`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ pan: pan, tilt: tilt, relative: false })
         });
-        fetchStatus();
     } catch (err) {
         console.error("Move absolute failed:", err);
+    } finally {
+        isMoving = false;
+        fetchStatus();
     }
 }
 
@@ -98,6 +109,6 @@ async function stopMotors() {
     }
 }
 
-// Start polling status every 500ms
+// Start polling status every 1000ms
 fetchStatus();
-setInterval(fetchStatus, 500);
+setInterval(fetchStatus, 1000);

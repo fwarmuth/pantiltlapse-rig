@@ -20,6 +20,15 @@
             "problemMatcher": []
         },
         {
+            "label": "Hardware: Interactive Serial CLI (uv run python cli.py)",
+            "type": "shell",
+            "command": "uv run python cli.py",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "Backend: Run FastAPI Server (uv run)",
             "type": "shell",
             "command": "uv run python main.py",

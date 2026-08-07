@@ -1,0 +1,6 @@
+# PlatformIO Build Directory & Local Environment
+.pio/
+.pioenvs/
+.piolibdeps/
+.clangd/
+.gcc-flags.json

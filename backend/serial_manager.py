@@ -9,6 +9,7 @@ class SerialManager:
     """
     Manages serial communication between Raspberry Pi Zero 2 W and the NodeMCU/ESP motor controller.
     Supports physical serial (`9600` baud ASCII protocol) and automatic Mock Mode for desktop testing.
+    Thread/Task safe with an internal asyncio.Lock.
     """
 
     def __init__(self, port: str = "/dev/ttyUSB0", baudrate: int = 9600, mock: bool = True):
@@ -25,6 +26,7 @@ class SerialManager:
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
+        self._lock = asyncio.Lock()
 
     async def connect(self) -> bool:
         if self.mock:
@@ -51,29 +53,30 @@ class SerialManager:
             return True
 
     async def send_command(self, cmd_str: str) -> dict[str, Any]:
-        """Send ASCII command string to motor controller (e.g. 'M 10.0 5.0' or 'S')."""
+        """Send ASCII command string to motor controller (e.g. 'M 10.0 5.0' or 'S'). Strictly serialized via Lock."""
         cmd_clean = cmd_str.strip()
         logger.info(f"Serial Command: '{cmd_clean}'")
 
         if self.mock:
             return await self._mock_process_command(cmd_clean)
 
-        if not self._writer:
-            return {"status": "ERROR", "message": "Not connected"}
+        async with self._lock:
+            if not self._writer or not self._reader:
+                return {"status": "ERROR", "message": "Not connected"}
 
-        try:
-            msg = f"{cmd_clean}\n"
-            self._writer.write(msg.encode("ascii"))
-            await self._writer.drain()
+            try:
+                msg = f"{cmd_clean}\n"
+                self._writer.write(msg.encode("ascii"))
+                await self._writer.drain()
 
-            # Read response line from hardware
-            response_bytes = await self._reader.readline()
-            response = response_bytes.decode("ascii").strip()
-            self._parse_response(response)
-            return {"status": "OK", "response": response}
-        except Exception as e:
-            logger.error(f"Serial communication error: {e}")
-            return {"status": "ERROR", "message": str(e)}
+                # Read response line from hardware
+                response_bytes = await self._reader.readline()
+                response = response_bytes.decode("ascii", errors="replace").strip()
+                self._parse_response(response)
+                return {"status": "OK", "response": response}
+            except Exception as e:
+                logger.error(f"Serial communication error: {e}")
+                return {"status": "ERROR", "message": str(e)}
 
     def _parse_response(self, resp: str):
         """Parse status response from NodeMCU/ESP controller."""
@@ -90,9 +93,9 @@ class SerialManager:
     async def move_absolute(self, pan: float, tilt: float) -> dict[str, Any]:
         """Move motors to absolute target angles in degrees."""
         self.state = "MOVING"
-        res = await self.send_command(f"M {pan:.2f} {tilt:.2f}")
         self.current_pan = pan
         self.current_tilt = tilt
+        res = await self.send_command(f"M {pan:.2f} {tilt:.2f}")
         self.state = "IDLE"
         if not self.mock:
             await self.send_command("S")
@@ -102,6 +105,8 @@ class SerialManager:
         """Move motors relative to current position."""
         target_pan = self.current_pan + delta_pan
         target_tilt = self.current_tilt + delta_tilt
+        self.current_pan = target_pan
+        self.current_tilt = target_tilt
         return await self.move_absolute(target_pan, target_tilt)
 
     async def stop(self) -> dict[str, Any]:
@@ -142,7 +147,7 @@ class SerialManager:
             self.drivers_enabled = True
             return {"status": "OK", "response": "OK DRIVERS ON"}
         elif cmd == "V":
-            return {"status": "OK", "response": "VERSION 1.0.1 (MOCK)"}
+            return {"status": "OK", "response": "VERSION 1.0.4 (MOCK)"}
 
         return {"status": "OK", "response": "OK"}
 
