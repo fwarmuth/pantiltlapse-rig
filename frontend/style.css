@@ -8,7 +8,7 @@
     --danger-hover: #dc2626;
     --text-main: #f8fafc;
     --text-muted: #94a3b8;
-    --accent: #6366f1;
+    --accent: #10b981;
 }
 
 * {
@@ -56,6 +56,11 @@ body {
     letter-spacing: -0.5px;
 }
 
+.status-badges {
+    display: flex;
+    gap: 0.5rem;
+}
+
 .status-badge {
     display: flex;
     align-items: center;
@@ -98,6 +103,11 @@ body {
     color: var(--text-muted);
 }
 
+.subtitle {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
 .grid-2 {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -125,7 +135,7 @@ body {
     color: var(--primary);
 }
 
-.mode-info {
+.mode-info, .camera-info {
     display: flex;
     justify-content: space-between;
     font-size: 0.8rem;
@@ -192,9 +202,41 @@ body {
 }
 
 .segment.active {
-    background: var(--accent);
-    color: #fff;
+    background: var(--primary);
+    color: #000;
     font-weight: 600;
+}
+
+.dropdown {
+    width: 100%;
+    background: rgba(15, 23, 42, 0.6);
+    color: var(--text-main);
+    border: 1px solid var(--card-border);
+    padding: 0.6rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    outline: none;
+}
+
+.control-group label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    display: block;
+    margin-bottom: 0.35rem;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: #0f172a;
+}
+
+.btn-primary:active {
+    background: var(--primary-hover);
+}
+
+.btn-accent {
+    background: var(--accent);
+    color: #0f172a;
 }
 
 .btn-danger {
@@ -212,6 +254,7 @@ body {
 
 .btn-block {
     width: 100%;
+    padding: 0.75rem;
 }
 
 .btn-secondary {
@@ -221,8 +264,36 @@ body {
     border-radius: 8px;
 }
 
-.action-rows {
+.preview-box {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px dashed var(--card-border);
+    border-radius: 12px;
+    padding: 0.75rem;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    align-items: center;
+    justify-content: center;
+    min-height: 180px;
+}
+
+.preview-box .label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.preview-img {
+    max-width: 100%;
+    max-height: 220px;
+    border-radius: 8px;
+    object-fit: contain;
+}
+
+.placeholder-text {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.hidden {
+    display: none;
 }

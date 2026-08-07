@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CameraCommander - Motor Controller</title>
+    <title>CameraCommander - Motor & Camera Controller</title>
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,9 +17,15 @@
                 <span class="icon">📷</span>
                 <h1>CameraCommander</h1>
             </div>
-            <div class="status-badge" id="statusBadge">
-                <span class="dot"></span>
-                <span id="statusText">CONNECTING...</span>
+            <div class="status-badges">
+                <div class="status-badge" id="statusBadge">
+                    <span class="dot"></span>
+                    <span id="statusText">MOTORS...</span>
+                </div>
+                <div class="status-badge" id="cameraStatusBadge">
+                    <span class="dot"></span>
+                    <span id="cameraStatusText">CAMERA...</span>
+                </div>
             </div>
         </header>
 
@@ -27,7 +33,7 @@
         <main class="dashboard">
             <!-- Telemetry Card -->
             <section class="card telemetry-card">
-                <h2>Live Telemetry</h2>
+                <h2>Live Motor Telemetry</h2>
                 <div class="grid-2">
                     <div class="metric">
                         <span class="label">PAN (Turntable)</span>
@@ -75,12 +81,63 @@
                 </div>
             </section>
 
-            <!-- Sequence Quick Test -->
+            <!-- Camera Control Card -->
+            <section class="card camera-card">
+                <h2>Canon DSLR Controls</h2>
+                <div class="camera-info">
+                    <span>Model: <strong id="valCameraModel">Canon DSLR</strong></span>
+                    <span>ISO: <strong id="valCameraIso">400</strong></span>
+                    <span>Shutter: <strong id="valCameraShutter">1/125</strong></span>
+                </div>
+
+                <!-- Exposure Selectors -->
+                <div class="grid-2">
+                    <div class="control-group">
+                        <label>ISO Speed</label>
+                        <select id="selectIso" class="dropdown" onchange="setCameraConfig('iso', this.value)">
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                            <option value="400" selected>400</option>
+                            <option value="800">800</option>
+                            <option value="1600">1600</option>
+                            <option value="3200">3200</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label>Shutter Speed</label>
+                        <select id="selectShutter" class="dropdown" onchange="setCameraConfig('shutter_speed', this.value)">
+                            <option value="1/4000">1/4000</option>
+                            <option value="1/2000">1/2000</option>
+                            <option value="1/1000">1/1000</option>
+                            <option value="1/500">1/500</option>
+                            <option value="1/250">1/250</option>
+                            <option value="1/125" selected>1/125</option>
+                            <option value="1/60">1/60</option>
+                            <option value="1/30">1/30</option>
+                            <option value="1/15">1/15</option>
+                            <option value="1/4">1/4</option>
+                            <option value="1">1s</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Shutter Trigger Button -->
+                <button class="btn btn-primary btn-block" onclick="triggerTestShot()">📸 Trigger Test Shot</button>
+
+                <!-- Latest Photo Preview Thumbnail -->
+                <div class="preview-box" id="previewContainer">
+                    <span class="label">Latest Photo Preview</span>
+                    <img id="previewImg" class="preview-img hidden" alt="Latest Capture" />
+                    <span id="previewPlaceholder" class="placeholder-text">No photo captured yet</span>
+                </div>
+            </section>
+
+            <!-- Integrated Motion-Shot Step Card -->
             <section class="card sequence-card">
-                <h2>Motor Step Test</h2>
+                <h2>Integrated Step Test</h2>
+                <p class="subtitle">Move → Settle Pause (0.5s) → Shutter Release</p>
                 <div class="action-rows">
-                    <button class="btn btn-secondary" onclick="moveRelative(10, 5)">Test Move (+10° Pan, +5° Tilt)</button>
-                    <button class="btn btn-secondary" onclick="moveAbsolute(0, 0)">Return to Zero (0°, 0°)</button>
+                    <button class="btn btn-accent btn-block" onclick="executeMotionShotStep(5.0, 0.0)">▶ Test Motion-Shot Step (+5° Pan, Shoot)</button>
                 </div>
             </section>
         </main>
