@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CameraCommander - Motor Controller</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo">
+                <span class="icon">📷</span>
+                <h1>CameraCommander</h1>
+            </div>
+            <div class="status-badge" id="statusBadge">
+                <span class="dot"></span>
+                <span id="statusText">CONNECTING...</span>
+            </div>
+        </header>
+
+        <!-- Main Dashboard -->
+        <main class="dashboard">
+            <!-- Telemetry Card -->
+            <section class="card telemetry-card">
+                <h2>Live Telemetry</h2>
+                <div class="grid-2">
+                    <div class="metric">
+                        <span class="label">PAN (Turntable)</span>
+                        <span class="value" id="valPan">0.00°</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">TILT (Vertical)</span>
+                        <span class="value" id="valTilt">0.00°</span>
+                    </div>
+                </div>
+                <div class="mode-info">
+                    <span>Mode: <strong id="valMode">Mock</strong></span>
+                    <span>Drivers: <strong id="valDrivers">ON</strong></span>
+                    <span>State: <strong id="valState">IDLE</strong></span>
+                </div>
+            </section>
+
+            <!-- Jog Controls Card -->
+            <section class="card jog-card">
+                <h2>Manual Jog Control</h2>
+                
+                <!-- D-Pad Directional Controls -->
+                <div class="dpad-container">
+                    <button class="btn dpad-up" onclick="moveRelative(0, getStepSize())" title="Tilt Up">▲</button>
+                    <button class="btn dpad-left" onclick="moveRelative(-getStepSize(), 0)" title="Pan Left">◄</button>
+                    <button class="btn dpad-center" onclick="moveAbsolute(0, 0)" title="Return to Zero (0°, 0°)">🏠</button>
+                    <button class="btn dpad-right" onclick="moveRelative(getStepSize(), 0)" title="Pan Right">►</button>
+                    <button class="btn dpad-down" onclick="moveRelative(0, -getStepSize())" title="Tilt Down">▼</button>
+                </div>
+
+                <!-- Step Size Selector -->
+                <div class="control-group">
+                    <label>Step Increment (°)</label>
+                    <div class="segmented-control">
+                        <button class="segment" data-step="0.5" onclick="setStepSize(0.5)">0.5°</button>
+                        <button class="segment active" data-step="1.0" onclick="setStepSize(1.0)">1°</button>
+                        <button class="segment" data-step="5.0" onclick="setStepSize(5.0)">5°</button>
+                        <button class="segment" data-step="15.0" onclick="setStepSize(15.0)">15°</button>
+                    </div>
+                </div>
+
+                <div class="grid-2">
+                    <button class="btn btn-secondary" id="btnDriverToggle" onclick="toggleDrivers()">Disable Drivers</button>
+                    <button class="btn btn-danger" onclick="stopMotors()">STOP ALL</button>
+                </div>
+            </section>
+
+            <!-- Sequence Quick Test -->
+            <section class="card sequence-card">
+                <h2>Motor Step Test</h2>
+                <div class="action-rows">
+                    <button class="btn btn-secondary" onclick="moveRelative(10, 5)">Test Move (+10° Pan, +5° Tilt)</button>
+                    <button class="btn btn-secondary" onclick="moveAbsolute(0, 0)">Return to Zero (0°, 0°)</button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

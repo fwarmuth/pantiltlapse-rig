@@ -1,0 +1,61 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Debug Backend (Live Hardware)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/backend/main.py",
+            "cwd": "${workspaceFolder}/backend",
+            "python": "${workspaceFolder}/backend/.venv/bin/python",
+            "env": {
+                "MOCK_MODE": "false",
+                "SERIAL_PORT": "/dev/ttyUSB0",
+                "SERIAL_BAUD": "9600"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: Debug Backend (Mock Mode)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/backend/main.py",
+            "cwd": "${workspaceFolder}/backend",
+            "python": "${workspaceFolder}/backend/.venv/bin/python",
+            "env": {
+                "MOCK_MODE": "true",
+                "SERIAL_PORT": "/dev/ttyUSB0",
+                "SERIAL_BAUD": "9600"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Firefox: Debug Frontend (Web UI)",
+            "type": "firefox",
+            "request": "launch",
+            "reAttach": true,
+            "url": "http://localhost:8000",
+            "webRoot": "${workspaceFolder}/frontend"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Full Stack - Live Hardware (Backend + Firefox)",
+            "configurations": [
+                "Python: Debug Backend (Live Hardware)",
+                "Firefox: Debug Frontend (Web UI)"
+            ],
+            "stopAll": true
+        },
+        {
+            "name": "Full Stack - Mock Mode (Backend + Firefox)",
+            "configurations": [
+                "Python: Debug Backend (Mock Mode)",
+                "Firefox: Debug Frontend (Web UI)"
+            ],
+            "stopAll": true
+        }
+    ]
+}
