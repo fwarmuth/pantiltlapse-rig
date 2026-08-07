@@ -4,13 +4,13 @@ let currentStepSize = 1.0;
 let driversEnabled = true;
 let isMoving = false;
 
-// Telemetry Polling
+// Motor & Camera Telemetry Polling
 async function fetchStatus() {
-    if (isMoving) return; // Skip background polling while a move is active
-    
+    if (isMoving) return;
+
     try {
         const res = await fetch(`${API_BASE}/api/motors/status`);
-        if (!res.ok) throw new Error("API Offline");
+        if (!res.ok) throw new Error("Motor API Offline");
         const data = await res.json();
         
         document.getElementById("valPan").textContent = `${data.pan.toFixed(2)}°`;
@@ -29,12 +29,115 @@ async function fetchStatus() {
         const badge = document.getElementById("statusBadge");
         const statusText = document.getElementById("statusText");
         badge.classList.add("connected");
-        statusText.textContent = data.mock_mode ? "CONNECTED (MOCK)" : "ONLINE";
+        statusText.textContent = data.mock_mode ? "MOTORS (MOCK)" : "MOTORS OK";
     } catch (err) {
         const badge = document.getElementById("statusBadge");
         const statusText = document.getElementById("statusText");
         badge.classList.remove("connected");
-        statusText.textContent = "DISCONNECTED";
+        statusText.textContent = "MOTORS OFF";
+    }
+
+    // Fetch Camera Status
+    await fetchCameraStatus();
+}
+
+async function fetchCameraStatus() {
+    try {
+        const res = await fetch(`${API_BASE}/api/camera/status`);
+        if (!res.ok) throw new Error("Camera API Offline");
+        const data = await res.json();
+
+        document.getElementById("valCameraModel").textContent = data.model || "Canon DSLR";
+        document.getElementById("valCameraIso").textContent = data.iso || "--";
+        document.getElementById("valCameraShutter").textContent = data.shutter_speed || "--";
+
+        const badge = document.getElementById("cameraStatusBadge");
+        const statusText = document.getElementById("cameraStatusText");
+        badge.classList.add("connected");
+        statusText.textContent = data.mock_mode ? "CAMERA (MOCK)" : "CAMERA OK";
+
+        if (data.has_latest_photo) {
+            updatePreviewImage();
+        }
+    } catch (err) {
+        const badge = document.getElementById("cameraStatusBadge");
+        const statusText = document.getElementById("cameraStatusText");
+        badge.classList.remove("connected");
+        statusText.textContent = "CAMERA OFF";
+    }
+}
+
+function updatePreviewImage() {
+    const img = document.getElementById("previewImg");
+    const placeholder = document.getElementById("previewPlaceholder");
+    if (img && placeholder) {
+        img.src = `${API_BASE}/api/camera/preview/latest?t=${new Date().getTime()}`;
+        img.classList.remove("hidden");
+        placeholder.classList.add("hidden");
+    }
+}
+
+async function setCameraConfig(param, value) {
+    try {
+        await fetch(`${API_BASE}/api/camera/config`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ param: param, value: value })
+        });
+        fetchCameraStatus();
+    } catch (err) {
+        console.error("Set camera config failed:", err);
+    }
+}
+
+async function triggerTestShot() {
+    const placeholder = document.getElementById("previewPlaceholder");
+    if (placeholder) placeholder.textContent = "Capturing photo & downloading...";
+
+    try {
+        const res = await fetch(`${API_BASE}/api/camera/trigger`, { method: "POST" });
+        const data = await res.json();
+        if (data.status === "OK") {
+            updatePreviewImage();
+        } else {
+            alert(`Capture failed: ${data.message || "Unknown error"}`);
+            if (placeholder) placeholder.textContent = "Capture failed";
+        }
+    } catch (err) {
+        console.error("Trigger test shot failed:", err);
+        if (placeholder) placeholder.textContent = "Trigger request error";
+    }
+}
+
+async function executeMotionShotStep(panDelta, tiltDelta) {
+    isMoving = true;
+    document.getElementById("valState").textContent = "STEPPING";
+    const placeholder = document.getElementById("previewPlaceholder");
+    if (placeholder) placeholder.textContent = "Executing Move -> Settle -> Capture...";
+
+    try {
+        const res = await fetch(`${API_BASE}/api/sequence/step`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                pan: panDelta,
+                tilt: tiltDelta,
+                relative: true,
+                pause_s: 0.5,
+                capture: true
+            })
+        });
+        const data = await res.json();
+        if (data.status === "OK") {
+            updatePreviewImage();
+        } else {
+            alert(`Step failed: ${data.message || "Unknown error"}`);
+        }
+    } catch (err) {
+        console.error("Step execution failed:", err);
+    } finally {
+        isMoving = false;
+        fetchStatus();
     }
 }
 

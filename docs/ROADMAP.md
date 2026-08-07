@@ -8,10 +8,10 @@
 - [x] Build modern lightweight Web UI for manual motor jogging & status monitoring
 - [x] **Verification Point 1**: Test manual Pan/Tilt motor controls from web interface & CLI (Verified on live hardware)
 
-## Phase 2: Camera Integration & Exposure Sync
-- [ ] Implement camera trigger module (gphoto2 or GPIO shutter interface)
-- [ ] Add shutter release delay & exposure completion confirmation
-- [ ] **Verification Point 2**: Execute single step "Move -> Pause -> Shoot -> Confirm" test
+## Phase 2: Camera Integration & Exposure Sync (Completed)
+- [x] Implement native camera trigger module (`python-gphoto2` persistent session for Canon EOS 700D)
+- [x] Add shutter release delay (0.5s settle time) & USB RAM photo download preview
+- [x] **Verification Point 2**: Execute single step "Move -> Pause -> Shoot -> Confirm" test via Web UI (Verified on live hardware)
 
 ## Phase 3: Time-lapse Engine & Sequence Planning
 - [ ] Implement event-driven time-lapse state machine in Backend
