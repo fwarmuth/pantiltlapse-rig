@@ -1,12 +1,12 @@
 # Development Roadmap & Verification Checklist
 
-## Phase 1: Monorepo Foundation & Motor Testing UI (Current Phase)
+## Phase 1: Monorepo Foundation & Motor Testing UI (Completed)
 - [x] Create project layout and LLM documentation (`docs/`)
-- [ ] Define ESP32 motor serial protocol details
-- [ ] Create minimal ESP32 firmware (or mock serial backend for testing UI)
-- [ ] Build Python FastAPI backend with Async Serial Manager
-- [ ] Build modern lightweight Web UI for manual motor jogging & status monitoring
-- [ ] **Verification Point 1**: Test manual Pan/Tilt motor controls from web interface
+- [x] Define ESP/NodeMCU motor serial protocol details
+- [x] Create PlatformIO NodeMCU firmware v1.0.4 with 16x microstepping
+- [x] Build Python FastAPI backend with Async Serial Manager & Interactive CLI
+- [x] Build modern lightweight Web UI for manual motor jogging & status monitoring
+- [x] **Verification Point 1**: Test manual Pan/Tilt motor controls from web interface & CLI (Verified on live hardware)
 
 ## Phase 2: Camera Integration & Exposure Sync
 - [ ] Implement camera trigger module (gphoto2 or GPIO shutter interface)

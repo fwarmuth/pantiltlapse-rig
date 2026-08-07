@@ -1,0 +1,3 @@
+# Frontend runtime files
+.DS_Store
+*.log

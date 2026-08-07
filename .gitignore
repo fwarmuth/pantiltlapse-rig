@@ -1,0 +1,41 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C/C++ compilation outputs
+*.o
+*.elf
+*.bin
+*.hex
+
+# Python Virtual Environments (uv / venv)
+.venv/
+venv/
+ENV/
+env/
+
+# PlatformIO Build Artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+.clangd/
+.cache/
+
+# IDEs & Editors (Keep project configs)
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# CameraCommander Output & Logs
+*.log
+output/
+.tmp/
