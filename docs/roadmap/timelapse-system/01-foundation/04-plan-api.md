@@ -10,14 +10,14 @@ Expose persistent plans and calculated path samples through FastAPI while preser
 
 ## Checklist
 
-- [ ] Construct one plan store during application startup and inject/pass it directly to short route handlers.
-- [ ] Add `POST /api/plans`, `GET /api/plans`, `GET /api/plans/{id}`, `PUT /api/plans/{id}`, and `DELETE /api/plans/{id}`.
-- [ ] Require the caller's current revision on update and return `409` for stale edits.
-- [ ] Add `GET /api/plans/{id}/trajectory` returning generated shot poses, expected duration, maximum angular deltas, validation errors, and warnings.
-- [ ] Keep list responses compact; load full trajectory/keyframe data only in plan detail.
-- [ ] Use the shared JSON error envelope and documented status codes.
-- [ ] Add FastAPI tests using a temporary output root.
-- [ ] Update the API protocol document with the additive endpoints.
+- [x] Construct one plan store during application startup and inject/pass it directly to short route handlers.
+- [x] Add `POST /api/plans`, `GET /api/plans`, `GET /api/plans/{id}`, `PUT /api/plans/{id}`, and `DELETE /api/plans/{id}`.
+- [x] Require the caller's current revision on update and return `409` for stale edits.
+- [x] Add `GET /api/plans/{id}/trajectory` returning generated shot poses, expected duration, maximum angular deltas, validation errors, and warnings.
+- [x] Keep list responses compact; load full trajectory/keyframe data only in plan detail.
+- [x] Use the shared JSON error envelope and documented status codes.
+- [x] Add FastAPI tests using a temporary output root.
+- [x] Update the API protocol document with the additive endpoints.
 
 ## Functional check
 
@@ -38,5 +38,12 @@ Using `/docs` or `curl`, create a plan, retrieve it, update a waypoint, inspect 
 
 ## Implementation notes
 
-- Record final request/response examples here after implementation.
+- Created endpoints in `backend/main.py`:
+  - `POST /api/plans`: Returns `201 Created` with created `SequencePlan`.
+  - `GET /api/plans`: Returns compact plan summaries list.
+  - `GET /api/plans/{plan_id}`: Returns full `SequencePlan`.
+  - `PUT /api/plans/{plan_id}`: Validates request revision against stored revision, returning HTTP `409 Conflict` on mismatch.
+  - `DELETE /api/plans/{plan_id}`: Deletes plan directory.
+  - `GET /api/plans/{plan_id}/trajectory`: Samples trajectory poses and returns `TrajectorySamplingResult`.
+- Unit & integration tests added in `backend/tests/test_plan_api.py`.
 
