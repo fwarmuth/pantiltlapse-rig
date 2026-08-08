@@ -38,6 +38,10 @@ class SerialManager:
             self.is_connected = True
             self.state = "IDLE"
             logger.info(f"Connected to motor controller on {self.port} at {self.baudrate} baud.")
+
+            # Flush any boot banner text lines from serial buffer
+            await self._flush_input_buffer()
+
             # Query version and initial status
             await self.send_command("V")
             await self.send_command("S")
@@ -49,6 +53,38 @@ class SerialManager:
             self._reader = None
             self._writer = None
             return False
+
+    async def disconnect(self):
+        """Close serial connection if open."""
+        if self._writer:
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except Exception as e:
+                logger.debug(f"Error closing serial writer: {e}")
+        self._reader = None
+        self._writer = None
+        self.is_connected = False
+        self.state = "DISCONNECTED"
+
+    async def reconnect(self) -> bool:
+        """Disconnect and attempt to reconnect serial port."""
+        async with self._lock:
+            await self.disconnect()
+            return await self.connect()
+
+    async def _flush_input_buffer(self):
+        """Drain any stale boot banner lines from serial reader."""
+        if not self._reader:
+            return
+        for _ in range(20):
+            try:
+                line = await asyncio.wait_for(self._reader.readline(), timeout=0.15)
+                if not line:
+                    break
+                logger.debug(f"Flushed boot line: {line.decode('ascii', errors='replace').strip()}")
+            except asyncio.TimeoutError:
+                break
 
     async def send_command(self, cmd_str: str) -> dict[str, Any]:
         """Send ASCII command string to motor controller (e.g. 'M 10.0 5.0' or 'S'). Strictly serialized via Lock."""

@@ -10,22 +10,7 @@
             "python": "${workspaceFolder}/backend/.venv/bin/python",
             "env": {
                 "MOCK_MODE": "false",
-                "SERIAL_PORT": "/dev/ttyUSB0",
-                "SERIAL_BAUD": "9600"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": true
-        },
-        {
-            "name": "Python: Debug Backend (Mock Mode)",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/backend/main.py",
-            "cwd": "${workspaceFolder}/backend",
-            "python": "${workspaceFolder}/backend/.venv/bin/python",
-            "env": {
-                "MOCK_MODE": "true",
-                "SERIAL_PORT": "/dev/ttyUSB0",
+                "SERIAL_PORT": "/dev/ttyUSB1",
                 "SERIAL_BAUD": "9600"
             },
             "console": "integratedTerminal",

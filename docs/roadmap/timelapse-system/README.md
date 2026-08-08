@@ -75,11 +75,11 @@ Checkpoint: create, validate, save, reload, and sample a plan through FastAPI wh
 
 ### B. Hardware-testable planning workflow
 
-- [ ] [05 — Rig safety and coordinate reference](02-planning/05-rig-safety.md)
-- [ ] [06 — Test shots and media artifacts](02-planning/06-test-shots.md)
-- [ ] [07 — Full-path dry run](02-planning/07-dry-run.md)
-- [ ] [08 — Enhanced live view](02-planning/08-live-view.md)
-- [ ] [09 — Planning UI](02-planning/09-planning-ui.md)
+- [x] [05 — Rig safety and coordinate reference](02-planning/05-rig-safety.md)
+- [x] [06 — Test shots and media artifacts](02-planning/06-test-shots.md)
+- [x] [07 — Full-path dry run](02-planning/07-dry-run.md)
+- [x] [08 — Enhanced live view](02-planning/08-live-view.md)
+- [x] [09 — Planning UI](02-planning/09-planning-ui.md)
 
 Checkpoint: build a plan entirely from the browser, inspect night-oriented live view, save test shots, and traverse every planned pose without capturing.
 
