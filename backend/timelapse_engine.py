@@ -203,5 +203,5 @@ class TimelapseEngine:
             "elapsed_time_s": round(self.elapsed_time_s, 1),
             "estimated_eta_s": round(self.estimated_eta_s, 1),
             "last_error": self.last_error,
-            "config": self.config.model_dump() if self.config else None,
+            "config": self.config.model_dump(mode="json") if self.config else None,
         }

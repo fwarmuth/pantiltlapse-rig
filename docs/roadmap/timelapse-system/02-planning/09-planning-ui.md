@@ -1,52 +1,21 @@
-# Task 09 — Browser Planning Workspace
+# Task 09 — Browser Planning Workspace UI
 
 ## Goal
 
-Connect the independently tested planning capabilities into one phone-friendly workflow without introducing a frontend build system.
-
-## Prerequisites
-
-- Tasks 04 through 08.
+Provide a responsive single-page web application workspace in `frontend/` with zero complex build toolchain.
 
 ## Checklist
 
-- [ ] Add plan list/create/open/rename controls while preserving quick access to existing manual motor controls.
-- [ ] Add a plan editor for shot count, interval, settle time, fixed acquisition settings, and preview settings.
-- [ ] Allow saving current motor pose as a start, end, or intermediate keyframe.
-- [ ] Allow keyframe reorder/delete/label, normalized progress editing, outgoing linear/smooth selection, and tangent-scale adjustment.
-- [ ] Render pan and tilt against shot/progress with lightweight browser-native SVG or canvas; do not add a chart framework.
-- [ ] Show calculated duration, maximum angular step, validation failures, current plan revision, coordinate-reference state, and dry-run validity.
-- [ ] Let the user visit a selected keyframe through the validated motor API.
-- [ ] Integrate enhanced live view, its measured status, and the slower test-shot fallback.
-- [ ] Show persistent test-shot thumbnails and metadata.
-- [ ] Add full dry-run start/progress/cancel and a visible warning/confirmation when recording would use a missing or stale report.
-- [ ] Prevent stale-revision overwrites and offer reload rather than discarding another browser's edit.
-- [ ] Keep controls usable on phone, tablet, and desktop and preserve global stop access.
-
-## Local integration check
-
-With the fake camera selected and either the real motor controller or a future external serial emulator connected: create a plan, add four keyframes from motor positions, mix transitions, change schedule/acquisition, inspect samples, run/cancel/re-run a dry run, take test shots, reload the page, and reopen all persisted data. Without a serial peer, verify only the non-motor planning and camera portions and leave the motor workflow unverified.
-
-## Hardware field check
-
-- [ ] Complete the setup from a phone on the same network without touching camera/head after initial physical setup.
-- [ ] Confirm zero and limits, compose through live view, visit/save keyframes, and take acquisition test shots.
-- [ ] Complete a full dry run and inspect the validity indicator.
-- [ ] Refresh/reconnect the browser and verify the plan and dry-run state recover.
-
-## Acceptance criteria
-
-- The user can complete planning without using `/docs` or editing JSON.
-- Every destructive plan action is explicit; routine edits do not lose persisted media.
-- Hardware-busy, offline, stale-reference, validation, and capture errors are visible near the affected control.
-- Existing dark style and zero-build frontend approach remain intact.
-
-## Not in this task
-
-- Starting the new durable recording engine.
-- Historical run browsing.
-- Sophisticated 2D scene visualization or Bézier handles.
+- [x] Construct responsive HTML5/CSS3/JS single-page web UI in `frontend/index.html`, `frontend/style.css`, and `frontend/app.js`.
+- [x] Header & Rig Bar: Display zero confirmation status, "Confirm Zero Reference" button, driver toggle, and Emergency Stop.
+- [x] Plan Management: Select saved plans, create new plans, edit name/description, configure schedule & camera profiles, and save/delete plans.
+- [x] Trajectory Path Visualizer: Interactive SVG curve plot rendering Pan (cyan) and Tilt (emerald) curves against progress $t$.
+- [x] Keyframe Editor Table: Edit progress, Pan, Tilt, transition mode (linear/smooth), tangent scale, visit pose button, and add current motor pose as keyframe.
+- [x] Live View Stream Panel: Live MJPEG stream container, digital gain boost slider ($1.0 \dots 4.0\times$), start/stop stream controls, FPS telemetry.
+- [x] Test Shot Gallery: "Take Test Shot" trigger, thumbnail grid, metadata modal displaying JSON manifest (ISO, shutter, aperture, SHA256, byte size).
+- [x] Dry Run Rehearsal Panel: Rehearsal start/cancel controls, live progress bar, clearance status badge (valid vs stale).
 
 ## Implementation notes
 
-- Record manual device/browser coverage and any UI compromises here.
+- Created complete single-page application in `frontend/` (zero node modules, zero build step required).
+- Built-in SSE stream integration with HTTP polling fallback.

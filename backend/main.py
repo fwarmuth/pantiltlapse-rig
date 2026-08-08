@@ -5,6 +5,7 @@ import os
 from contextlib import asynccontextmanager
 from uuid import UUID
 
+import dotenv
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -12,12 +13,20 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from camera_manager import CameraManager
+from coordinator import OperationCoordinator
 from domain.models import SequencePlan
+from domain.rig import RigManager
 from domain.trajectory import sample_trajectory
+from dry_run_engine import DryRunEngine
 from fake_camera_manager import FakeCameraManager
+from preview_controller import PreviewController
 from serial_manager import SerialManager
 from storage import PlanStore
 from timelapse_engine import TimelapseConfig, TimelapseEngine
+
+# Load deployment environment variables from backend/.env file if present
+ENV_FILE = os.path.join(os.path.dirname(__file__), ".env")
+dotenv.load_dotenv(dotenv_path=ENV_FILE)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("CameraCommander.Backend")
@@ -39,11 +48,25 @@ else:
 
 timelapse_engine = TimelapseEngine(serial_mgr=serial_mgr, camera_mgr=camera_mgr)
 plan_store = PlanStore()
+rig_mgr = RigManager(tilt_min_deg=0.0, tilt_max_deg=80.0)
+
+coordinator = OperationCoordinator()
+dry_run_engine = DryRunEngine(
+    serial_mgr=serial_mgr,
+    rig_mgr=rig_mgr,
+    plan_store=plan_store,
+    coordinator=coordinator,
+)
+preview_controller = PreviewController(
+    camera_mgr=camera_mgr,
+    coordinator=coordinator,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("CameraCommander Backend starting up...")
+    rig_mgr.invalidate_reference("Backend startup")
     await serial_mgr.connect()
     await camera_mgr.initialize()
     yield
@@ -64,6 +87,17 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def add_no_cache_header(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.endswith((".css", ".js", ".html")) or path == "/":
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 # Pydantic Schemas
 class MoveRequest(BaseModel):
     pan: float = Field(default=0.0, description="Target Pan angle in degrees (or relative delta)")
@@ -73,6 +107,11 @@ class MoveRequest(BaseModel):
 
 class DriverRequest(BaseModel):
     enable: bool = Field(default=True, description="Enable (True) or Disable (False) stepper motor drivers")
+
+
+class RigLimitsRequest(BaseModel):
+    tilt_min_deg: float = Field(default=0.0, description="Minimum allowable tilt angle in degrees")
+    tilt_max_deg: float = Field(default=80.0, description="Maximum allowable tilt angle in degrees")
 
 
 class CameraConfigRequest(BaseModel):
@@ -96,17 +135,68 @@ def _require_serial_connected():
         )
 
 
+# --- Rig & Coordinate Reference Endpoints ---
+@app.get("/api/rig/status")
+async def get_rig_status():
+    """Return physical rig limits and coordinate reference state."""
+    return {
+        "snapshot": rig_mgr.snapshot,
+        "reference": rig_mgr.reference,
+    }
+
+
+@app.post("/api/rig/limits")
+async def update_rig_limits(req: RigLimitsRequest):
+    """Update allowable rig tilt bounds."""
+    if req.tilt_max_deg < req.tilt_min_deg:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "ERROR", "message": "tilt_max_deg cannot be less than tilt_min_deg"},
+        )
+    snapshot = rig_mgr.set_limits(req.tilt_min_deg, req.tilt_max_deg)
+    return {"status": "OK", "snapshot": snapshot}
+
+
+@app.post("/api/rig/confirm-zero")
+async def confirm_physical_zero():
+    """Operator confirms physical zero reference position."""
+    ref = rig_mgr.confirm_reference()
+    return {"status": "OK", "reference": ref}
+
+
 # --- Motor API Endpoints ---
 @app.get("/api/motors/status")
 async def get_motor_status():
     if serial_mgr.is_connected:
         await serial_mgr.send_command("S")
-    return serial_mgr.get_status()
+    motor_st = serial_mgr.get_status()
+    motor_st["rig"] = rig_mgr.snapshot.model_dump(mode="json")
+    motor_st["reference"] = rig_mgr.reference.model_dump(mode="json")
+    return motor_st
+
+
+@app.post("/api/motors/reconnect")
+async def reconnect_motors():
+    """Attempt reconnection to physical serial port."""
+    connected = await serial_mgr.reconnect()
+    if not connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": f"Failed to connect to serial port '{serial_mgr.port}'"},
+        )
+    return {"status": "OK", "motors": serial_mgr.get_status()}
 
 
 @app.post("/api/motors/move")
 async def move_motors(req: MoveRequest):
     _require_serial_connected()
+    rig_mgr.validate_move(
+        pan=req.pan,
+        tilt=req.tilt,
+        relative=req.relative,
+        current_pan=serial_mgr.current_pan,
+        current_tilt=serial_mgr.current_tilt,
+    )
     if req.relative:
         return await serial_mgr.move_relative(req.pan, req.tilt)
     return await serial_mgr.move_absolute(req.pan, req.tilt)
@@ -114,6 +204,7 @@ async def move_motors(req: MoveRequest):
 
 @app.post("/api/motors/stop")
 async def stop_motors():
+    # Emergency stop is always accessible regardless of reference status
     _require_serial_connected()
     await timelapse_engine.cancel()
     return await serial_mgr.stop()
@@ -122,7 +213,11 @@ async def stop_motors():
 @app.post("/api/motors/drivers")
 async def set_motor_drivers(req: DriverRequest):
     _require_serial_connected()
-    return await serial_mgr.set_drivers(req.enable)
+    res = await serial_mgr.set_drivers(req.enable)
+    # Toggling motor drivers invalidates physical zero reference
+    rig_mgr.invalidate_reference(f"Motor drivers {'enabled' if req.enable else 'disabled'}")
+    res["reference"] = rig_mgr.reference.model_dump(mode="json")
+    return res
 
 
 # --- Camera API Endpoints ---
@@ -133,6 +228,26 @@ async def get_camera_status():
     return camera_mgr.get_status()
 
 
+@app.get("/api/camera/config/choices")
+async def get_camera_config_choices():
+    if not camera_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "status": "ERROR",
+                "message": "Camera is disconnected. Connect real camera or set FAKE_CAMERA=true in .env",
+            },
+        )
+    try:
+        choices = await camera_mgr.get_config_choices()
+        return {"status": "OK", "choices": choices}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": str(e)},
+        ) from e
+
+
 @app.post("/api/camera/config")
 async def set_camera_config(req: CameraConfigRequest):
     if not camera_mgr.is_connected:
@@ -140,6 +255,24 @@ async def set_camera_config(req: CameraConfigRequest):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"status": "ERROR", "message": "Camera is disconnected"},
         )
+
+    # Validate against supported camera choices
+    try:
+        choices = await camera_mgr.get_config_choices()
+        valid_options = choices.get(req.param, [])
+        if valid_options and req.value not in valid_options:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "status": "ERROR",
+                    "message": f"Invalid {req.param} value '{req.value}'. Supported options: {valid_options}",
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not validate choice against camera choices: {e}")
+
     return await camera_mgr.set_config(req.param, req.value)
 
 
@@ -161,10 +294,53 @@ async def get_latest_preview():
     raise HTTPException(status_code=404, detail="No photo captured yet")
 
 
+# --- Enhanced Live View API Endpoints ---
+class PreviewStartRequest(BaseModel):
+    gain: float = Field(default=1.0, ge=1.0, le=4.0, description="Digital contrast/gain boost multiplier")
+
+
+@app.post("/api/camera/preview/start")
+async def start_camera_preview(req: PreviewStartRequest | None = None):
+    """Start enhanced live view streaming with exclusive camera ownership."""
+    gain = req.gain if req else 1.0
+    return await preview_controller.start(gain=gain)
+
+
+@app.get("/api/camera/preview/status")
+async def get_camera_preview_status():
+    """Get active preview status, resolution, and FPS telemetry."""
+    return preview_controller.get_status()
+
+
+@app.post("/api/camera/preview/stop")
+async def stop_camera_preview():
+    """Stop live view stream and restore camera acquisition profile."""
+    return await preview_controller.stop()
+
+
+@app.get("/api/camera/preview/stream")
+async def get_camera_preview_stream():
+    """MJPEG HTTP stream response (multipart/x-mixed-replace) for dark-scene framing."""
+    if preview_controller.state != "STREAMING":
+        await preview_controller.start()
+
+    return StreamingResponse(
+        preview_controller.generate_mjpeg_stream(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
 # --- Integrated Sequence Step Endpoint ---
 @app.post("/api/sequence/step")
 async def execute_sequence_step(req: SequenceStepRequest):
     _require_serial_connected()
+    rig_mgr.validate_move(
+        pan=req.pan,
+        tilt=req.tilt,
+        relative=req.relative,
+        current_pan=serial_mgr.current_pan,
+        current_tilt=serial_mgr.current_tilt,
+    )
     logger.info(f"Executing sequence step: move (pan={req.pan}, tilt={req.tilt}), pause={req.pause_s}s")
 
     if req.relative:
@@ -289,8 +465,154 @@ async def get_plan_trajectory(plan_id: UUID):
             detail={"status": "ERROR", "message": f"Plan '{plan_id}' not found"},
         )
 
-    result = sample_trajectory(plan.trajectory, plan.schedule)
+    result = sample_trajectory(plan.trajectory, plan.schedule, rig_limits=rig_mgr.snapshot)
     return result
+
+
+# --- Test Shots & Media Artifacts API Endpoints ---
+class TestShotRequest(BaseModel):
+    iso: str | None = None
+    shutter_speed: str | None = None
+    aperture: str | None = None
+
+
+@app.post("/api/plans/{plan_id}/test-shots", status_code=status.HTTP_201_CREATED)
+async def trigger_plan_test_shot(plan_id: UUID, req: TestShotRequest | None = None):
+    """Trigger a single test shot using plan acquisition camera settings (or explicit overrides)."""
+    plan = plan_store.get_plan(plan_id)
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Plan '{plan_id}' not found"},
+        )
+
+    requested_settings = {
+        "iso": (req.iso if req and req.iso else plan.acquisition.iso),
+        "shutter_speed": (req.shutter_speed if req and req.shutter_speed else plan.acquisition.shutter_speed),
+        "aperture": (req.aperture if req and req.aperture else plan.acquisition.aperture),
+    }
+
+    from media_helper import create_test_shot_artifact
+
+    res = await create_test_shot_artifact(
+        plan_id=plan_id,
+        camera_mgr=camera_mgr,
+        plans_base_dir=plan_store.base_dir,
+        requested_settings=requested_settings,
+    )
+
+    if res.get("status") != "OK":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"status": "ERROR", "message": res.get("message", "Test shot failed")},
+        )
+
+    return res["metadata"]
+
+
+@app.get("/api/plans/{plan_id}/test-shots")
+async def list_plan_test_shots(plan_id: UUID):
+    """List all captured test shot metadata for a plan."""
+    plan_dir = plan_store.base_dir / str(plan_id)
+    test_shots_dir = plan_dir / "test-shots"
+    if not test_shots_dir.exists():
+        return []
+
+    shots = []
+    for entry in test_shots_dir.iterdir():
+        if entry.is_dir() and not entry.name.startswith(".tmp_"):
+            meta_file = entry / "metadata.json"
+            if meta_file.exists():
+                try:
+                    with open(meta_file, encoding="utf-8") as f:
+                        meta = json.load(f)
+                    shots.append(meta)
+                except Exception as e:
+                    logger.warning(f"Failed to parse test shot metadata at '{meta_file}': {e}")
+
+    shots.sort(key=lambda s: s.get("created_at", ""), reverse=True)
+    return shots
+
+
+@app.get("/api/plans/{plan_id}/test-shots/{shot_id}")
+async def get_test_shot_detail(plan_id: UUID, shot_id: UUID):
+    """Retrieve metadata detail for a specific test shot."""
+    meta_file = plan_store.base_dir / str(plan_id) / "test-shots" / str(shot_id) / "metadata.json"
+    if not meta_file.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Test shot '{shot_id}' not found"},
+        )
+    try:
+        with open(meta_file, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"status": "ERROR", "message": str(e)},
+        ) from e
+
+
+@app.get("/api/plans/{plan_id}/test-shots/{shot_id}/artifacts/{artifact_type}")
+async def get_test_shot_artifact_file(plan_id: UUID, shot_id: UUID, artifact_type: str):
+    """Serve an image artifact file ('original' or 'preview') for a test shot."""
+    shot_dir = (plan_store.base_dir / str(plan_id) / "test-shots" / str(shot_id)).resolve()
+    if not shot_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Test shot '{shot_id}' not found"},
+        )
+
+    # Map artifact_type to expected file
+    if artifact_type in ("original", "original.jpg", "original.svg"):
+        target_file = shot_dir / "original.jpg"
+        if not target_file.exists():
+            target_file = shot_dir / "original.svg"
+    elif artifact_type in ("preview", "preview.jpg", "preview.svg"):
+        target_file = shot_dir / "preview.jpg"
+        if not target_file.exists():
+            target_file = shot_dir / "preview.svg"
+    elif artifact_type == "metadata.json":
+        target_file = shot_dir / "metadata.json"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "ERROR", "message": f"Unknown artifact type '{artifact_type}'"},
+        )
+
+    if not target_file.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Artifact '{artifact_type}' not found"},
+        )
+
+    media_type = "image/svg+xml" if target_file.name.endswith(".svg") else (
+        "application/json" if target_file.name.endswith(".json") else "image/jpeg"
+    )
+    return FileResponse(target_file, media_type=media_type)
+
+
+# --- Dry Run Engine API Endpoints ---
+@app.post("/api/plans/{plan_id}/dry-run/start")
+async def start_dry_run(plan_id: UUID):
+    """Start full-path motion dry run for sequence plan."""
+    _require_serial_connected()
+    return await dry_run_engine.start(plan_id)
+
+
+@app.get("/api/plans/{plan_id}/dry-run/status")
+async def get_dry_run_status(plan_id: UUID):
+    """Get active dry-run progress and persisted DryRunReport with stale status."""
+    return {
+        "status": dry_run_engine.get_status(),
+        "report": dry_run_engine.get_report(plan_id),
+    }
+
+
+@app.post("/api/plans/{plan_id}/dry-run/cancel")
+async def cancel_dry_run(plan_id: UUID):
+    """Cancel active dry-run motion sequence."""
+    return await dry_run_engine.cancel()
 
 
 # --- Automated Time-lapse Engine API Endpoints ---
@@ -323,16 +645,18 @@ async def cancel_timelapse():
 # --- Real-Time Server-Sent Events (SSE) Streaming ---
 @app.get("/api/events")
 async def stream_events():
-    """Stream real-time motor, camera, and time-lapse state events to frontend clients."""
+    """Stream real-time motor, camera, rig, and time-lapse state events to frontend clients."""
 
     async def event_generator():
         while True:
             payload = {
                 "motors": serial_mgr.get_status(),
                 "camera": camera_mgr.get_status(),
+                "rig": rig_mgr.snapshot.model_dump(mode="json"),
+                "reference": rig_mgr.reference.model_dump(mode="json"),
                 "timelapse": timelapse_engine.get_status(),
             }
-            yield f"data: {json.dumps(payload)}\n\n"
+            yield f"data: {json.dumps(payload, default=str)}\n\n"
             await asyncio.sleep(1.0)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

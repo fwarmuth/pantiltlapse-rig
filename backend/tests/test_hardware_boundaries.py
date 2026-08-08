@@ -60,10 +60,23 @@ async def test_real_camera_manager_disconnected_no_fake_fallback(tmp_path):
 
 
 def test_fastapi_motor_disconnected_returns_503():
-    # Ensure serial_mgr is marked disconnected
-    serial_mgr.is_connected = False
     with TestClient(app) as client:
+        # Ensure serial_mgr is marked disconnected inside active lifespan
+        serial_mgr.is_connected = False
         response = client.post("/api/motors/move", json={"pan": 10.0, "tilt": 5.0, "relative": False})
         assert response.status_code == 503
         data = response.json()
         assert "detail" in data
+
+
+def test_reconnect_motors_endpoint():
+    with TestClient(app) as client:
+        # Mock port to non-existent port to test failed reconnect handling
+        original_port = serial_mgr.port
+        serial_mgr.port = "/dev/nonexistent_tty_device_5678"
+        try:
+            resp = client.post("/api/motors/reconnect")
+            assert resp.status_code == 503
+            assert serial_mgr.is_connected is False
+        finally:
+            serial_mgr.port = original_port

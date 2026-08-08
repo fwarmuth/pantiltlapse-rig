@@ -1,8 +1,13 @@
 import argparse
 import asyncio
+import os
 import sys
+from pathlib import Path
 
+import dotenv
 import serial_asyncio
+
+ENV_FILE = Path(__file__).with_name(".env")
 
 
 class ESPSerialCLI:
@@ -142,10 +147,27 @@ class ESPSerialCLI:
                     pass
 
 
+def create_argument_parser() -> argparse.ArgumentParser:
+    dotenv.load_dotenv(dotenv_path=ENV_FILE)
+
+    parser = argparse.ArgumentParser(
+        description="CameraCommander Serial CLI Tool",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--port", default=os.getenv("SERIAL_PORT", "/dev/ttyUSB0"), help="Serial port")
+
+    baud_value = os.getenv("SERIAL_BAUD", "9600")
+    try:
+        baud_default = int(baud_value)
+    except ValueError:
+        parser.error(f"SERIAL_BAUD must be an integer, got {baud_value!r}")
+
+    parser.add_argument("--baud", type=int, default=baud_default, help="Baud rate")
+    return parser
+
+
 def main():
-    parser = argparse.ArgumentParser(description="CameraCommander Serial CLI Tool")
-    parser.add_argument("--port", default="/dev/ttyUSB0", help="Serial port (default: /dev/ttyUSB0)")
-    parser.add_argument("--baud", type=int, default=9600, help="Baud rate (default: 9600)")
+    parser = create_argument_parser()
     args = parser.parse_args()
 
     cli = ESPSerialCLI(port=args.port, baudrate=args.baud)

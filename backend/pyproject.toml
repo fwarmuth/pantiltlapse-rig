@@ -11,6 +11,8 @@ dependencies = [
     "pyserial-asyncio>=0.6",
     "pydantic>=2.6.0",
     "gphoto2>=2.6.4",
+    "python-dotenv>=1.2.2",
+    "pillow>=12.3.0",
 ]
 
 [project.optional-dependencies]

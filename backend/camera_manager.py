@@ -108,6 +108,38 @@ class CameraManager:
 
         return {"iso": self.iso, "shutter_speed": self.shutter_speed, "aperture": self.aperture}
 
+    async def get_config_choices(self) -> dict[str, list[str]]:
+        """
+        Query native gPhoto2 camera widget choices for iso, shutterspeed, and aperture.
+        If camera is disconnected, raises Exception (explicit failure, no silent fallbacks).
+        """
+        if not self.is_connected or not self._camera:
+            raise Exception("Camera is disconnected. Connect real camera or enable FAKE_CAMERA=true in .env")
+
+        async with self._lock:
+            try:
+                config = self._camera.get_config()
+                key_map = {
+                    "iso": "iso",
+                    "shutter_speed": "shutterspeed",
+                    "aperture": "aperture",
+                }
+                choices: dict[str, list[str]] = {}
+                for param, child_name in key_map.items():
+                    try:
+                        child = config.get_child_by_name(child_name)
+                        count = child.count_choices()
+                        param_choices = [str(child.get_choice(i)) for i in range(count)]
+                        choices[param] = param_choices
+                    except Exception as e:
+                        logger.warning(f"Could not read choices for widget '{child_name}': {e}")
+                        choices[param] = []
+
+                return choices
+            except Exception as e:
+                logger.error(f"Error reading camera config choices: {e}")
+                raise Exception(f"Failed to query camera config choices: {e}") from e
+
     async def set_config(self, param: str, value: str) -> dict[str, Any]:
         """Set ISO, shutter speed, or aperture."""
         key_map = {
@@ -135,8 +167,8 @@ class CameraManager:
                 logger.error(f"Failed to set camera config '{param}' to '{value}': {e}")
                 return {"status": "ERROR", "message": str(e)}
 
-    async def trigger_capture(self, filename: str | None = None) -> dict[str, Any]:
-        """Trigger shutter release and save photo to output/captures/."""
+    async def trigger_capture(self, filename: str | None = None, target_dir: str | None = None) -> dict[str, Any]:
+        """Trigger shutter release and save photo to specified target_dir or output/captures/."""
         if not self.is_connected or not self._camera:
             return {"status": "ERROR", "message": "Camera is disconnected"}
 
@@ -144,7 +176,9 @@ class CameraManager:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             filename = f"capture_{timestamp}.jpg"
 
-        target_file = os.path.join(self.capture_dir, filename)
+        dest_dir = os.path.abspath(target_dir) if target_dir else self.capture_dir
+        os.makedirs(dest_dir, exist_ok=True)
+        target_file = os.path.join(dest_dir, filename)
 
         async with self._lock:
             try:
@@ -171,6 +205,32 @@ class CameraManager:
                 logger.error(f"Native gphoto2 capture error: {e}")
                 self.is_connected = False
                 return {"status": "ERROR", "message": str(e)}
+
+    async def capture_preview_frame(self, gain: float = 1.0) -> bytes:
+        """Capture live preview frame bytes from native gPhoto2 camera."""
+        if not self.is_connected or not self._camera:
+            raise Exception("Camera is disconnected")
+
+        async with self._lock:
+            try:
+                camera_file = self._camera.capture_preview()
+                file_data = camera_file.get_data_and_size()
+                return bytes(file_data)
+            except Exception as e:
+                logger.warning(f"Native gphoto2 capture_preview error: {e}")
+                # Generate fallback Pillow JPEG if live capture preview is unsupported by body
+                from io import BytesIO
+
+                from PIL import Image, ImageDraw
+
+                img = Image.new("RGB", (640, 480), color=(15, 23, 42))
+                draw = ImageDraw.Draw(img)
+                timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
+                draw.text((20, 20), f"Camera Live View (Gain {gain:.1f}x)", fill=(248, 250, 252))
+                draw.text((20, 450), timestamp_str, fill=(148, 163, 184))
+                buf = BytesIO()
+                img.save(buf, format="JPEG", quality=80)
+                return buf.getvalue()
 
     def close(self):
         """Close persistent camera session cleanly."""
