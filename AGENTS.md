@@ -42,9 +42,11 @@
 
 ## 3. Hardware & Serial Communication Rules
 
-- **Mock Mode First**:
-  - Every hardware interface (`SerialManager`, `CameraController`) **MUST** support a Mock Mode flag.
-  - If physical serial hardware or USB camera is absent, software simulation must run automatically so the Web UI remains 100% testable on development PCs.
+- **Hardware Simulation Boundaries**:
+  - `SerialManager` uses only the real serial protocol path. Do **NOT** add inline motor mock branches or silently simulate a missing controller.
+  - If motor simulation is needed, use a separate serial-emulator subproject that behaves like the ESP controller from the backend's perspective.
+  - Camera simulation is selected explicitly with a flag and a separate fake camera-manager class that mimics gphoto2 delays, settings, and image capture.
+  - Never silently fall back from the real camera manager to the fake implementation after a hardware error.
 - **Fail-Safe Motor Controls**:
   - Include hard bounds and emergency stop methods (`/api/motors/stop`).
 
