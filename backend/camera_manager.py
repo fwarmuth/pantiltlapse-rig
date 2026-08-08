@@ -17,12 +17,11 @@ logger = logging.getLogger("CameraCommander.Camera")
 class CameraManager:
     """
     Manages Canon DSLR camera control via native python-gphoto2 C-bindings.
-    Maintains a persistent camera session for fast, zero-latency shutter releases (~1.2s per shot).
-    Includes automatic Mock Mode fallback for offline desktop testing.
+    Maintains a persistent camera session for fast, zero-latency shutter releases.
+    Does NOT include silent fake fallback. If gphoto2 fails, connection fails explicitly.
     """
 
-    def __init__(self, mock: bool = False, capture_dir: str = "output/captures"):
-        self.mock = mock or not HAS_GPHOTO2
+    def __init__(self, capture_dir: str = "output/captures"):
         self.capture_dir = os.path.abspath(capture_dir)
         os.makedirs(self.capture_dir, exist_ok=True)
 
@@ -38,21 +37,19 @@ class CameraManager:
         self._lock = asyncio.Lock()
 
     async def initialize(self) -> bool:
-        if self.mock:
-            logger.info("Initializing CameraManager in MOCK mode")
-            self.model = "Canon EOS 700D (MOCK)"
-            self.is_connected = True
-            return True
+        if not HAS_GPHOTO2:
+            logger.error("python-gphoto2 package is not installed. CameraManager unavailable.")
+            self.is_connected = False
+            return False
 
         return await self.connect_camera()
 
     async def connect_camera(self) -> bool:
         """Initialize persistent gphoto2 camera session."""
         async with self._lock:
-            if self.mock or not HAS_GPHOTO2:
-                self.is_connected = True
-                self.model = "Canon EOS 700D (MOCK)"
-                return True
+            if not HAS_GPHOTO2:
+                self.is_connected = False
+                return False
 
             try:
                 logger.info("Initializing persistent python-gphoto2 session...")
@@ -68,18 +65,17 @@ class CameraManager:
                         self.model = line.strip()
                         break
                 if not self.model or self.model == "Unknown":
-                    self.model = "Canon EOS 700D"
+                    self.model = "Canon EOS DSLR"
 
                 logger.info(f"Connected to persistent camera session: '{self.model}'")
                 self._read_configs_nolock()
                 return True
             except Exception as e:
-                logger.warning(f"Failed to open native gphoto2 camera session: {e}. Falling back to MOCK mode.")
-                self.mock = True
-                self.is_connected = True
-                self.model = "Canon EOS 700D (MOCK)"
+                logger.error(f"Failed to open native gphoto2 camera session: {e}")
+                self.is_connected = False
+                self.model = "Disconnected"
                 self._camera = None
-                return True
+                return False
 
     def _read_configs_nolock(self):
         """Read ISO, shutter speed, and aperture directly from native C config tree."""
@@ -104,7 +100,7 @@ class CameraManager:
 
     async def refresh_config(self) -> dict[str, str]:
         """Refresh exposure settings from active camera session."""
-        if self.mock or not self._camera:
+        if not self.is_connected or not self._camera:
             return {"iso": self.iso, "shutter_speed": self.shutter_speed, "aperture": self.aperture}
 
         async with self._lock:
@@ -123,9 +119,8 @@ class CameraManager:
             return {"status": "ERROR", "message": f"Unsupported parameter '{param}'"}
 
         child_name = key_map[param]
-        if self.mock or not self._camera:
-            setattr(self, param, value)
-            return {"status": "OK", "param": param, "value": value, "mock": True}
+        if not self.is_connected or not self._camera:
+            return {"status": "ERROR", "message": "Camera is disconnected"}
 
         async with self._lock:
             try:
@@ -141,40 +136,23 @@ class CameraManager:
                 return {"status": "ERROR", "message": str(e)}
 
     async def trigger_capture(self, filename: str | None = None) -> dict[str, Any]:
-        """
-        Trigger shutter release and save photo to output/captures/.
-        Uses native python-gphoto2 persistent session for zero PTP lock latency (~1.2s).
-        """
+        """Trigger shutter release and save photo to output/captures/."""
+        if not self.is_connected or not self._camera:
+            return {"status": "ERROR", "message": "Camera is disconnected"}
+
         if not filename:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             filename = f"capture_{timestamp}.jpg"
 
         target_file = os.path.join(self.capture_dir, filename)
 
-        if self.mock or not self._camera:
-            await asyncio.sleep(0.3)
-            self._create_mock_image(target_file)
-            self.latest_photo_path = target_file
-            self.last_capture_time = time.time()
-            return {
-                "status": "OK",
-                "mock": True,
-                "filename": filename,
-                "path": target_file,
-                "timestamp": self.last_capture_time,
-            }
-
         async with self._lock:
             try:
                 logger.info("Triggering native gphoto2 shutter release...")
-                # Capture image file object on camera
                 file_path = self._camera.capture(gp.GP_CAPTURE_IMAGE)
-
-                # Transfer file from camera over USB
                 camera_file = self._camera.file_get(file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL)
                 camera_file.save(target_file)
 
-                # Optional: Delete file from camera RAM/storage to keep camera memory clear
                 try:
                     self._camera.file_delete(file_path.folder, file_path.name)
                 except Exception:
@@ -191,12 +169,7 @@ class CameraManager:
                 }
             except Exception as e:
                 logger.error(f"Native gphoto2 capture error: {e}")
-                # Attempt to re-initialize camera session if lost
-                try:
-                    self._camera.exit()
-                    self._camera.init()
-                except Exception:
-                    pass
+                self.is_connected = False
                 return {"status": "ERROR", "message": str(e)}
 
     def close(self):
@@ -209,26 +182,11 @@ class CameraManager:
             except Exception as e:
                 logger.error(f"Error closing camera session: {e}")
 
-    def _create_mock_image(self, file_path: str):
-        """Create a lightweight synthetic preview placeholder for Mock Mode."""
-        timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
-        svg_content = (
-            '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">\n'
-            '  <rect width="640" height="480" fill="#0f172a"/>\n'
-            '  <circle cx="320" cy="240" r="120" fill="none" stroke="#38bdf8" stroke-width="4"/>\n'
-            '  <text x="320" y="230" fill="#f8fafc" font-family="sans-serif" font-size="18" '
-            'text-anchor="middle">CameraCommander Mock Capture</text>\n'
-            f'  <text x="320" y="260" fill="#94a3b8" font-family="sans-serif" font-size="14" '
-            f'text-anchor="middle">{timestamp_str}</text>\n'
-            "</svg>"
-        )
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(svg_content)
-
     def get_status(self) -> dict[str, Any]:
         return {
             "connected": self.is_connected,
-            "mock_mode": self.mock,
+            "mock_mode": False,
+            "camera_type": "gphoto2",
             "model": self.model,
             "iso": self.iso,
             "shutter_speed": self.shutter_speed,
