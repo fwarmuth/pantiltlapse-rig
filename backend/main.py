@@ -3,33 +3,42 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from camera_manager import CameraManager
+from domain.models import SequencePlan
+from domain.trajectory import sample_trajectory
+from fake_camera_manager import FakeCameraManager
 from serial_manager import SerialManager
+from storage import PlanStore
 from timelapse_engine import TimelapseConfig, TimelapseEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("CameraCommander.Backend")
 
-# Hardware & Engine Managers
+# Hardware & Engine Managers Initialization
 serial_mgr = SerialManager(
     port=os.getenv("SERIAL_PORT", "/dev/ttyUSB0"),
     baudrate=int(os.getenv("SERIAL_BAUD", "9600")),
-    mock=os.getenv("MOCK_MODE", "true").lower() == "true",
 )
 
-camera_mgr = CameraManager(
-    mock=os.getenv("MOCK_MODE", "true").lower() == "true",
-    capture_dir=os.path.join(os.path.dirname(__file__), "..", "output", "captures"),
-)
+use_fake_camera = os.getenv("FAKE_CAMERA", "false").lower() == "true"
+capture_dir = os.path.join(os.path.dirname(__file__), "..", "output", "captures")
+if use_fake_camera:
+    logger.info("Initializing application with FakeCameraManager (FAKE_CAMERA=true)")
+    camera_mgr = FakeCameraManager(capture_dir=capture_dir)
+else:
+    logger.info("Initializing application with real CameraManager (gphoto2)")
+    camera_mgr = CameraManager(capture_dir=capture_dir)
 
 timelapse_engine = TimelapseEngine(serial_mgr=serial_mgr, camera_mgr=camera_mgr)
+plan_store = PlanStore()
 
 
 @asynccontextmanager
@@ -79,16 +88,25 @@ class SequenceStepRequest(BaseModel):
     capture: bool = Field(default=True, description="Trigger photo capture")
 
 
+def _require_serial_connected():
+    if not serial_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": "Motor controller is disconnected"},
+        )
+
+
 # --- Motor API Endpoints ---
 @app.get("/api/motors/status")
 async def get_motor_status():
-    if not serial_mgr.mock and serial_mgr.is_connected:
+    if serial_mgr.is_connected:
         await serial_mgr.send_command("S")
     return serial_mgr.get_status()
 
 
 @app.post("/api/motors/move")
 async def move_motors(req: MoveRequest):
+    _require_serial_connected()
     if req.relative:
         return await serial_mgr.move_relative(req.pan, req.tilt)
     return await serial_mgr.move_absolute(req.pan, req.tilt)
@@ -96,30 +114,42 @@ async def move_motors(req: MoveRequest):
 
 @app.post("/api/motors/stop")
 async def stop_motors():
+    _require_serial_connected()
     await timelapse_engine.cancel()
     return await serial_mgr.stop()
 
 
 @app.post("/api/motors/drivers")
 async def set_motor_drivers(req: DriverRequest):
+    _require_serial_connected()
     return await serial_mgr.set_drivers(req.enable)
 
 
 # --- Camera API Endpoints ---
 @app.get("/api/camera/status")
 async def get_camera_status():
-    if not camera_mgr.mock and camera_mgr.is_connected:
+    if camera_mgr.is_connected:
         await camera_mgr.refresh_config()
     return camera_mgr.get_status()
 
 
 @app.post("/api/camera/config")
 async def set_camera_config(req: CameraConfigRequest):
+    if not camera_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": "Camera is disconnected"},
+        )
     return await camera_mgr.set_config(req.param, req.value)
 
 
 @app.post("/api/camera/trigger")
 async def trigger_camera_shot():
+    if not camera_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": "Camera is disconnected"},
+        )
     return await camera_mgr.trigger_capture()
 
 
@@ -134,6 +164,7 @@ async def get_latest_preview():
 # --- Integrated Sequence Step Endpoint ---
 @app.post("/api/sequence/step")
 async def execute_sequence_step(req: SequenceStepRequest):
+    _require_serial_connected()
     logger.info(f"Executing sequence step: move (pan={req.pan}, tilt={req.tilt}), pause={req.pause_s}s")
 
     if req.relative:
@@ -146,6 +177,11 @@ async def execute_sequence_step(req: SequenceStepRequest):
 
     capture_res = None
     if req.capture:
+        if not camera_mgr.is_connected:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"status": "ERROR", "message": "Camera is disconnected"},
+            )
         capture_res = await camera_mgr.trigger_capture()
 
     motor_status = serial_mgr.get_status()
@@ -160,6 +196,103 @@ async def execute_sequence_step(req: SequenceStepRequest):
     }
 
 
+# --- Sequence Plan CRUD & Trajectory API Endpoints ---
+@app.post("/api/plans", status_code=status.HTTP_201_CREATED)
+async def create_plan(plan: SequencePlan):
+    """Save a new SequencePlan to persistent storage."""
+    saved_plan = plan_store.save_plan(plan)
+    return saved_plan
+
+
+@app.get("/api/plans")
+async def list_plans():
+    """List summary records of all stored sequence plans."""
+    plans = plan_store.list_plans()
+    summaries = []
+    for p in plans:
+        duration = (p.schedule.total_shots - 1) * p.schedule.interval_s
+        summaries.append({
+            "id": p.id,
+            "revision": p.revision,
+            "name": p.name,
+            "description": p.description,
+            "created_at": p.created_at,
+            "updated_at": p.updated_at,
+            "total_shots": p.schedule.total_shots,
+            "duration_s": duration,
+        })
+    return summaries
+
+
+@app.get("/api/plans/{plan_id}")
+async def get_plan(plan_id: UUID):
+    """Retrieve complete SequencePlan detail by UUID."""
+    plan = plan_store.get_plan(plan_id)
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Plan '{plan_id}' not found"},
+        )
+    return plan
+
+
+@app.put("/api/plans/{plan_id}")
+async def update_plan(plan_id: UUID, plan: SequencePlan):
+    """
+    Update an existing SequencePlan.
+    Requires request plan.id to match URL plan_id and revision to match current stored revision.
+    Returns HTTP 409 Conflict if edit revision is stale.
+    """
+    if plan.id != plan_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "ERROR", "message": "URL plan_id does not match body plan.id"},
+        )
+
+    existing = plan_store.get_plan(plan_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Plan '{plan_id}' not found"},
+        )
+
+    if existing.revision != plan.revision:
+        msg = f"Stale revision conflict: stored revision is {existing.revision}, request is {plan.revision}"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"status": "ERROR", "message": msg},
+        )
+
+    updated = plan_store.save_plan(plan)
+    return updated
+
+
+@app.delete("/api/plans/{plan_id}")
+async def delete_plan(plan_id: UUID):
+    """Delete SequencePlan by UUID."""
+    success = plan_store.delete_plan(plan_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Plan '{plan_id}' not found"},
+        )
+    return {"status": "OK", "id": str(plan_id)}
+
+
+@app.get("/api/plans/{plan_id}/trajectory")
+async def get_plan_trajectory(plan_id: UUID):
+    """Generate sampled trajectory poses, expected duration, and diagnostic metrics for a plan."""
+    plan = plan_store.get_plan(plan_id)
+    if not plan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Plan '{plan_id}' not found"},
+        )
+
+    result = sample_trajectory(plan.trajectory, plan.schedule)
+    return result
+
+
 # --- Automated Time-lapse Engine API Endpoints ---
 @app.get("/api/timelapse/status")
 async def get_timelapse_status():
@@ -168,6 +301,7 @@ async def get_timelapse_status():
 
 @app.post("/api/timelapse/start")
 async def start_timelapse(config: TimelapseConfig):
+    _require_serial_connected()
     return await timelapse_engine.start(config)
 
 
