@@ -8,32 +8,27 @@ logger = logging.getLogger("CameraCommander.Serial")
 class SerialManager:
     """
     Manages serial communication between Raspberry Pi Zero 2 W and the NodeMCU/ESP motor controller.
-    Supports physical serial (`9600` baud ASCII protocol) and automatic Mock Mode for desktop testing.
+    Uses the single production serial protocol (9600 baud ASCII).
     Thread/Task safe with an internal asyncio.Lock.
     """
 
-    def __init__(self, port: str = "/dev/ttyUSB0", baudrate: int = 9600, mock: bool = True):
+    def __init__(self, port: str = "/dev/ttyUSB0", baudrate: int = 9600):
         self.port = port
         self.baudrate = baudrate
-        self.mock = mock
         self.is_connected = False
 
         # Telemetry state
         self.current_pan = 0.0
         self.current_tilt = 0.0
         self.drivers_enabled = True
-        self.state = "IDLE"  # IDLE, MOVING, ERROR
+        self.state = "DISCONNECTED"  # DISCONNECTED, IDLE, MOVING, ERROR
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
 
     async def connect(self) -> bool:
-        if self.mock:
-            logger.info("Initializing SerialManager in MOCK mode")
-            self.is_connected = True
-            return True
-
+        """Attempt connection to physical or emulated serial endpoint. No silent fallback to mock mode."""
         try:
             import serial_asyncio
 
@@ -41,27 +36,32 @@ class SerialManager:
                 url=self.port, baudrate=self.baudrate
             )
             self.is_connected = True
+            self.state = "IDLE"
             logger.info(f"Connected to motor controller on {self.port} at {self.baudrate} baud.")
             # Query version and initial status
             await self.send_command("V")
             await self.send_command("S")
             return True
         except Exception as e:
-            logger.warning(f"Failed to open serial port {self.port}: {e}. Falling back to MOCK mode.")
-            self.mock = True
-            self.is_connected = True
-            return True
+            logger.warning(f"Failed to open serial port {self.port}: {e}. Motors remain disconnected.")
+            self.is_connected = False
+            self.state = "DISCONNECTED"
+            self._reader = None
+            self._writer = None
+            return False
 
     async def send_command(self, cmd_str: str) -> dict[str, Any]:
         """Send ASCII command string to motor controller (e.g. 'M 10.0 5.0' or 'S'). Strictly serialized via Lock."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Serial motor controller disconnected"}
+
         cmd_clean = cmd_str.strip()
         logger.info(f"Serial Command: '{cmd_clean}'")
 
-        if self.mock:
-            return await self._mock_process_command(cmd_clean)
-
         async with self._lock:
             if not self._writer or not self._reader:
+                self.is_connected = False
+                self.state = "DISCONNECTED"
                 return {"status": "ERROR", "message": "Not connected"}
 
             try:
@@ -76,6 +76,8 @@ class SerialManager:
                 return {"status": "OK", "response": response}
             except Exception as e:
                 logger.error(f"Serial communication error: {e}")
+                self.is_connected = False
+                self.state = "ERROR"
                 return {"status": "ERROR", "message": str(e)}
 
     def _parse_response(self, resp: str):
@@ -92,69 +94,52 @@ class SerialManager:
 
     async def move_absolute(self, pan: float, tilt: float) -> dict[str, Any]:
         """Move motors to absolute target angles in degrees."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Serial motor controller disconnected"}
+
         self.state = "MOVING"
-        self.current_pan = pan
-        self.current_tilt = tilt
         res = await self.send_command(f"M {pan:.2f} {tilt:.2f}")
-        self.state = "IDLE"
-        if not self.mock:
+        if res.get("status") == "OK":
+            self.current_pan = pan
+            self.current_tilt = tilt
+            self.state = "IDLE"
             await self.send_command("S")
+        else:
+            self.state = "ERROR"
         return res
 
     async def move_relative(self, delta_pan: float, delta_tilt: float) -> dict[str, Any]:
         """Move motors relative to current position."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Serial motor controller disconnected"}
+
         target_pan = self.current_pan + delta_pan
         target_tilt = self.current_tilt + delta_tilt
-        self.current_pan = target_pan
-        self.current_tilt = target_tilt
         return await self.move_absolute(target_pan, target_tilt)
 
     async def stop(self) -> dict[str, Any]:
         """Emergency stop both motor axes."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Serial motor controller disconnected"}
+
+        res = await self.send_command("X")
         self.state = "IDLE"
-        return await self.send_command("X")
+        return res
 
     async def set_drivers(self, enable: bool) -> dict[str, Any]:
         """Enable ('e') or Disable ('d') motor drivers."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Serial motor controller disconnected"}
+
         cmd = "e" if enable else "d"
         res = await self.send_command(cmd)
-        self.drivers_enabled = enable
+        if res.get("status") == "OK":
+            self.drivers_enabled = enable
         return res
-
-    async def _mock_process_command(self, cmd: str) -> dict[str, Any]:
-        """Simulate motor behavior in mock mode."""
-        if cmd.startswith("M "):
-            parts = cmd[2:].split()
-            if len(parts) == 2:
-                target_pan, target_tilt = float(parts[0]), float(parts[1])
-                self.state = "MOVING"
-                await asyncio.sleep(0.3)  # Simulate travel time
-                self.current_pan = target_pan
-                self.current_tilt = target_tilt
-                self.state = "IDLE"
-                return {"status": "OK", "response": "DONE"}
-        elif cmd == "S":
-            status_flag = "1" if self.drivers_enabled else "0"
-            resp = f"STATUS {self.current_pan:.3f} {self.current_tilt:.3f} {status_flag}"
-            return {"status": "OK", "response": resp}
-        elif cmd == "X":
-            self.state = "IDLE"
-            return {"status": "OK", "response": "OK STOP"}
-        elif cmd in ("d", "D"):
-            self.drivers_enabled = False
-            return {"status": "OK", "response": "OK DRIVERS OFF"}
-        elif cmd in ("e", "E"):
-            self.drivers_enabled = True
-            return {"status": "OK", "response": "OK DRIVERS ON"}
-        elif cmd == "V":
-            return {"status": "OK", "response": "VERSION 1.0.4 (MOCK)"}
-
-        return {"status": "OK", "response": "OK"}
 
     def get_status(self) -> dict[str, Any]:
         return {
             "connected": self.is_connected,
-            "mock_mode": self.mock,
             "port": self.port,
             "baudrate": self.baudrate,
             "state": self.state,
