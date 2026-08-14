@@ -18,8 +18,10 @@ Let the operator detect failures during a long run and safely control it from th
 - [ ] Show pause/resume/cancel and persistent global stop; disable unrelated manual, preview, test-shot, plan-edit, and dry-run controls.
 - [ ] Display retry activity and distinguish camera gap continuation from serial-error pause.
 - [ ] Reconstruct the current view from REST state after page refresh; SSE is an optimization, not the only source of truth.
+- [ ] Add bounded `recent_shots` and latest-preview references to the active-run REST response; do not make the UI scan run directories or infer filenames.
 - [ ] Keep image requests cache-safe and avoid polling originals when thumbnails are available.
 - [ ] Show `INTERRUPTED` runs clearly and never offer a misleading automatic resume button.
+- [ ] When a serial failure pauses with an invalidated reference, guide the operator through reconfirmation and an explicit run resume; ordinary pause does not require reconfirmation.
 - [ ] Add accessible live-region announcements for state transitions/errors without announcing every normal frame.
 
 ## Local integration check
@@ -37,7 +39,7 @@ Use the fake camera plus real hardware or the future external serial emulator to
 
 - An operator can identify within one refresh interval whether frames are succeeding, failing, or delayed.
 - Reloading the page loses no durable run information.
-- The UI never labels a gap or uncertain operation as a captured frame.
+- The UI never labels a gap, uncertain shutter, or unpublished artifact as a captured frame.
 - Phone layout keeps state, latest image, and emergency actions readily visible.
 
 ## Not in this task

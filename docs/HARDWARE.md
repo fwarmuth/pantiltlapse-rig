@@ -17,7 +17,7 @@ Enable is active-low. Both axes therefore share one microstep setting (default 1
 
 Pan is inverted so positive means right. There are no endstops, homing, persisted position, or travel-limit checks; boot and driver toggles set both coordinates to zero. Establish a safe zero manually, stay within mechanical limits, and use an external motor-power cutoff: `X` cannot interrupt a synchronous `M` move.
 
-Connect a supported Canon DSLR by USB PTP; the backend uses persistent `python-gphoto2`. Without hardware, use the default `MOCK_MODE=true`.
+Connect a supported Canon DSLR by USB PTP; the backend uses persistent `python-gphoto2`. Without hardware, set `FAKE_CAMERA=true` in `backend/.env`.
 
 ```bash
 cd firmware

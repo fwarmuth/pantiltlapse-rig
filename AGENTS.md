@@ -22,6 +22,11 @@
    - `firmware/` — ESP32 C++ stepper driver firmware.
    - `docs/` — Specifications and hardware documentation.
 
+4. **No Backward Compatibility by Default**:
+   - When replacing an API, schema, file layout, or implementation, remove the old path and update the current frontend, tests, and documentation in the same change.
+   - Do **NOT** add compatibility adapters, deprecated aliases, or migration loaders unless explicitly requested.
+   - Never automatically delete user capture media; incompatible development data may be moved aside manually.
+
 ---
 
 ## 2. Python Backend Standards (`backend/`)

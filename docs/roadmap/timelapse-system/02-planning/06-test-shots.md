@@ -17,6 +17,8 @@ Capture and organize plan-scoped test shots with previews and complete metadata 
 
 ## Implementation notes
 
+- Post-Task-09 audit: the current helper hardcodes `original.jpg`, guesses artifact filenames, and is not operation-coordinated. Task 09B replaces this with the shared typed capture/media contract required by run storage.
+
 - Created `backend/media_helper.py`.
 - Added endpoints `/api/plans/{id}/test-shots`, detail, and artifact file server.
 - All tests pass in `backend/tests/test_test_shots.py`.

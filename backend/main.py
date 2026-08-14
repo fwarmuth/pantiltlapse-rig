@@ -148,6 +148,11 @@ async def get_rig_status():
 @app.post("/api/rig/limits")
 async def update_rig_limits(req: RigLimitsRequest):
     """Update allowable rig tilt bounds."""
+    if not coordinator.can_change_limits():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"status": "ERROR", "message": f"Operation lock busy: '{coordinator.active_mode}' active"},
+        )
     if req.tilt_max_deg < req.tilt_min_deg:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -190,6 +195,11 @@ async def reconnect_motors():
 @app.post("/api/motors/move")
 async def move_motors(req: MoveRequest):
     _require_serial_connected()
+    if not coordinator.can_move():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"status": "ERROR", "message": f"Operation lock busy: '{coordinator.active_mode}' active"},
+        )
     rig_mgr.validate_move(
         pan=req.pan,
         tilt=req.tilt,
@@ -206,6 +216,7 @@ async def move_motors(req: MoveRequest):
 async def stop_motors():
     # Emergency stop is always accessible regardless of reference status
     _require_serial_connected()
+    await dry_run_engine.cancel()
     await timelapse_engine.cancel()
     return await serial_mgr.stop()
 
@@ -213,9 +224,15 @@ async def stop_motors():
 @app.post("/api/motors/drivers")
 async def set_motor_drivers(req: DriverRequest):
     _require_serial_connected()
+    if not coordinator.can_change_drivers():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"status": "ERROR", "message": f"Operation lock busy: '{coordinator.active_mode}' active"},
+        )
     res = await serial_mgr.set_drivers(req.enable)
-    # Toggling motor drivers invalidates physical zero reference
-    rig_mgr.invalidate_reference(f"Motor drivers {'enabled' if req.enable else 'disabled'}")
+    # Toggling motor drivers invalidates physical zero reference if command succeeded
+    if isinstance(res, dict) and res.get("status") == "OK":
+        rig_mgr.invalidate_reference(f"Motor drivers {'enabled' if req.enable else 'disabled'}")
     res["reference"] = rig_mgr.reference.model_dump(mode="json")
     return res
 
@@ -297,13 +314,29 @@ async def get_latest_preview():
 # --- Enhanced Live View API Endpoints ---
 class PreviewStartRequest(BaseModel):
     gain: float = Field(default=1.0, ge=1.0, le=4.0, description="Digital contrast/gain boost multiplier")
+    plan_id: UUID | None = Field(default=None, description="Optional sequence plan ID for plan-scoped profiles")
 
 
 @app.post("/api/camera/preview/start")
 async def start_camera_preview(req: PreviewStartRequest | None = None):
     """Start enhanced live view streaming with exclusive camera ownership."""
     gain = req.gain if req else 1.0
-    return await preview_controller.start(gain=gain)
+    plan_id = str(req.plan_id) if req and req.plan_id else None
+
+    preview_profile = None
+    acquisition_profile = None
+    if plan_id:
+        plan = plan_store.get_plan(req.plan_id)
+        if plan:
+            preview_profile = plan.preview
+            acquisition_profile = plan.acquisition
+
+    return await preview_controller.start(
+        preview_profile=preview_profile,
+        acquisition_profile=acquisition_profile,
+        gain=gain,
+        plan_id=plan_id,
+    )
 
 
 @app.get("/api/camera/preview/status")
@@ -334,6 +367,11 @@ async def get_camera_preview_stream():
 @app.post("/api/sequence/step")
 async def execute_sequence_step(req: SequenceStepRequest):
     _require_serial_connected()
+    if not coordinator.can_move():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"status": "ERROR", "message": f"Operation lock busy: '{coordinator.active_mode}' active"},
+        )
     rig_mgr.validate_move(
         pan=req.pan,
         tilt=req.tilt,
@@ -479,12 +517,22 @@ class TestShotRequest(BaseModel):
 @app.post("/api/plans/{plan_id}/test-shots", status_code=status.HTTP_201_CREATED)
 async def trigger_plan_test_shot(plan_id: UUID, req: TestShotRequest | None = None):
     """Trigger a single test shot using plan acquisition camera settings (or explicit overrides)."""
+    if not coordinator.can_test_shot():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"status": "ERROR", "message": f"Operation lock busy: '{coordinator.active_mode}' active"},
+        )
+
     plan = plan_store.get_plan(plan_id)
     if not plan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"status": "ERROR", "message": f"Plan '{plan_id}' not found"},
         )
+
+    # Stop live view preview before taking test shot exposure
+    if preview_controller.state != "IDLE":
+        await preview_controller.stop()
 
     requested_settings = {
         "iso": (req.iso if req and req.iso else plan.acquisition.iso),
@@ -555,7 +603,7 @@ async def get_test_shot_detail(plan_id: UUID, shot_id: UUID):
 
 @app.get("/api/plans/{plan_id}/test-shots/{shot_id}/artifacts/{artifact_type}")
 async def get_test_shot_artifact_file(plan_id: UUID, shot_id: UUID, artifact_type: str):
-    """Serve an image artifact file ('original' or 'preview') for a test shot."""
+    """Serve an image artifact file by ID, type, or filename for a test shot."""
     shot_dir = (plan_store.base_dir / str(plan_id) / "test-shots" / str(shot_id)).resolve()
     if not shot_dir.exists():
         raise HTTPException(
@@ -563,22 +611,33 @@ async def get_test_shot_artifact_file(plan_id: UUID, shot_id: UUID, artifact_typ
             detail={"status": "ERROR", "message": f"Test shot '{shot_id}' not found"},
         )
 
-    # Map artifact_type to expected file
-    if artifact_type in ("original", "original.jpg", "original.svg"):
-        target_file = shot_dir / "original.jpg"
-        if not target_file.exists():
-            target_file = shot_dir / "original.svg"
-    elif artifact_type in ("preview", "preview.jpg", "preview.svg"):
-        target_file = shot_dir / "preview.jpg"
-        if not target_file.exists():
-            target_file = shot_dir / "preview.svg"
-    elif artifact_type == "metadata.json":
-        target_file = shot_dir / "metadata.json"
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"status": "ERROR", "message": f"Unknown artifact type '{artifact_type}'"},
-        )
+    meta_file = shot_dir / "metadata.json"
+    target_file = None
+    media_type = "application/octet-stream"
+
+    if meta_file.exists():
+        try:
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+            for art in meta.get("artifacts", []):
+                if (
+                    art.get("id") == artifact_type
+                    or art.get("type") == artifact_type
+                    or art.get("filename") == artifact_type
+                ):
+                    fn = art.get("filename") or os.path.basename(art.get("relative_path", ""))
+                    target_file = shot_dir / fn
+                    media_type = art.get("mime_type", media_type)
+                    break
+        except Exception:
+            pass
+
+    if not target_file:
+        if artifact_type == "metadata.json":
+            target_file = meta_file
+            media_type = "application/json"
+        else:
+            target_file = shot_dir / artifact_type
 
     if not target_file.exists():
         raise HTTPException(
@@ -586,9 +645,6 @@ async def get_test_shot_artifact_file(plan_id: UUID, shot_id: UUID, artifact_typ
             detail={"status": "ERROR", "message": f"Artifact '{artifact_type}' not found"},
         )
 
-    media_type = "image/svg+xml" if target_file.name.endswith(".svg") else (
-        "application/json" if target_file.name.endswith(".json") else "image/jpeg"
-    )
     return FileResponse(target_file, media_type=media_type)
 
 
@@ -645,7 +701,7 @@ async def cancel_timelapse():
 # --- Real-Time Server-Sent Events (SSE) Streaming ---
 @app.get("/api/events")
 async def stream_events():
-    """Stream real-time motor, camera, rig, and time-lapse state events to frontend clients."""
+    """Stream real-time motor, camera, rig, time-lapse, dry run, and coordinator state events."""
 
     async def event_generator():
         while True:
@@ -655,6 +711,8 @@ async def stream_events():
                 "rig": rig_mgr.snapshot.model_dump(mode="json"),
                 "reference": rig_mgr.reference.model_dump(mode="json"),
                 "timelapse": timelapse_engine.get_status(),
+                "dry_run": dry_run_engine.get_status(),
+                "coordinator": coordinator.get_status(),
             }
             yield f"data: {json.dumps(payload, default=str)}\n\n"
             await asyncio.sleep(1.0)

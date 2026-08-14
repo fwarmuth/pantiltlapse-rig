@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -12,6 +14,11 @@ def setup_dry_run_env(tmp_path):
     plan_store.base_dir = tmp_path / "plans"
     plan_store.base_dir.mkdir(parents=True, exist_ok=True)
 
+    rig_mgr.storage_dir = tmp_path / "output"
+    rig_mgr.storage_dir.mkdir(parents=True, exist_ok=True)
+    rig_mgr.rig_file = rig_mgr.storage_dir / "rig.json"
+    rig_mgr.set_limits(0.0, 80.0)
+
     fake_cam = FakeCameraManager(capture_dir=str(tmp_path / "captures"))
     fake_cam.is_connected = True
 
@@ -22,6 +29,7 @@ def setup_dry_run_env(tmp_path):
     yield
 
     plan_store.base_dir = original_base_dir
+    rig_mgr.set_limits(0.0, 80.0)
 
 
 def create_test_plan() -> SequencePlan:
@@ -98,10 +106,10 @@ def test_dry_run_lock_conflict():
         client.post("/api/rig/confirm-zero")
 
         # Manually lock coordinator mode to RECORDING
-        coordinator.active_mode = "RECORDING"
+        asyncio.run(coordinator.acquire("RECORDING"))
 
         resp = client.post(f"/api/plans/{plan.id}/dry-run/start")
         assert resp.status_code == 409
         assert "busy" in resp.json()["detail"]["message"].lower()
 
-        coordinator.active_mode = "IDLE"
+        asyncio.run(coordinator.release("RECORDING"))

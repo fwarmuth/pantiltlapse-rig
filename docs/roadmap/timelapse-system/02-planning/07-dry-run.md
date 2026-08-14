@@ -20,3 +20,4 @@ Provide motion-only sequence rehearsal traversing all sampled keyframe poses wit
 - Created `backend/coordinator.py` and `backend/dry_run_engine.py`.
 - Added endpoints `/api/plans/{id}/dry-run/start`, `status`, and `cancel`.
 - All tests pass in `backend/tests/test_dry_run.py`.
+- Post-Task-09 audit: negative motor results are not inspected, rig-limit changes are missing from stale comparison, movement responses are not recorded, and dry-run progress is absent from SSE. Task 09A fixes these gaps.

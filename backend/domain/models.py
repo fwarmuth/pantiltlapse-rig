@@ -245,3 +245,17 @@ class SequenceRun(BaseModel):
     total_shots: int = Field(..., ge=2, description="Target total shots")
     completed_shots: int = Field(default=0, ge=0, description="Successfully captured shots")
     gap_shots: int = Field(default=0, ge=0, description="Exhausted gap shots")
+
+
+class CaptureResult(BaseModel):
+    """
+    Standardized typed result of a camera shutter release capture.
+    """
+    camera_filename: str = Field(..., description="Filename reported by camera or target name")
+    saved_original_path: str = Field(..., description="Absolute path to saved original image/RAW file")
+    extension: str = Field(..., description="File extension including leading dot, e.g. .jpg, .CR2, .svg")
+    mime_type: str = Field(..., description="MIME content type, e.g. image/jpeg, image/x-canon-cr2, image/svg+xml")
+    capture_timestamp: float = Field(..., description="POSIX timestamp of capture completion")
+    camera_preview_path: str | None = Field(
+        default=None, description="Optional path to extracted or companion JPEG preview"
+    )

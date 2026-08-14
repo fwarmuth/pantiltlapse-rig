@@ -26,3 +26,4 @@ Add the minimum truthful safety state required before reusable plans can command
 - Created `backend/domain/rig.py` with `RigManager` and `CoordinateReferenceState`.
 - Connected to `/api/rig/status`, `/api/rig/limits`, `/api/rig/confirm-zero`, `/api/motors/move`, `/api/motors/drivers`.
 - All tests pass in `backend/tests/test_rig_safety.py`.
+- Post-Task-09 audit: limits are currently in memory and mutation routes do not yet enforce coordinator state; Task 09A completes persistence and operation guards before recording.

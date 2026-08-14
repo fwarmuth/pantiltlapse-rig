@@ -168,38 +168,70 @@ class CameraManager:
                 return {"status": "ERROR", "message": str(e)}
 
     async def trigger_capture(self, filename: str | None = None, target_dir: str | None = None) -> dict[str, Any]:
-        """Trigger shutter release and save photo to specified target_dir or output/captures/."""
+        """Trigger shutter release and save photo preserving real camera extension."""
         if not self.is_connected or not self._camera:
             return {"status": "ERROR", "message": "Camera is disconnected"}
 
-        if not filename:
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            filename = f"capture_{timestamp}.jpg"
-
         dest_dir = os.path.abspath(target_dir) if target_dir else self.capture_dir
         os.makedirs(dest_dir, exist_ok=True)
-        target_file = os.path.join(dest_dir, filename)
 
         async with self._lock:
             try:
                 logger.info("Triggering native gphoto2 shutter release...")
-                file_path = self._camera.capture(gp.GP_CAPTURE_IMAGE)
-                camera_file = self._camera.file_get(file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL)
-                camera_file.save(target_file)
 
-                try:
-                    self._camera.file_delete(file_path.folder, file_path.name)
-                except Exception:
-                    pass
+                def _do_gphoto_capture():
+                    file_path = self._camera.capture(gp.GP_CAPTURE_IMAGE)
+                    cam_ext = os.path.splitext(file_path.name)[1].lower() or ".jpg"
+
+                    if filename:
+                        stem = os.path.splitext(filename)[0]
+                        save_name = f"{stem}{cam_ext}"
+                    else:
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        save_name = f"capture_{timestamp}{cam_ext}"
+
+                    target_file = os.path.join(dest_dir, save_name)
+                    camera_file = self._camera.file_get(file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL)
+                    camera_file.save(target_file)
+
+                    try:
+                        self._camera.file_delete(file_path.folder, file_path.name)
+                    except Exception:
+                        pass
+
+                    return save_name, target_file, cam_ext
+
+                save_name, target_file, cam_ext = await asyncio.to_thread(_do_gphoto_capture)
 
                 self.latest_photo_path = target_file
                 self.last_capture_time = time.time()
                 logger.info(f"Photo captured and saved to '{target_file}'")
+
+                mime_map = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".cr2": "image/x-canon-cr2",
+                    ".cr3": "image/x-canon-cr3",
+                    ".nef": "image/x-nikon-nef",
+                    ".arw": "image/x-sony-arw",
+                }
+                mime_type = mime_map.get(cam_ext, "application/octet-stream")
+
+                result = {
+                    "camera_filename": save_name,
+                    "saved_original_path": target_file,
+                    "extension": cam_ext,
+                    "mime_type": mime_type,
+                    "capture_timestamp": self.last_capture_time,
+                    "camera_preview_path": None,
+                }
+
                 return {
                     "status": "OK",
-                    "filename": filename,
+                    "filename": save_name,
                     "path": target_file,
                     "timestamp": self.last_capture_time,
+                    "result": result,
                 }
             except Exception as e:
                 logger.error(f"Native gphoto2 capture error: {e}")
@@ -207,30 +239,21 @@ class CameraManager:
                 return {"status": "ERROR", "message": str(e)}
 
     async def capture_preview_frame(self, gain: float = 1.0) -> bytes:
-        """Capture live preview frame bytes from native gPhoto2 camera."""
+        """Capture live preview frame bytes from native gPhoto2 camera. Raises on error."""
         if not self.is_connected or not self._camera:
             raise Exception("Camera is disconnected")
 
         async with self._lock:
             try:
-                camera_file = self._camera.capture_preview()
-                file_data = camera_file.get_data_and_size()
-                return bytes(file_data)
+                def _do_preview():
+                    camera_file = self._camera.capture_preview()
+                    file_data = camera_file.get_data_and_size()
+                    return bytes(file_data)
+
+                return await asyncio.to_thread(_do_preview)
             except Exception as e:
                 logger.warning(f"Native gphoto2 capture_preview error: {e}")
-                # Generate fallback Pillow JPEG if live capture preview is unsupported by body
-                from io import BytesIO
-
-                from PIL import Image, ImageDraw
-
-                img = Image.new("RGB", (640, 480), color=(15, 23, 42))
-                draw = ImageDraw.Draw(img)
-                timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
-                draw.text((20, 20), f"Camera Live View (Gain {gain:.1f}x)", fill=(248, 250, 252))
-                draw.text((20, 450), timestamp_str, fill=(148, 163, 184))
-                buf = BytesIO()
-                img.save(buf, format="JPEG", quality=80)
-                return buf.getvalue()
+                raise Exception(f"gphoto2 preview failure: {e}") from e
 
     def close(self):
         """Close persistent camera session cleanly."""

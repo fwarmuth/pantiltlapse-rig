@@ -64,4 +64,4 @@ Do not implement the emulator in this task. When needed, create it as a separate
 - Status fields: `connected: bool`, `camera_type: "fake" | "gphoto2"`, `mock_mode: bool`.
 - `SerialManager` has no `mock` flag. Disconnected serial ports set `is_connected=False` and motor REST endpoints return HTTP `503 Service Unavailable`.
 - Tests added in `backend/tests/test_hardware_boundaries.py`.
-
+- Post-Task-09 audit: fake `.jpg` output is not yet a real JPEG and several old documentation pages still mention `MOCK_MODE`; Task 09B owns both corrections.
