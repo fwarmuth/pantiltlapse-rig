@@ -50,8 +50,9 @@ class PreviewController:
         preview_profile: PreviewProfile | None = None,
         acquisition_profile: AcquisitionProfile | None = None,
         gain: float = 1.0,
+        plan_id: str | None = None,
     ) -> dict[str, Any]:
-        """Start preview stream, acquiring coordinator lock and applying preview profile."""
+        """Start preview stream, acquiring coordinator lock for plan and applying preview profile."""
         if self.state in ("STARTING", "STREAMING"):
             return {"status": "OK", "state": self.state}
 
@@ -61,7 +62,7 @@ class PreviewController:
                 detail={"status": "ERROR", "message": "Camera is disconnected"},
             )
 
-        acquired = await self.coordinator.acquire("PREVIEW")
+        acquired = await self.coordinator.acquire("PREVIEW", plan_id=plan_id)
         if not acquired:
             active = self.coordinator.active_mode
             raise HTTPException(
@@ -77,10 +78,17 @@ class PreviewController:
             self.restoration_profile = acquisition_profile
 
         try:
-            # Apply preview profile settings to camera
-            await self.camera_mgr.set_config("iso", self.preview_profile.iso)
-            await self.camera_mgr.set_config("shutter_speed", self.preview_profile.shutter_speed)
-            await self.camera_mgr.set_config("aperture", self.preview_profile.aperture)
+            # Apply and verify preview profile settings
+            for param, val in [
+                ("iso", self.preview_profile.iso),
+                ("shutter_speed", self.preview_profile.shutter_speed),
+                ("aperture", self.preview_profile.aperture),
+            ]:
+                res = await self.camera_mgr.set_config(param, val)
+                if isinstance(res, dict) and res.get("status") != "OK":
+                    raise Exception(f"Failed to apply camera setting '{param}={val}': {res.get('message')}")
+
+            await self.camera_mgr.refresh_config()
 
             self.state = "STREAMING"
             self._streaming_event.set()

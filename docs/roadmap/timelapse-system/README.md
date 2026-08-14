@@ -10,6 +10,8 @@ This directory turns the timelapse architecture into small, independently verifi
 4. Commit or otherwise checkpoint the working state before beginning the next task.
 5. Record discoveries or changed hardware assumptions in the task's **Implementation notes** section rather than silently changing the shared contract.
 
+Read [`implementation-audit.md`](implementation-audit.md) before starting Task 09A or later. It records the post-Task-09 code audit and explains why the stabilization tasks were inserted.
+
 Suggested handoff prompt for a smaller model:
 
 ```text
@@ -48,15 +50,18 @@ Planning tools
   04 + 05 + 06 + 07 + 08 ── 09 planning UI
 
 Recording
-  03 + 04 ── 10 run snapshots and storage
-  02 + 05 + 06 + 10 ── 11 recording engine
+  09 ── 09A runtime and motion safety
+  09 ── 09B camera and media contract
+  09A + 09B ── 10A final run domain
+  03 + 10A ── 10B run snapshots and storage
+  02 + 09A + 09B + 10B ── 11 recording engine
   11 ── 12 failure policy and restart handling
   11 + 12 ── 13 run monitoring UI
 
-Library and migration
-  10 + 12 ── 14 history API
+Library and final hardening
+  10B + 12 ── 14 history API
   13 + 14 ── 15 history UI
-  all completed tasks ── 16 compatibility cleanup and documentation
+  all completed tasks ── 16 final hardening and documentation
 ```
 
 Tasks on different branches of the graph may be implemented in either order. For example, trajectory calculation and JSON persistence only share the domain models and can be developed separately.
@@ -83,22 +88,30 @@ Checkpoint: create, validate, save, reload, and sample a plan through FastAPI wh
 
 Checkpoint: build a plan entirely from the browser, inspect night-oriented live view, save test shots, and traverse every planned pose without capturing.
 
+### B2. Recording-readiness stabilization
+
+- [x] [09A — Runtime ownership and motion safety](02-planning/09a-runtime-safety.md)
+- [x] [09B — Camera profiles and media contract](02-planning/09b-camera-media-contract.md)
+
+Checkpoint: operation conflicts are enforced consistently, dry-run success is truthful, rig limits survive restart, and both camera implementations produce correctly typed artifacts through one capture contract.
+
 ### C. Durable recording
 
-- [ ] [10 — Run snapshots and storage](03-recording/10-run-snapshots.md)
+- [ ] [10A — Finalize the run domain](03-recording/10a-run-domain.md)
+- [ ] [10B — Run snapshots and storage](03-recording/10-run-snapshots.md)
 - [ ] [11 — Recording engine](03-recording/11-recording-engine.md)
 - [ ] [12 — Failure policy and restart handling](03-recording/12-failure-and-recovery.md)
 - [ ] [13 — Run monitoring UI](03-recording/13-run-monitoring.md)
 
 Checkpoint: execute a persistent time-lapse on hardware, observe its frames while it runs, and retain useful evidence after failures or restarts. The fake camera may be used to isolate motor/timing checks.
 
-### D. Browseable library and migration
+### D. Browseable library and final hardening
 
 - [ ] [14 — History API](04-library/14-history-api.md)
 - [ ] [15 — History UI](04-library/15-history-ui.md)
-- [ ] [16 — Compatibility cleanup](04-library/16-compatibility-cleanup.md)
+- [ ] [16 — Final hardening](04-library/16-final-hardening.md)
 
-Checkpoint: browse previous runs and their metadata, then retire the old ephemeral implementation without breaking the documented workflow.
+Checkpoint: browse previous runs and their metadata, finish documentation/quality cleanup, and verify the complete workflow after restart.
 
 ## Verification required after every task
 

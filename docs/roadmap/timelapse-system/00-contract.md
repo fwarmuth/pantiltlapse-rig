@@ -8,7 +8,7 @@ All roadmap tasks must follow this contract. Change it only through an explicit 
 - The trajectory module is a pure calculation module; it does not import FastAPI, storage, motors, or cameras.
 - Storage receives and returns domain models; it does not execute a run.
 - Hardware managers perform individual motor or camera operations; they do not decide sequence policy.
-- Coordinators own mutually exclusive operations such as preview, dry run, test capture, and recording.
+- The operation coordinator enforces the explicit concurrency matrix below; routes must not bypass it.
 - FastAPI route handlers validate, delegate, and translate known errors to HTTP responses.
 
 ## Simulation boundaries
@@ -45,8 +45,10 @@ Saving a material plan change increments `revision`. Cosmetic display state is n
 
 ### Schedule and acquisition
 
-- Canonical schedule inputs are `total_shots`, start-to-start `interval_s`, and `settle_time_s`.
-- The interval is minimum spacing. An overrun shifts later starts; the engine never creates catch-up bursts.
+- Canonical schedule inputs are `total_shots`, shutter-start-to-shutter-start `interval_s`, and `settle_time_s`.
+- Before shot 0, move to the first pose and settle while the run is `PREPARING`; start the run clock when shot 0 begins capture.
+- After each capture completes, move and settle at the next pose, then wait until the next eligible shutter time. Motors never move during an exposure.
+- The interval is minimum shutter spacing. An overrun shifts later starts; the engine never creates catch-up bursts.
 - Acquisition settings are fixed for a run. ISO, shutter, aperture, camera format, and camera-specific settings remain strings/JSON values supported by the camera.
 - Preview settings are separate and must be restored to acquisition settings before a test shot or recording.
 
@@ -58,6 +60,15 @@ Saving a material plan change increments `revision`. Cosmetic display state is n
 - Pan has no configured travel limit. Tilt minimum and maximum are required setup values.
 - All manual, dry-run, and recording targets pass through the same backend bounds check.
 - There are no encoders, endstops, or stall detection. Firmware `DONE` means commanded steps were emitted, not that physical motion succeeded.
+
+### Operation concurrency
+
+- `PREVIEW` may coexist with manual jogs and a `DRY_RUN` of the same plan, allowing the operator to watch a rehearsal.
+- `DRY_RUN` blocks manual moves, driver changes, rig-limit changes, test shots, and recording.
+- `RECORDING` is exclusive and blocks preview, dry run, manual camera/motor actions, driver changes, and rig-limit changes.
+- Starting a recording stops preview first, restores/applies the snapshotted acquisition profile, then acquires recording ownership.
+- Test shots use the persisted plan acquisition profile plus any explicit test-only override, record the plan revision/effective settings, and require preview/dry run/recording to be inactive.
+- Global motor stop remains callable in every state and also cancels the active dry run or recording task before sending `X`.
 
 ### Runs and shots
 
@@ -92,12 +103,16 @@ output/
 - Event records are newline-delimited JSON and appended after each meaningful state transition.
 - API responses expose artifact IDs or relative paths, never absolute host paths.
 - The filesystem is the source of truth. Do not introduce SQLite in these tasks.
+- Original camera extensions and bytes are preserved. Browser previews are distinct artifacts and must never be RAW/SVG bytes mislabeled as JPEG.
 
-## Error and compatibility rules
+## Error and change rules
 
-- Validation failures return `422` or an intentional `400` with `{"status":"ERROR","detail":"..."}`.
+- Validation failures return `422` or an intentional `400`. Use the established FastAPI shape `{"detail":{"status":"ERROR","message":"..."}}` consistently.
 - Missing resources return `404`, state/ownership conflicts `409`, and hardware/I/O unavailability `503`.
-- Task 00 intentionally replaces the existing `MOCK_MODE` and silent hardware fallback. Other public motor, camera, sequence, and `/api/timelapse/*` routes remain compatible until task 16.
+- Task 00 intentionally replaces the existing `MOCK_MODE` and silent hardware fallback.
+- The current frontend no longer consumes `/api/timelapse/*`. Task 11 removes the legacy engine/routes when the durable run API becomes available; do not keep two schedulers alive.
+- Backward compatibility is not required. When an API, schema, or file layout is replaced, remove the old implementation and update the current frontend, tests, and documentation in the same task.
+- Do not build migration loaders for old development manifests. Incompatible local development data may be moved aside manually, but code must never delete user media automatically.
 - Do not change firmware unless a task explicitly says so.
 
 ## Global exclusions for v1

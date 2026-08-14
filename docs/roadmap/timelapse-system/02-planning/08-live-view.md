@@ -20,3 +20,4 @@ Provide dark-scene framing stream using separate `PreviewProfile` camera setting
 - Created `backend/preview_controller.py`.
 - Added endpoints `/api/camera/preview/start`, `status`, `stop`, and `stream`.
 - All tests pass in `backend/tests/test_live_view.py`.
+- Post-Task-09 audit: the generic start route does not pass the selected plan profiles, and the real manager hides gphoto preview failure with a synthetic frame. Task 09B makes preview plan-scoped and truthful.

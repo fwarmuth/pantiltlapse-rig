@@ -17,5 +17,7 @@ Provide a responsive single-page web application workspace in `frontend/` with z
 
 ## Implementation notes
 
+- Post-Task-09 audit: the UI is a valid planning slice, but its preview/test-shot integration must follow the corrected plan-scoped APIs in Tasks 09A/09B before recording controls are added.
+
 - Created complete single-page application in `frontend/` (zero node modules, zero build step required).
 - Built-in SSE stream integration with HTTP polling fallback.

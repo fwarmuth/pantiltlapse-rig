@@ -4,6 +4,13 @@ from fastapi.testclient import TestClient
 from main import app, rig_mgr, serial_mgr
 
 
+@pytest.fixture(autouse=True)
+def setup_rig_safety_env():
+    rig_mgr.set_limits(0.0, 80.0)
+    yield
+    rig_mgr.set_limits(0.0, 80.0)
+
+
 def test_rig_safety_workflow(monkeypatch):
     async def mock_send_command(cmd: str):
         return {"status": "OK", "response": "OK"}

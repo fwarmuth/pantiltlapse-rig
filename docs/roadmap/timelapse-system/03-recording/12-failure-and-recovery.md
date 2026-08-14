@@ -10,16 +10,16 @@ Make long unattended runs leave useful, truthful records when camera, storage, t
 
 ## Checklist
 
-- [ ] Separate movement, shutter, download, preview generation, and persistence phases in attempt records.
+- [ ] Persist movement, shutter, download, preview generation, and publication as distinct attempt phases using the Task 10A schema.
 - [ ] Apply three total attempts with a two-second delay to camera/download/storage phases.
-- [ ] When the camera returned a file path but transfer failed, retry transfer of that file before triggering another exposure where supported.
+- [ ] When shutter succeeded and a camera path is known but transfer failed, use an explicit `download_existing` camera operation before considering another shutter. Record when the hardware cannot support this distinction.
 - [ ] After exhausted camera/download failures, publish a `GAP` shot and continue with minimum interval spacing.
 - [ ] Treat failed preview generation as a warning when a valid original is safely persisted; do not recapture solely for a thumbnail.
-- [ ] Retry serial transport failures, then pause with an uncertain-coordinate error instead of continuing commands.
+- [ ] Use a separate motor retry count fixed at two total command attempts. After exhaustion, invalidate coordinate confirmation and pause with an uncertain-coordinate error instead of continuing.
 - [ ] Require coordinate reconfirmation before resuming from uncertain motor state; keep already persisted shot indices immutable.
-- [ ] Detect low/failed storage before capture where practical and record exact stage/error details.
+- [ ] Check estimated free space before run start and current free space before every shutter; treat insufficient space as a terminal paused/error condition, never a capturable gap.
 - [ ] On startup, scan runs and change unfinished states to `INTERRUPTED`, append a recovery event, and release no automatic hardware command.
-- [ ] Add deterministic failure controls to `FakeCameraManager`; use test-only serial/storage/media stubs or monkeypatching for the remaining automated fault cases.
+- [ ] Add deterministic failure controls to `FakeCameraManager` for setting, shutter, download, and preview phases; use test-only serial/storage/media stubs for other fault cases.
 - [ ] Add tests for failure on each attempt, eventual success, exhausted gap continuation, ambiguous shutter result, preview-only failure, serial pause, persistence failure, and restart interruption.
 
 ## Automated fault check
@@ -37,7 +37,7 @@ Run the fault matrix with the fake camera and test-only fault stubs. Inspect tha
 ## Acceptance criteria
 
 - Failures are never represented as successful shots.
-- Retrying an ambiguous shutter operation does not silently overwrite an artifact; possible duplicate camera captures are recorded.
+- An ambiguous shutter result is never blindly retried as though no exposure occurred; it becomes a recorded uncertain/gap attempt unless the camera can identify the produced file.
 - A storage failure cannot cause the engine to advance while falsely claiming durability.
 - Restart recovery is observational only and sends no hardware commands.
 

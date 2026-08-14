@@ -58,7 +58,7 @@ class FakeCameraManager:
         return {"status": "OK", "param": param, "value": str(value), "fake": True}
 
     async def trigger_capture(self, filename: str | None = None, target_dir: str | None = None) -> dict[str, Any]:
-        """Simulate camera shutter release delay and create placeholder file."""
+        """Simulate camera shutter release delay and create placeholder file with typed CaptureResult."""
         if not self.is_connected:
             return {"status": "ERROR", "message": "Fake camera not initialized"}
 
@@ -71,11 +71,35 @@ class FakeCameraManager:
         dest_dir = os.path.abspath(target_dir) if target_dir else self.capture_dir
         os.makedirs(dest_dir, exist_ok=True)
         target_file = os.path.join(dest_dir, filename)
-        self._create_placeholder_image(target_file)
+        ext = os.path.splitext(filename)[1].lower() or ".jpg"
+
+        # Generate placeholders off event loop
+        preview_path = await asyncio.to_thread(self._create_placeholder_files, target_file, ext)
 
         self.latest_photo_path = target_file
         self.last_capture_time = time.time()
-        logger.info(f"Fake camera captured photo: {target_file}")
+
+        mime_map = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".svg": "image/svg+xml",
+            ".cr2": "image/x-canon-cr2",
+            ".cr3": "image/x-canon-cr3",
+            ".nef": "image/x-nikon-nef",
+            ".arw": "image/x-sony-arw",
+        }
+        mime_type = mime_map.get(ext, "application/octet-stream")
+
+        result = {
+            "camera_filename": filename,
+            "saved_original_path": target_file,
+            "extension": ext,
+            "mime_type": mime_type,
+            "capture_timestamp": self.last_capture_time,
+            "camera_preview_path": preview_path,
+        }
+
+        logger.info(f"Fake camera captured photo: {target_file} ({mime_type})")
 
         return {
             "status": "OK",
@@ -83,15 +107,19 @@ class FakeCameraManager:
             "filename": filename,
             "path": target_file,
             "timestamp": self.last_capture_time,
+            "result": result,
         }
 
     def close(self):
         logger.info("Closing FakeCameraManager session.")
 
-    def _create_placeholder_image(self, file_path: str):
-        """Create lightweight placeholder preview file."""
+    def _create_placeholder_files(self, file_path: str, ext: str) -> str | None:
+        """Create placeholder original file and optional companion preview."""
+        from PIL import Image, ImageDraw
+
         timestamp_str = time.strftime("%Y-%m-%d %H:%M:%S")
-        if file_path.endswith(".svg"):
+
+        if ext == ".svg":
             content = (
                 '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">\n'
                 '  <rect width="640" height="480" fill="#0f172a"/>\n'
@@ -104,20 +132,25 @@ class FakeCameraManager:
             )
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
+            return file_path
+
+        # Generate real JPEG image using Pillow
+        img = Image.new("RGB", (640, 480), color=(15, 23, 42))
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([220, 140, 420, 340], outline=(56, 189, 248), width=3)
+        draw.text((20, 20), "CameraCommander Fake Capture", fill=(248, 250, 252))
+        draw.text((20, 450), timestamp_str, fill=(148, 163, 184))
+
+        if ext in (".jpg", ".jpeg"):
+            img.save(file_path, format="JPEG", quality=85)
+            return file_path
         else:
-            # Simple SVG or raw bytes format stored for preview
-            svg_content = (
-                '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">\n'
-                '  <rect width="640" height="480" fill="#0f172a"/>\n'
-                '  <circle cx="320" cy="240" r="120" fill="none" stroke="#38bdf8" stroke-width="4"/>\n'
-                '  <text x="320" y="230" fill="#f8fafc" font-family="sans-serif" font-size="18" '
-                'text-anchor="middle">CameraCommander Fake Capture</text>\n'
-                f'  <text x="320" y="260" fill="#94a3b8" font-family="sans-serif" font-size="14" '
-                f'text-anchor="middle">{timestamp_str}</text>\n'
-                "</svg>"
-            )
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(svg_content)
+            # RAW format simulation: write mock RAW bytes to file_path and create preview.jpg beside it
+            with open(file_path, "wb") as f:
+                f.write(b"RAW_HEADER_MOCK_CAMERA_COMMANDER\x00\x01\x02\x03" + b"\x00" * 4096)
+            preview_file = os.path.splitext(file_path)[0] + "_preview.jpg"
+            img.save(preview_file, format="JPEG", quality=80)
+            return preview_file
 
     def get_status(self) -> dict[str, Any]:
         return {

@@ -120,44 +120,120 @@ class DryRunEngine:
         return {"status": "OK", "state": self.state}
 
     async def _run_loop(self, plan: Any, samples: list[Any]):
-        """Asynchronous motion loop traversing dry-run poses."""
-        try:
-            total = len(samples)
-            ref_id_at_start = str(self.rig_mgr.reference.reference_id)
-            plan_rev_at_start = plan.revision
+        """Asynchronous motion loop traversing dry-run poses with response inspection."""
+        completed_records = []
+        ref_id_at_start = str(self.rig_mgr.reference.reference_id)
+        plan_rev_at_start = plan.revision
+        total = len(samples)
 
+        try:
             for idx, sample in enumerate(samples):
                 if self._cancel_flag:
                     break
 
                 target_pan = sample.pose.pan_deg
                 target_tilt = sample.pose.tilt_deg
+                pose_start_ts = datetime.now(timezone.utc).isoformat()
 
                 logger.info(f"Dry run [{idx+1}/{total}]: Moving to ({target_pan:.2f}°, {target_tilt:.2f}°)...")
-                await self.serial_mgr.move_absolute(target_pan, target_tilt)
+                move_res = await self.serial_mgr.move_absolute(target_pan, target_tilt)
+                pose_end_ts = datetime.now(timezone.utc).isoformat()
 
                 if self._cancel_flag:
                     break
 
+                # Inspect motor response strictly
+                if isinstance(move_res, dict) and move_res.get("status") != "OK":
+                    err_msg = move_res.get("message", f"Motor returned non-OK status: {move_res}")
+                    logger.error(f"Dry run pose [{idx+1}/{total}] failed: {err_msg}")
+                    self.state = "ERROR"
+                    self.last_error = err_msg
+                    completed_records.append({
+                        "shot_index": idx + 1,
+                        "pan_deg": target_pan,
+                        "tilt_deg": target_tilt,
+                        "status": "ERROR",
+                        "response": move_res,
+                        "start_time": pose_start_ts,
+                        "end_time": pose_end_ts,
+                    })
+                    self._save_report(
+                        plan=plan,
+                        ref_id=ref_id_at_start,
+                        plan_rev=plan_rev_at_start,
+                        completed=self.current_shot,
+                        samples=samples,
+                        valid=False,
+                        error_message=err_msg,
+                        records=completed_records,
+                    )
+                    return
+
                 self.current_shot = idx + 1
                 self.elapsed_time_s = time.time() - self.start_time
+                completed_records.append({
+                    "shot_index": idx + 1,
+                    "pan_deg": target_pan,
+                    "tilt_deg": target_tilt,
+                    "status": "OK",
+                    "response": move_res,
+                    "start_time": pose_start_ts,
+                    "end_time": pose_end_ts,
+                })
 
             if not self._cancel_flag:
                 self.state = "COMPLETED"
                 logger.info(f"Dry run COMPLETED! Traversed {total} poses in {self.elapsed_time_s:.1f}s.")
-                # Save DryRunReport
-                self._save_report(plan, ref_id_at_start, plan_rev_at_start, total, samples)
+                self._save_report(
+                    plan=plan,
+                    ref_id=ref_id_at_start,
+                    plan_rev=plan_rev_at_start,
+                    completed=self.current_shot,
+                    samples=samples,
+                    valid=True,
+                    records=completed_records,
+                )
 
         except asyncio.CancelledError:
             self.state = "CANCELLED"
+            self._save_report(
+                plan=plan,
+                ref_id=ref_id_at_start,
+                plan_rev=plan_rev_at_start,
+                completed=self.current_shot,
+                samples=samples,
+                valid=False,
+                error_message="Cancelled by user",
+                records=completed_records,
+            )
         except Exception as e:
             self.state = "ERROR"
             self.last_error = str(e)
             logger.error(f"Dry run exception: {e}")
+            self._save_report(
+                plan=plan,
+                ref_id=ref_id_at_start,
+                plan_rev=plan_rev_at_start,
+                completed=self.current_shot,
+                samples=samples,
+                valid=False,
+                error_message=str(e),
+                records=completed_records,
+            )
         finally:
             await self.coordinator.release("DRY_RUN")
 
-    def _save_report(self, plan: Any, ref_id: str, plan_rev: int, completed: int, samples: list[Any]):
+    def _save_report(
+        self,
+        plan: Any,
+        ref_id: str,
+        plan_rev: int,
+        completed: int,
+        samples: list[Any],
+        valid: bool = True,
+        error_message: str | None = None,
+        records: list[dict[str, Any]] | None = None,
+    ):
         """Save DryRunReport to output/plans/<plan_id>/dry_run_report.json."""
         plan_dir = self.plan_store.base_dir / str(plan.id)
         plan_dir.mkdir(parents=True, exist_ok=True)
@@ -172,9 +248,11 @@ class DryRunEngine:
             "rig_limits": self.rig_mgr.snapshot.model_dump(mode="json"),
             "total_shots": len(samples),
             "completed_shots": completed,
-            "valid": True,
+            "valid": valid,
+            "error_message": error_message,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "samples": sample_dicts,
+            "execution_records": records or [],
         }
 
         temp_file = plan_dir / "dry_run_report.json.tmp"
@@ -197,13 +275,16 @@ class DryRunEngine:
             plan = self.plan_store.get_plan(plan_id)
             current_ref_id = str(self.rig_mgr.reference.reference_id)
             is_ref_unconfirmed = not self.rig_mgr.reference.confirmed
+            report_limits = report.get("rig_limits", {})
 
-            # Report is stale if plan revision changed or reference ID changed or reference unconfirmed
+            # Report is stale if plan revision, reference ID/confirmation, or rig limits changed
             stale = (
                 plan is None
                 or report.get("plan_revision") != plan.revision
                 or report.get("coordinate_reference_id") != current_ref_id
                 or is_ref_unconfirmed
+                or report_limits.get("tilt_min_deg") != self.rig_mgr.snapshot.tilt_min_deg
+                or report_limits.get("tilt_max_deg") != self.rig_mgr.snapshot.tilt_max_deg
             )
 
             report["stale"] = stale

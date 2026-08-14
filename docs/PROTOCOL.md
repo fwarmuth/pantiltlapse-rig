@@ -19,28 +19,27 @@ Firmware v1.0.4 uses newline-terminated ASCII at 9600 baud. `M` targets are abso
 
 ## HTTP API
 
-All routes return JSON except preview and SSE. Full schemas: `/docs`.
+All routes return JSON except preview MJPEG stream and SSE. Full schemas: `/docs`.
 
 | Route | Body / result |
 |---|---|
-| `GET /api/motors/status` | `{connected,mock_mode,port,baudrate,state,drivers_enabled,pan,tilt}`; hardware refreshes `S`. |
-| `POST /api/motors/move` | `{pan,tilt,relative:true}`; relative defaults to true, false is absolute. |
-| `POST /api/motors/stop` | Cancels time-lapse, sends `X`. |
-| `POST /api/motors/drivers` | `{enable:boolean}`. |
-| `GET /api/camera/status` | Connection/mock/model/exposure/latest-capture metadata. |
-| `POST /api/camera/config` | `{param,value}`; `param`: `iso`, `shutter_speed`, or `aperture`. |
-| `POST /api/camera/trigger` | Capture/download to `output/captures/`; response has `status`, `filename`, `path`, `timestamp` (`mock:true` in mock mode). |
-| `GET /api/camera/preview/latest` | Latest file; 404 before a capture. |
-| `POST /api/sequence/step` | `{pan,tilt,relative:true,pause_s:0.5,capture:true}`; returns move, capture, motor and camera states. |
-| `GET /api/timelapse/status` | State, progress, elapsed/ETA, error, and configuration. |
-| `POST /api/timelapse/start` | Configuration below; rejects when running/paused. |
-| `POST /api/timelapse/pause` / `resume` / `cancel` | Control a background sequence. |
-| `GET /api/events` | SSE every second: `{motors,camera,timelapse}`. |
+| `GET /api/motors/status` | `{connected,port,baudrate,state,drivers_enabled,pan,tilt,rig,reference}`; hardware refreshes `S`. |
+| `POST /api/motors/move` | `{pan,tilt,relative:true}`; guarded by coordinator (`can_move()`). Returns 409 if active dry run/recording. |
+| `POST /api/motors/stop` | Cancels dry run and time-lapse, sends `X`. |
+| `POST /api/motors/drivers` | `{enable:boolean}`. Toggling invalidates coordinate reference if command succeeds. |
+| `POST /api/rig/limits` | `{tilt_min_deg,tilt_max_deg}`. Persisted to `output/rig.json`. Invalidates dry-run report staleness. |
+| `POST /api/rig/confirm-zero` | Operator confirms zero reference position. |
+| `GET /api/camera/status` | Connection status, camera type (`gphoto2` or `fake`), model, and current exposure configuration. |
+| `POST /api/camera/config` | `{param,value}`; `param`: `iso`, `shutter_speed`, or `aperture`. Validated against camera choices. |
+| `POST /api/camera/trigger` | Shutter release capture preserving camera extension. |
+| `POST /api/camera/preview/start` | `{gain:1.0..4.0, plan_id:UUID|null}`. Starts MJPEG live view stream with plan acquisition/preview profiles. |
+| `GET /api/camera/preview/stream` | MJPEG HTTP stream response (`multipart/x-mixed-replace`). |
+| `POST /api/plans/{id}/dry-run/start` | Motion-only rehearsal. Inspects all motor responses and generates `DryRunReport`. |
+| `GET /api/plans/{id}/test-shots` | List plan test-shot metadata with SHA256, byte sizes, EXIF, and artifact files. |
+| `GET /api/events` | SSE every second: `{motors,camera,rig,reference,timelapse,dry_run,coordinator}`. |
 
-Time-lapse configuration:
+## Operation Concurrency Matrix
 
-```json
-{"start_pan":0,"start_tilt":0,"end_pan":15,"end_tilt":0,"total_shots":10,"interval_s":5,"settle_time_s":0.5,"capture_photo":true,"easing":"ease_in_out"}
-```
-
-`total_shots >= 2`; `interval_s >= 1`; easing is `linear`, `ease_in_out`, or `s_curve` (other values use linear). Each shot moves, settles, optionally captures, then waits out its interval. States: `IDLE`, `RUNNING`, `PAUSED`, `COMPLETED`, `CANCELLED`, `ERROR`. The UI polls status every second if SSE is unavailable.
+- **PREVIEW** and **DRY_RUN** can run concurrently **only if** both operate on the same plan ID.
+- **RECORDING** requires exclusive execution.
+- Manual move, driver toggle, limit updates, and test shots are rejected with `409 Conflict` during active dry-run or recording sequences.

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -13,14 +15,23 @@ def setup_live_view_env(tmp_path):
     import main
     main.camera_mgr = fake_cam
     preview_controller.camera_mgr = fake_cam
-    coordinator.active_mode = "IDLE"
+    if coordinator.is_previewing:
+        asyncio.run(coordinator.release("PREVIEW"))
+    if coordinator.is_dry_running:
+        asyncio.run(coordinator.release("DRY_RUN"))
+    if coordinator.is_recording:
+        asyncio.run(coordinator.release("RECORDING"))
 
     yield
 
     # Ensure preview is stopped after test
-    import asyncio
     asyncio.run(preview_controller.stop())
-    coordinator.active_mode = "IDLE"
+    if coordinator.is_previewing:
+        asyncio.run(coordinator.release("PREVIEW"))
+    if coordinator.is_dry_running:
+        asyncio.run(coordinator.release("DRY_RUN"))
+    if coordinator.is_recording:
+        asyncio.run(coordinator.release("RECORDING"))
 
 
 def test_live_view_start_stop_workflow():
@@ -47,8 +58,8 @@ def test_live_view_start_stop_workflow():
 
 def test_live_view_allowed_during_dry_run():
     with TestClient(app) as client:
-        # Set active_mode to DRY_RUN
-        coordinator.active_mode = "DRY_RUN"
+        # Acquire DRY_RUN lock
+        asyncio.run(coordinator.acquire("DRY_RUN"))
 
         # Preview start should succeed during DRY_RUN
         resp = client.post("/api/camera/preview/start", json={"gain": 1.5})
@@ -61,15 +72,16 @@ def test_live_view_allowed_during_dry_run():
         client.post("/api/camera/preview/stop")
         assert coordinator.is_previewing is False
         assert coordinator.is_dry_running is True
+        asyncio.run(coordinator.release("DRY_RUN"))
 
 
 def test_live_view_lock_conflict():
     with TestClient(app) as client:
-        # Set active_mode to RECORDING
-        coordinator.active_mode = "RECORDING"
+        # Acquire RECORDING lock
+        asyncio.run(coordinator.acquire("RECORDING"))
 
         resp = client.post("/api/camera/preview/start")
         assert resp.status_code == 409
         assert "busy" in resp.json()["detail"]["message"].lower()
 
-        coordinator.active_mode = "IDLE"
+        asyncio.run(coordinator.release("RECORDING"))

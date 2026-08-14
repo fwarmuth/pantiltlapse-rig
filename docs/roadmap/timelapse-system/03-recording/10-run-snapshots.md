@@ -1,4 +1,4 @@
-# Task 10 — Immutable Run Snapshots and Storage
+# Task 10B — Immutable Run Snapshots and Storage
 
 ## Goal
 
@@ -6,31 +6,33 @@ Create a durable run directory and immutable execution snapshot before introduci
 
 ## Prerequisites
 
-- Tasks 01, 03, and 04.
+- Tasks 03, 04, and 10A.
 
 ## Checklist
 
-- [ ] Extend storage with run creation, read, update-summary, list, event append, and per-shot publication operations.
-- [ ] On creation, deep-copy the complete plan and current rig/camera/backend state into the run manifest.
+- [ ] Add a focused `RunStore` rooted at configurable `output/runs`; keep `PlanStore` behavior separate.
+- [ ] Implement run creation, read, atomic mutable-summary update, lightweight list, event append/read, shot publication/read, and artifact lookup.
+- [ ] Accept an already-built `RunSnapshot`; storage must not query plans, hardware, or cameras.
 - [ ] Use the canonical date/slug/UUID directory layout without trusting the display name as a path.
 - [ ] Write the initial `PREPARING` manifest atomically before returning success.
-- [ ] Add an immutable snapshot hash so accidental mutation can be detected in tests and diagnostics.
+- [ ] Persist and verify the Task 10A canonical snapshot hash on every run read; report mismatch as corruption without rewriting evidence.
 - [ ] Add shot-directory staging and atomic publication of `shot.json` plus available artifacts.
-- [ ] Append structured state events with sequence numbers and UTC timestamps.
+- [ ] Append typed `RunEvent` JSONL records with strictly increasing sequence numbers and fsync each append.
 - [ ] Calculate summary counters from persisted shot records or update them consistently after shot publication.
-- [ ] Add internal APIs/services for artifact lookup using IDs/relative paths only.
+- [ ] Resolve artifacts from their persisted manifest records using IDs/relative paths only; validate containment inside that run directory.
+- [ ] On store initialization, identify orphan `.tmp_*` shot directories as incomplete diagnostics but do not publish or delete them automatically.
 - [ ] Add tests for duplicate names, unusual characters, interrupted shot staging, event ordering, snapshot immutability, restart/reload, and date-tree scanning.
 
 ## Functional check
 
-Without motors or cameras, create a run snapshot from a plan, publish one synthetic success and one synthetic gap, reload the store, and inspect `run.json`, `events.jsonl`, and both shot directories.
+Without motors or cameras, provide a prepared snapshot, publish one synthetic success and one synthetic gap, recreate `RunStore`, and inspect `run.json`, `events.jsonl`, and both shot directories.
 
 ## Acceptance criteria
 
 - Editing/deleting the source plan cannot change or remove the run snapshot.
 - A run is discoverable immediately after its initial manifest is written.
 - Incomplete staged shots are distinguishable from completed shots after restart.
-- Storage code does not decide movement, retry, or timing policy.
+- Storage code does not create snapshots or decide movement, retry, timing, or restart policy.
 
 ## Not in this task
 
@@ -42,4 +44,3 @@ Without motors or cameras, create a run snapshot from a plan, publish one synthe
 ## Implementation notes
 
 - Record snapshot hashing and atomic shot-publication details here.
-

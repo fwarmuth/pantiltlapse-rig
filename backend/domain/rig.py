@@ -1,5 +1,8 @@
+import json
 import logging
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
@@ -30,18 +33,52 @@ class RigManager:
     """
     Manages physical rig safety bounds and runtime coordinate reference confirmation.
     Enforces minimum and maximum tilt boundaries and rejects absolute movement when unconfirmed.
+    Persists tilt_min_deg and tilt_max_deg atomically in output/rig.json.
     """
 
-    def __init__(self, tilt_min_deg: float = 0.0, tilt_max_deg: float = 80.0):
+    def __init__(
+        self,
+        tilt_min_deg: float = 0.0,
+        tilt_max_deg: float = 80.0,
+        storage_dir: str | Path = "output",
+    ):
+        self.storage_dir = Path(storage_dir)
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.rig_file = self.storage_dir / "rig.json"
+
+        loaded_min, loaded_max = self._load_limits(tilt_min_deg, tilt_max_deg)
+
         self.snapshot = RigSnapshot(
             coordinate_reference_id=uuid4(),
-            tilt_min_deg=tilt_min_deg,
-            tilt_max_deg=tilt_max_deg,
+            tilt_min_deg=loaded_min,
+            tilt_max_deg=loaded_max,
         )
         self.reference = CoordinateReferenceState(
             reference_id=self.snapshot.coordinate_reference_id,
             invalidation_reason="Initial startup",
         )
+
+    def _load_limits(self, default_min: float, default_max: float) -> tuple[float, float]:
+        if self.rig_file.exists():
+            try:
+                with open(self.rig_file, encoding="utf-8") as f:
+                    data = json.load(f)
+                return float(data.get("tilt_min_deg", default_min)), float(data.get("tilt_max_deg", default_max))
+            except Exception as e:
+                logger.warning(f"Failed to load rig limits from '{self.rig_file}': {e}")
+        return default_min, default_max
+
+    def _save_limits(self):
+        temp_file = self.storage_dir / "rig.json.tmp"
+        data = {
+            "tilt_min_deg": self.snapshot.tilt_min_deg,
+            "tilt_max_deg": self.snapshot.tilt_max_deg,
+        }
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_file, self.rig_file)
 
     def invalidate_reference(self, reason: str = "Driver cycle"):
         """Invalidate physical zero reference confirmation and create a new reference UUID."""
@@ -64,13 +101,14 @@ class RigManager:
         return self.reference
 
     def set_limits(self, tilt_min_deg: float, tilt_max_deg: float) -> RigSnapshot:
-        """Update rig tilt limits."""
+        """Update rig tilt limits and persist atomically."""
         self.snapshot = RigSnapshot(
             coordinate_reference_id=self.reference.reference_id,
             tilt_min_deg=tilt_min_deg,
             tilt_max_deg=tilt_max_deg,
         )
-        logger.info(f"Updated rig limits: tilt [{tilt_min_deg}°, {tilt_max_deg}°]")
+        self._save_limits()
+        logger.info(f"Updated rig limits: tilt [{tilt_min_deg}°, {tilt_max_deg}°] and saved to '{self.rig_file}'")
         return self.snapshot
 
     def validate_move(
