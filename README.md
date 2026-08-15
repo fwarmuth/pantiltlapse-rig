@@ -12,7 +12,7 @@ A Python FastAPI backend controls the camera over `gphoto2` (USB PTP) and drives
 | ![Tripod Prototype](docs/media/tripod_v0_small_small.gif) | <img src="docs/media/top.png" alt="Top CAD View" height="180"/> | <img src="docs/media/bot.png" alt="Bottom CAD View" height="180"/> |
 
 ### Example Capture
-> *Sub-zero night sky capture north of Kiruna, Sweden:*  
+> *Sub-zero night sky capture north of Kiruna, Sweden:*
 > ![Timelapse Example](docs/media/nothernlights.gif)
 
 ---
@@ -62,4 +62,3 @@ pio run --target upload
 
 5. **Camera & GPhoto2 Debug Workbench** (`/debug/camera`):
    - Live stream monitor, raw widget tree scanner/setter, custom focus drive tester, and full-resolution shutter capture with persistent zoom & pan inspection across shots.
-

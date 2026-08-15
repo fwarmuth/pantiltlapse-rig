@@ -70,6 +70,7 @@ GearedStepper tiltStepper(
 struct Axis { GearedStepper& s; int dir = 1; };
 Axis rot { turntableStepper };
 Axis til { tiltStepper     };
+bool gMoveInProgress = false;
 
 /* ─── Helpers ──────────────────────────────────────────────────────── */
 inline void ack(const char*  msg) { Serial.println(msg); }
@@ -149,6 +150,13 @@ void loop()
 {
     /* keep steppers running */
     turntableStepper.run(); tiltStepper.run();
+
+    if (gMoveInProgress && !turntableStepper.distanceToGo() && !tiltStepper.distanceToGo()) {
+        gMoveInProgress = false;
+        delay(50); // Settle time
+        ack("DONE");
+    }
+
     if (!Serial.available()) return;
 
     /* read full line */
@@ -180,13 +188,8 @@ void loop()
         if (deltaPan != 0) turntableStepper.move(deltaPan);
         if (deltaTilt != 0) tiltStepper.move(deltaTilt);
 
-        while (turntableStepper.distanceToGo() || tiltStepper.distanceToGo()) {
-            turntableStepper.run();
-            tiltStepper.run();
-            yield();
-        }
-        delay(50); // Settle time
-        ack("DONE"); return;
+        gMoveInProgress = true;
+        return;
     }
 
     if (c == 'S' || c == 's') {
@@ -239,7 +242,13 @@ void loop()
     }
 
     /* -------- Global stop -------------------------------------------- */
-    if (c == 'X') { rot.s.stop(); til.s.stop(); ack("OK STOP"); return; }
+    if (c == 'X') {
+        turntableStepper.setCurrentPosition(turntableStepper.currentPosition());
+        tiltStepper.setCurrentPosition(tiltStepper.currentPosition());
+        gMoveInProgress = false;
+        ack("OK STOP");
+        return;
+    }
 
     /* -------- Driver enable / disable -------------------------------- */
     if (c == 'd' || c == 'D') {

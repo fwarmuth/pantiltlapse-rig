@@ -1,6 +1,6 @@
 # AGENTS.md - Project Guidelines for AI Agents
 
-> **Scope**: Root workspace guidelines for `pantiltlapse-rig`  
+> **Scope**: Root workspace guidelines for `pantiltlapse-rig`
 > **Tools Supported**: Antigravity CLI (`agy`), Codex CLI
 
 ---
@@ -68,7 +68,7 @@ uv run ruff check .
 uv run python -m py_compile main.py serial_manager.py
 
 # 2. Sync backend dependencies
-uv sync
+uv sync --extra dev
 
 # 3. Verify ESP32 Firmware build via PlatformIO
 cd ../firmware
