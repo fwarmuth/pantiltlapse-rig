@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 from contextlib import asynccontextmanager
+from typing import Any
 from uuid import UUID
 
 import dotenv
@@ -426,6 +427,90 @@ async def get_camera_preview_frame():
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"status": "ERROR", "message": str(e)},
         ) from e
+
+
+# --- Manual Focus & Autofocus Endpoints ---
+class FocusStepRequest(BaseModel):
+    direction: str = Field(..., description="Focus direction: 'near' or 'far'")
+    step_size: int = Field(1, ge=1, le=3, description="Focus step size: 1 (fine), 2 (medium), 3 (coarse)")
+
+
+@app.post("/api/camera/focus/step")
+async def step_camera_focus(req: FocusStepRequest):
+    """Drive camera manual focus near or far in discrete steps."""
+    if not camera_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": "Camera is disconnected"},
+        )
+    res = await camera_mgr.step_focus(direction=req.direction, step_size=req.step_size)
+    if res.get("status") != "OK":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "ERROR", "message": res.get("message", "Focus step failed")},
+        )
+    return res
+
+
+@app.post("/api/camera/focus/autofocus")
+async def trigger_camera_autofocus():
+    """Trigger camera autofocus lock."""
+    if not camera_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": "Camera is disconnected"},
+        )
+    res = await camera_mgr.trigger_autofocus()
+    if res.get("status") != "OK":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "ERROR", "message": res.get("message", "Autofocus failed")},
+        )
+    return res
+
+
+# --- Debug Camera Interface & Widget Diagnostics ---
+@app.get("/debug/camera")
+async def get_debug_camera_page():
+    """Serve standalone camera debug and gphoto2 diagnostic control interface."""
+    debug_html = os.path.join(os.path.dirname(__file__), "..", "frontend", "debug_camera.html")
+    if os.path.exists(debug_html):
+        return FileResponse(debug_html, media_type="text/html")
+    raise HTTPException(status_code=404, detail="Debug camera page not found")
+
+
+@app.get("/api/debug/camera/widgets")
+async def get_camera_widgets():
+    """Retrieve full configuration widget tree and choice options from connected camera."""
+    if not camera_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": "Camera is disconnected"},
+        )
+    widgets = await camera_mgr.get_all_widgets()
+    return {"status": "OK", "count": len(widgets), "widgets": widgets}
+
+
+class RawWidgetSetRequest(BaseModel):
+    widget_name: str = Field(..., description="Exact gphoto2 widget name, e.g. manualfocusdrive, iso, shutterspeed")
+    value: Any = Field(..., description="Raw value to set")
+
+
+@app.post("/api/debug/camera/set-raw-widget")
+async def set_camera_raw_widget(req: RawWidgetSetRequest):
+    """Set a raw camera configuration widget directly and return detailed gphoto2 response."""
+    if not camera_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": "Camera is disconnected"},
+        )
+    res = await camera_mgr.set_raw_widget(req.widget_name, req.value)
+    if res.get("status") != "OK":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "ERROR", "message": res.get("message", "Widget set failed"), "widget": req.widget_name},
+        )
+    return res
 
 
 # --- Integrated Sequence Step Endpoint ---

@@ -170,10 +170,13 @@ class CameraManager:
                 choices: dict[str, list[str]] = {}
                 for param, child_name in key_map.items():
                     try:
-                        child = config.get_child_by_name(child_name)
-                        count = child.count_choices()
-                        param_choices = [str(child.get_choice(i)) for i in range(count)]
-                        choices[param] = param_choices
+                        child = self._find_widget_recursive(config, child_name)
+                        if child is not None:
+                            count = child.count_choices()
+                            param_choices = [str(child.get_choice(i)) for i in range(count)]
+                            choices[param] = param_choices
+                        else:
+                            choices[param] = []
                     except Exception as e:
                         logger.warning(f"Could not read choices for widget '{child_name}': {e}")
                         choices[param] = []
@@ -204,7 +207,9 @@ class CameraManager:
         async with self._lock:
             try:
                 config = self._camera.get_config()
-                child = config.get_child_by_name(child_name)
+                child = self._find_widget_recursive(config, child_name)
+                if child is None:
+                    return {"status": "ERROR", "message": f"Widget '{child_name}' not found on camera"}
                 child.set_value(val_str)
                 self._camera.set_config(config)
                 setattr(self, param, val_str)
@@ -213,6 +218,250 @@ class CameraManager:
             except Exception as e:
                 logger.error(f"Failed to set camera config '{param}' to '{val_str}': {e}")
                 return {"status": "ERROR", "message": str(e)}
+
+    def _find_widget_recursive(self, root: Any, target_name: str) -> Any | None:
+        """Find a widget by name anywhere in the hierarchical gphoto2 configuration tree."""
+        if root is None:
+            return None
+        try:
+            if root.get_name() == target_name:
+                return root
+        except Exception:
+            pass
+        try:
+            count = root.count_children()
+            for i in range(count):
+                child = root.get_child(i)
+                found = self._find_widget_recursive(child, target_name)
+                if found is not None:
+                    return found
+        except Exception:
+            pass
+        return None
+
+    def _find_focus_widget(self, root: Any) -> tuple[Any | None, str | None]:
+        """Search for focus drive widgets by standard names or substring match."""
+        candidates = ["manualfocusdrive", "focusdrive", "autofocusdrive", "d034", "eoszoom", "focus"]
+        for cand in candidates:
+            w = self._find_widget_recursive(root, cand)
+            if w is not None:
+                return w, cand
+
+        # Fallback: traverse all widgets for partial name match
+        all_widgets = []
+        self._extract_widgets_recursive(root, all_widgets)
+        for item in all_widgets:
+            n = item.get("name", "").lower()
+            if "focus" in n and ("drive" in n or "step" in n or "manual" in n):
+                w = self._find_widget_recursive(root, item["name"])
+                if w is not None:
+                    return w, item["name"]
+
+        return None, None
+
+    async def step_focus(self, direction: str, step_size: int = 1) -> dict[str, Any]:
+        """
+        Drive camera manual focus in discrete steps ('near' or 'far', step_size 1..3).
+        Searches entire hierarchical config tree recursively for focus drive widget.
+        """
+        if not self.is_connected or not self._camera:
+            return {"status": "ERROR", "message": "Camera is disconnected"}
+
+        direction = direction.lower()
+        if direction not in ("near", "far"):
+            return {"status": "ERROR", "message": "Direction must be 'near' or 'far'"}
+        step_size = max(1, min(3, int(step_size)))
+        drive_str = f"{direction.capitalize()} {step_size}"
+
+        async with self._lock:
+            def _drive_focus():
+                try:
+                    config = self._camera.get_config()
+                    widget, widget_name = self._find_focus_widget(config)
+
+                    if widget is None or widget_name is None:
+                        # Extract list of available names for debugging
+                        all_widgets = []
+                        self._extract_widgets_recursive(config, all_widgets)
+                        avail_names = [w["name"] for w in all_widgets[:30]]
+                        names_summary = ", ".join(avail_names)
+                        return {
+                            "status": "ERROR",
+                            "message": (
+                                f"Camera does not expose a focus drive widget. "
+                                f"(Found {len(all_widgets)} widgets: {names_summary}...)"
+                            ),
+                            "hint": "Check /debug/camera widget tree to view available controls.",
+                        }
+
+                    choices = []
+                    try:
+                        count = widget.count_choices()
+                        for i in range(count):
+                            choices.append(str(widget.get_choice(i)))
+                    except Exception:
+                        pass
+
+                    target_val = drive_str
+                    if choices:
+                        matched = False
+                        # 1. Exact / case-insensitive match
+                        for c in choices:
+                            if c.lower() == drive_str.lower():
+                                target_val = c
+                                matched = True
+                                break
+                        # 2. Direction & step_size substring match
+                        if not matched:
+                            for c in choices:
+                                if direction in c.lower() and str(step_size) in c:
+                                    target_val = c
+                                    matched = True
+                                    break
+                        # 3. Signed integer string match (-3..+3)
+                        if not matched:
+                            signed_str = f"-{step_size}" if direction == "far" else str(step_size)
+                            for c in choices:
+                                if c == signed_str or c == f"+{step_size}":
+                                    target_val = c
+                                    matched = True
+                                    break
+
+                    try:
+                        widget.set_value(target_val)
+                    except Exception:
+                        val_num = step_size if direction == "near" else -step_size
+                        widget.set_value(val_num)
+
+                    self._camera.set_config(config)
+                    logger.info(f"Manual focus step applied: widget={widget_name}, value={target_val}")
+                    return {
+                        "status": "OK",
+                        "widget": widget_name,
+                        "direction": direction,
+                        "step_size": step_size,
+                        "applied_value": str(target_val),
+                        "available_choices": choices,
+                    }
+                except Exception as e:
+                    logger.error(f"Manual focus step failed: {e}")
+                    return {"status": "ERROR", "message": str(e), "attempted_value": drive_str}
+
+            return await asyncio.to_thread(_drive_focus)
+
+    async def trigger_autofocus(self) -> dict[str, Any]:
+        """Trigger camera autofocus lock."""
+        if not self.is_connected or not self._camera:
+            return {"status": "ERROR", "message": "Camera is disconnected"}
+
+        async with self._lock:
+            def _do_autofocus():
+                try:
+                    config = self._camera.get_config()
+                    widget = self._find_widget_recursive(
+                        config, "autofocusdrive"
+                    ) or self._find_widget_recursive(config, "autofocus")
+
+                    if widget:
+                        try:
+                            widget.set_value(1)
+                        except Exception:
+                            widget.set_value("1")
+                        self._camera.set_config(config)
+                        return {"status": "OK", "message": "Autofocus triggered"}
+                    else:
+                        return {"status": "ERROR", "message": "Camera does not support autofocus drive widget"}
+                except Exception as e:
+                    return {"status": "ERROR", "message": str(e)}
+
+            return await asyncio.to_thread(_do_autofocus)
+
+    async def get_all_widgets(self) -> list[dict[str, Any]]:
+        """Extract flat list of all configuration widgets from connected camera."""
+        if not self.is_connected or not self._camera:
+            return []
+
+        async with self._lock:
+            def _scan():
+                result = []
+                try:
+                    config = self._camera.get_config()
+                    self._extract_widgets_recursive(config, result)
+                except Exception as e:
+                    logger.error(f"Error reading camera widget tree: {e}")
+                return result
+
+            return await asyncio.to_thread(_scan)
+
+    def _extract_widgets_recursive(self, widget: Any, out_list: list[dict[str, Any]]):
+        if widget is None:
+            return
+        try:
+            name = widget.get_name()
+            label = widget.get_label()
+            w_type = str(widget.get_type())
+            readonly = widget.get_readonly() == 1
+
+            val = None
+            try:
+                val = str(widget.get_value())
+            except Exception:
+                pass
+
+            choices = []
+            try:
+                count = widget.count_choices()
+                for i in range(count):
+                    choices.append(str(widget.get_choice(i)))
+            except Exception:
+                pass
+
+            out_list.append({
+                "name": name,
+                "label": label,
+                "type": w_type,
+                "value": val,
+                "readonly": readonly,
+                "choices": choices,
+            })
+        except Exception:
+            pass
+
+        try:
+            for i in range(widget.count_children()):
+                self._extract_widgets_recursive(widget.get_child(i), out_list)
+        except Exception:
+            pass
+
+    async def set_raw_widget(self, name: str, value: Any) -> dict[str, Any]:
+        """Set any camera widget directly by name anywhere in tree for debugging."""
+        if not self.is_connected or not self._camera:
+            return {"status": "ERROR", "message": "Camera is disconnected"}
+
+        async with self._lock:
+            def _set():
+                try:
+                    config = self._camera.get_config()
+                    widget = self._find_widget_recursive(config, name)
+                    if not widget:
+                        return {"status": "ERROR", "message": f"Widget '{name}' not found on camera"}
+
+                    try:
+                        widget.set_value(value)
+                    except Exception:
+                        try:
+                            widget.set_value(str(value))
+                        except Exception:
+                            widget.set_value(int(value))
+
+                    self._camera.set_config(config)
+                    logger.info(f"Debug raw widget set: '{name}' = {value}")
+                    return {"status": "OK", "widget": name, "value": value}
+                except Exception as e:
+                    logger.error(f"Failed to set raw widget '{name}' to {value}: {e}")
+                    return {"status": "ERROR", "message": str(e)}
+
+            return await asyncio.to_thread(_set)
 
     async def trigger_capture(self, filename: str | None = None, target_dir: str | None = None) -> dict[str, Any]:
         """Trigger shutter release and save photo preserving real camera extension."""

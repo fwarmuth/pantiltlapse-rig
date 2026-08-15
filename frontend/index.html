@@ -599,7 +599,10 @@
                     <!-- Live Camera Viewport -->
                     <div class="card-title-row">
                         <h3>👁️ Live Camera Viewport</h3>
-                        <button class="btn btn-sm btn-primary" id="btnToggleLiveView" onclick="toggleLiveView()">▶ Start Stream</button>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <button class="btn btn-xs btn-secondary" id="btnEnlargeLiveView" onclick="openEnlargedLiveViewModal()" title="Open enlarged camera viewport">⛶ Enlarge</button>
+                            <button class="btn btn-sm btn-primary" id="btnToggleLiveView" onclick="toggleLiveView()">▶ Start Stream</button>
+                        </div>
                     </div>
 
                     <!-- Stream Viewport with Canvas Processing -->
@@ -837,6 +840,115 @@
         </div>
     </div>
 
+    <!-- Enlarged Live Camera Viewport Modal -->
+    <div id="enlargedLiveViewModal" class="modal hidden">
+        <div class="modal-content card enlarged-live-card">
+            <!-- Header -->
+            <div class="modal-header-row">
+                <div class="modal-title-wrap">
+                    <h2>👁️ Live Camera Viewport (Enlarged)</h2>
+                    <span class="badge" id="enlargedStreamFpsBadge">0.0 FPS</span>
+                    <span class="badge" id="enlargedStreamResBadge">640×480</span>
+                </div>
+                <div class="modal-nav-controls">
+                    <button class="btn btn-primary btn-sm" id="btnEnlargedTakeTestShot" onclick="triggerPlanTestShotFromEnlarged()" title="Capture test shot">📸 Take Test Shot</button>
+                    <button class="btn btn-secondary btn-sm" id="btnEnlargedToggleStream" onclick="toggleLiveView()">⏹ Stop Stream</button>
+                    <span class="modal-close" onclick="closeEnlargedLiveViewModal()">&times;</span>
+                </div>
+            </div>
+
+            <!-- Focus Controls & 5x Focus Loupe Toolbar -->
+            <div class="enlarged-focus-bar">
+                <div class="focus-drive-group">
+                    <span class="focus-label">FOCUS DRIVE</span>
+                    <div class="focus-btn-group">
+                        <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('far', 3)" title="Far Coarse (3 steps)">⏪ Far 3</button>
+                        <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('far', 2)" title="Far Medium (2 steps)">◀ Far 2</button>
+                        <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('far', 1)" title="Far Fine (1 step)">‹ Far 1</button>
+                        <button class="btn btn-accent btn-xs btn-focus" onclick="triggerCameraAutofocus()" title="Trigger Camera Autofocus">🎯 Autofocus</button>
+                        <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('near', 1)" title="Near Fine (1 step)">Near 1 ›</button>
+                        <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('near', 2)" title="Near Medium (2 steps)">Near 2 ▶</button>
+                        <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('near', 3)" title="Near Coarse (3 steps)">Near 3 ⏩</button>
+                    </div>
+                    <span id="lblFocusStatus" class="focus-status-text">Idle</span>
+                </div>
+
+                <div class="focus-zoom-group">
+                    <button class="btn btn-xs btn-secondary" id="btnToggleFocusZoom" onclick="toggleFocusZoom()" title="Click anywhere on the stream to zoom 5x for razor-sharp focus adjustment">
+                        🔍 5x Focus Loupe
+                    </button>
+                    <button class="btn btn-secondary btn-xs hidden" id="btnResetFocusZoom" onclick="resetFocusZoom()" title="Reset to 1x full view">
+                        1x Full
+                    </button>
+                </div>
+            </div>
+
+            <!-- Main Live Canvas Viewport Stage -->
+            <div class="enlarged-live-viewport-container" id="enlargedLiveContainer">
+                <canvas id="canvasEnlargedLiveView" class="enlarged-live-canvas"></canvas>
+                
+                <!-- 5x Focus Zoom Instructions Overlay Badge -->
+                <div id="focusZoomOverlayBadge" class="focus-zoom-overlay-badge hidden">
+                    <span>🔍 5x Focus Zoom Active (Click to center focus)</span>
+                </div>
+                
+                <!-- Live Rig Pose HUD Overlay (Top-Left) -->
+                <div class="enlarged-hud-pose">
+                    <div class="hud-item"><span class="hud-lbl">PAN</span> <strong id="enlargedHudPan">0.00°</strong></div>
+                    <div class="hud-item"><span class="hud-lbl">TILT</span> <strong id="enlargedHudTilt">0.00°</strong></div>
+                </div>
+
+                <!-- On-Screen Framing D-Pad Overlay (Bottom-Right) -->
+                <div class="enlarged-hud-jog">
+                    <div class="hud-jog-header">
+                        <span>Framing Jog</span>
+                        <select id="enlargedJogStep" class="dropdown dropdown-xs" onchange="setStepSize(parseFloat(this.value))">
+                            <option value="0.5">0.5°</option>
+                            <option value="1.0" selected>1.0°</option>
+                            <option value="5.0">5.0°</option>
+                            <option value="15.0">15.0°</option>
+                        </select>
+                    </div>
+                    <div class="hud-dpad-grid">
+                        <div></div>
+                        <button class="btn-dpad-mini" onclick="jogTiltRelative(currentStepSize)">▲</button>
+                        <div></div>
+                        <button class="btn-dpad-mini" onclick="jogPanRelative(-currentStepSize)">◀</button>
+                        <button class="btn-dpad-mini btn-dpad-center" onclick="confirmZeroReference()" title="Set 0,0 Origin">🎯</button>
+                        <button class="btn-dpad-mini" onclick="jogPanRelative(currentStepSize)">▶</button>
+                        <div></div>
+                        <button class="btn-dpad-mini" onclick="jogTiltRelative(-currentStepSize)">▼</button>
+                        <div></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer / Live Enhancements Bar -->
+            <div class="enlarged-live-toolbar">
+                <div class="toolbar-group">
+                    <label>Filter:</label>
+                    <select id="selEnlargedEnhanceMode" class="dropdown dropdown-xs" onchange="syncEnhanceModeFromEnlarged(this.value)">
+                        <option value="none">Raw (No Filter)</option>
+                        <option value="clahe">CLAHE Contrast</option>
+                        <option value="gain_gamma">Gain & Gamma</option>
+                        <option value="night_vision">Night Green</option>
+                        <option value="edges">Edge Assist</option>
+                    </select>
+                </div>
+                <div class="toolbar-group">
+                    <label>Gain:</label>
+                    <input type="range" id="sliderEnlargedGain" class="slider-xs" min="1.0" max="5.0" step="0.2" value="1.5" oninput="syncGainFromEnlarged(this.value)">
+                    <span id="lblValEnlargedGain" class="mono-sub-xs">1.5x</span>
+                </div>
+                <div class="toolbar-group">
+                    <label>Contrast:</label>
+                    <input type="range" id="sliderEnlargedContrast" class="slider-xs" min="0.5" max="3.0" step="0.1" value="1.3" oninput="syncContrastFromEnlarged(this.value)">
+                    <span id="lblValEnlargedContrast" class="mono-sub-xs">1.3x</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Image Zoom Modal for Live View / Generic Frames -->
     <div id="imageZoomModal" class="modal hidden">
         <div class="modal-content card image-zoom-card">
@@ -848,6 +960,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260815_03"></script>
+    <script src="app.js?v=20260815_05"></script>
 </body>
 </html>

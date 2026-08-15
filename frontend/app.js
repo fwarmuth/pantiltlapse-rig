@@ -435,6 +435,8 @@ async function stopMotors() {
 // 4. Live Framing Preview & Client-Side Image Processing (CLAHE, Gain, etc.)
 // ==========================================================================
 
+let isEnlargedLiveViewOpen = false;
+
 function toggleLiveView() {
     if (isLiveViewActive) {
         stopLiveView();
@@ -456,6 +458,8 @@ async function startLiveView() {
         if (res.ok) {
             isLiveViewActive = true;
             document.getElementById("btnToggleLiveView").textContent = "⏹ Stop Stream";
+            const btnEnlarged = document.getElementById("btnEnlargedToggleStream");
+            if (btnEnlarged) btnEnlarged.textContent = "⏹ Stop Stream";
             document.getElementById("streamPlaceholder").classList.add("hidden");
             document.getElementById("streamState").textContent = "STREAMING";
 
@@ -481,14 +485,21 @@ async function stopLiveView() {
     } catch (e) {}
 
     document.getElementById("btnToggleLiveView").textContent = "▶ Start Stream";
+    const btnEnlarged = document.getElementById("btnEnlargedToggleStream");
+    if (btnEnlarged) btnEnlarged.textContent = "▶ Start Stream";
     document.getElementById("streamPlaceholder").classList.remove("hidden");
     document.getElementById("streamState").textContent = "IDLE";
     document.getElementById("streamFps").textContent = "0.0";
+    const fpsBadge = document.getElementById("enlargedStreamFpsBadge");
+    if (fpsBadge) fpsBadge.textContent = "0.0 FPS";
 }
 
 async function runFrameFetchLoop() {
     const canvas = document.getElementById("canvasEnhancedPreview");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    
+    const enlargedCanvas = document.getElementById("canvasEnlargedLiveView");
+    const enlargedCtx = enlargedCanvas ? enlargedCanvas.getContext("2d", { willReadFrequently: true }) : null;
 
     while (isLiveViewActive) {
         if (!isFetchingFrame) {
@@ -505,6 +516,13 @@ async function runFrameFetchLoop() {
                         canvas.width = bitmap.width;
                         canvas.height = bitmap.height;
                         document.getElementById("streamRes").textContent = `${canvas.width}×${canvas.height}`;
+                        const resBadge = document.getElementById("enlargedStreamResBadge");
+                        if (resBadge) resBadge.textContent = `${canvas.width}×${canvas.height}`;
+                    }
+
+                    if (enlargedCanvas && (enlargedCanvas.width !== bitmap.width || enlargedCanvas.height !== bitmap.height)) {
+                        enlargedCanvas.width = bitmap.width;
+                        enlargedCanvas.height = bitmap.height;
                     }
 
                     ctx.drawImage(bitmap, 0, 0);
@@ -516,6 +534,67 @@ async function runFrameFetchLoop() {
                         ctx.putImageData(imgData, 0, 0);
                     }
 
+                    // If enlarged modal is active, mirror or crop/zoom to enlarged canvas
+                    if (isEnlargedLiveViewOpen && enlargedCtx && enlargedCanvas) {
+                        if (!focusZoomEnabled) {
+                            // 1x Full Frame View
+                            enlargedCtx.drawImage(canvas, 0, 0, enlargedCanvas.width, enlargedCanvas.height);
+                        } else {
+                            // 5x Focus Zoom Loupe View
+                            const srcW = canvas.width;
+                            const srcH = canvas.height;
+                            const cropW = srcW / focusZoomFactor;
+                            const cropH = srcH / focusZoomFactor;
+
+                            const cropX = Math.max(0, Math.min(srcW - cropW, (focusCenterX * srcW) - (cropW / 2)));
+                            const cropY = Math.max(0, Math.min(srcH - cropH, (focusCenterY * srcH) - (cropH / 2)));
+
+                            // Draw 5x magnified region
+                            enlargedCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, enlargedCanvas.width, enlargedCanvas.height);
+
+                            // Draw Focus Center Crosshair
+                            const midX = enlargedCanvas.width / 2;
+                            const midY = enlargedCanvas.height / 2;
+                            enlargedCtx.save();
+                            enlargedCtx.strokeStyle = "rgba(56, 189, 248, 0.85)";
+                            enlargedCtx.lineWidth = 1.5;
+
+                            enlargedCtx.beginPath();
+                            enlargedCtx.moveTo(midX - 26, midY);
+                            enlargedCtx.lineTo(midX + 26, midY);
+                            enlargedCtx.moveTo(midX, midY - 26);
+                            enlargedCtx.lineTo(midX, midY + 26);
+                            enlargedCtx.stroke();
+
+                            enlargedCtx.beginPath();
+                            enlargedCtx.arc(midX, midY, 14, 0, 2 * Math.PI);
+                            enlargedCtx.stroke();
+
+                            // Draw Mini Picture-in-Picture (PiP) Navigator Box in bottom-left
+                            const pipW = 110;
+                            const pipH = Math.round(pipW * (srcH / srcW));
+                            const pipX = 14;
+                            const pipY = enlargedCanvas.height - pipH - 14;
+
+                            enlargedCtx.fillStyle = "rgba(15, 23, 42, 0.85)";
+                            enlargedCtx.fillRect(pipX - 2, pipY - 2, pipW + 4, pipH + 4);
+                            enlargedCtx.drawImage(canvas, pipX, pipY, pipW, pipH);
+                            enlargedCtx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+                            enlargedCtx.strokeRect(pipX, pipY, pipW, pipH);
+
+                            // PiP Crop indicator bounding box
+                            const boxX = pipX + (cropX / srcW) * pipW;
+                            const boxY = pipY + (cropY / srcH) * pipH;
+                            const boxW = (cropW / srcW) * pipW;
+                            const boxH = (cropH / srcH) * pipH;
+                            enlargedCtx.strokeStyle = "#38bdf8";
+                            enlargedCtx.lineWidth = 1.5;
+                            enlargedCtx.strokeRect(boxX, boxY, boxW, boxH);
+                            enlargedCtx.restore();
+                        }
+                        updateEnlargedLiveHud();
+                    }
+
                     drawHistogramFromCanvas(canvas);
 
                     // Measured FPS
@@ -525,6 +604,8 @@ async function runFrameFetchLoop() {
                     if (delta > 0) {
                         liveViewFps = 0.8 * liveViewFps + 0.2 * (1000 / delta);
                         document.getElementById("streamFps").textContent = liveViewFps.toFixed(1);
+                        const fpsBadge = document.getElementById("enlargedStreamFpsBadge");
+                        if (fpsBadge) fpsBadge.textContent = `${liveViewFps.toFixed(1)} FPS`;
                     }
                 }
             } catch (err) {
@@ -537,6 +618,224 @@ async function runFrameFetchLoop() {
         }
         await new Promise((r) => setTimeout(r, 60)); // ~15 FPS pacing
     }
+}
+
+// --------------------------------------------------------------------------
+// 5x Focus Zoom & Focus Stepping Controller
+// --------------------------------------------------------------------------
+
+let focusZoomEnabled = false;
+let focusZoomFactor = 5.0;
+let focusCenterX = 0.5; // normalized 0..1
+let focusCenterY = 0.5;
+let isFocusStepping = false;
+let enlargedCanvasClickInitialized = false;
+
+function initEnlargedCanvasClick() {
+    if (enlargedCanvasClickInitialized) return;
+    enlargedCanvasClickInitialized = true;
+
+    const canvas = document.getElementById("canvasEnlargedLiveView");
+    if (!canvas) return;
+
+    canvas.addEventListener("click", (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const clickNormX = (e.clientX - rect.left) / rect.width;
+        const clickNormY = (e.clientY - rect.top) / rect.height;
+
+        if (!focusZoomEnabled) {
+            // Click to activate 5x Focus Zoom centered at clicked coordinates
+            focusZoomEnabled = true;
+            focusCenterX = Math.max(0.1, Math.min(0.9, clickNormX));
+            focusCenterY = Math.max(0.1, Math.min(0.9, clickNormY));
+            updateFocusZoomUI();
+        } else {
+            // User clicked inside 5x zoomed view - translate position to full frame
+            const cropWNorm = 1.0 / focusZoomFactor;
+            const cropHNorm = 1.0 / focusZoomFactor;
+            const startX = Math.max(0, Math.min(1.0 - cropWNorm, focusCenterX - cropWNorm / 2));
+            const startY = Math.max(0, Math.min(1.0 - cropHNorm, focusCenterY - cropHNorm / 2));
+
+            const newCenterX = startX + (clickNormX * cropWNorm);
+            const newCenterY = startY + (clickNormY * cropHNorm);
+            focusCenterX = Math.max(0.1, Math.min(0.9, newCenterX));
+            focusCenterY = Math.max(0.1, Math.min(0.9, newCenterY));
+        }
+    });
+}
+
+function toggleFocusZoom() {
+    focusZoomEnabled = !focusZoomEnabled;
+    updateFocusZoomUI();
+}
+
+function resetFocusZoom() {
+    focusZoomEnabled = false;
+    focusCenterX = 0.5;
+    focusCenterY = 0.5;
+    updateFocusZoomUI();
+}
+
+function updateFocusZoomUI() {
+    const btnToggle = document.getElementById("btnToggleFocusZoom");
+    const btnReset = document.getElementById("btnResetFocusZoom");
+    const badge = document.getElementById("focusZoomOverlayBadge");
+    const canvas = document.getElementById("canvasEnlargedLiveView");
+
+    if (btnToggle) {
+        if (focusZoomEnabled) {
+            btnToggle.classList.add("btn-focus-active");
+            btnToggle.textContent = "🔍 5x Zoom ON";
+        } else {
+            btnToggle.classList.remove("btn-focus-active");
+            btnToggle.textContent = "🔍 5x Focus Loupe";
+        }
+    }
+    if (btnReset) {
+        if (focusZoomEnabled) {
+            btnReset.classList.remove("hidden");
+        } else {
+            btnReset.classList.add("hidden");
+        }
+    }
+    if (badge) {
+        if (focusZoomEnabled) {
+            badge.classList.remove("hidden");
+        } else {
+            badge.classList.add("hidden");
+        }
+    }
+    if (canvas) {
+        canvas.style.cursor = focusZoomEnabled ? "crosshair" : "zoom-in";
+    }
+}
+
+async function driveCameraFocus(direction, stepSize) {
+    if (isFocusStepping) return;
+    isFocusStepping = true;
+    const statusEl = document.getElementById("lblFocusStatus");
+    if (statusEl) statusEl.textContent = `Stepping ${direction.toUpperCase()} ${stepSize}...`;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/camera/focus/step`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ direction, step_size: stepSize })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            if (statusEl) statusEl.textContent = `${direction.toUpperCase()} ${stepSize} OK`;
+        } else {
+            if (statusEl) statusEl.textContent = "Focus Err";
+            console.warn("Focus step failed:", data);
+        }
+    } catch (e) {
+        console.error("Focus step error:", e);
+        if (statusEl) statusEl.textContent = "Error";
+    } finally {
+        isFocusStepping = false;
+        setTimeout(() => {
+            if (statusEl && statusEl.textContent.includes("OK")) {
+                statusEl.textContent = "Idle";
+            }
+        }, 1500);
+    }
+}
+
+async function triggerCameraAutofocus() {
+    const statusEl = document.getElementById("lblFocusStatus");
+    if (statusEl) statusEl.textContent = "Autofocusing...";
+
+    try {
+        const res = await fetch(`${API_BASE}/api/camera/focus/autofocus`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+            if (statusEl) statusEl.textContent = "AF Locked";
+        } else {
+            if (statusEl) statusEl.textContent = "AF Failed";
+            alert(data.detail?.message || "Autofocus failed");
+        }
+    } catch (e) {
+        if (statusEl) statusEl.textContent = "AF Error";
+    } finally {
+        setTimeout(() => {
+            if (statusEl && statusEl.textContent.includes("AF Locked")) {
+                statusEl.textContent = "Idle";
+            }
+        }, 1500);
+    }
+}
+
+function openEnlargedLiveViewModal() {
+    isEnlargedLiveViewOpen = true;
+    initEnlargedCanvasClick();
+    const modal = document.getElementById("enlargedLiveViewModal");
+    if (modal) modal.classList.remove("hidden");
+
+    // Sync filter controls to enlarged toolbar
+    const selEnlarged = document.getElementById("selEnlargedEnhanceMode");
+    const sGain = document.getElementById("sliderEnlargedGain");
+    const sContrast = document.getElementById("sliderEnlargedContrast");
+    if (selEnlarged) selEnlarged.value = enhanceMode;
+    if (sGain) sGain.value = filterGain;
+    if (sContrast) sContrast.value = filterContrast;
+    
+    const lblG = document.getElementById("lblValEnlargedGain");
+    const lblC = document.getElementById("lblValEnlargedContrast");
+    if (lblG) lblG.textContent = `${filterGain.toFixed(1)}x`;
+    if (lblC) lblC.textContent = `${filterContrast.toFixed(1)}x`;
+
+    updateFocusZoomUI();
+    updateEnlargedLiveHud();
+
+    // Auto-start stream if idle
+    if (!isLiveViewActive) {
+        startLiveView();
+    }
+}
+
+function closeEnlargedLiveViewModal() {
+    isEnlargedLiveViewOpen = false;
+    resetFocusZoom();
+    const modal = document.getElementById("enlargedLiveViewModal");
+    if (modal) modal.classList.add("hidden");
+}
+
+function updateEnlargedLiveHud() {
+    const hudPan = document.getElementById("enlargedHudPan");
+    const hudTilt = document.getElementById("enlargedHudTilt");
+    if (hudPan) hudPan.textContent = `${typeof latestPan === 'number' ? latestPan.toFixed(2) : 0.00}°`;
+    if (hudTilt) hudTilt.textContent = `${typeof latestTilt === 'number' ? latestTilt.toFixed(2) : 0.00}°`;
+}
+
+function syncEnhanceModeFromEnlarged(val) {
+    enhanceMode = val;
+    const sel = document.getElementById("selEnhanceMode");
+    if (sel) sel.value = val;
+}
+
+function syncGainFromEnlarged(val) {
+    filterGain = parseFloat(val);
+    const slider = document.getElementById("sliderGain");
+    const lbl = document.getElementById("lblValGain");
+    const lblEnlarged = document.getElementById("lblValEnlargedGain");
+    if (slider) slider.value = val;
+    if (lbl) lbl.textContent = `${filterGain.toFixed(1)}x`;
+    if (lblEnlarged) lblEnlarged.textContent = `${filterGain.toFixed(1)}x`;
+}
+
+function syncContrastFromEnlarged(val) {
+    filterContrast = parseFloat(val);
+    const slider = document.getElementById("sliderContrast");
+    const lbl = document.getElementById("lblValContrast");
+    const lblEnlarged = document.getElementById("lblValEnlargedContrast");
+    if (slider) slider.value = val;
+    if (lbl) lbl.textContent = `${filterContrast.toFixed(1)}x`;
+    if (lblEnlarged) lblEnlarged.textContent = `${filterContrast.toFixed(1)}x`;
+}
+
+async function triggerPlanTestShotFromEnlarged() {
+    await triggerPlanTestShot();
 }
 
 function updateEnhancementSettings() {
@@ -557,6 +856,14 @@ function updateEnhancementSettings() {
     if (lblG) lblG.textContent = `${filterGain.toFixed(1)}x`;
     if (lblC) lblC.textContent = `${filterContrast.toFixed(1)}x`;
     if (lblClip) lblClip.textContent = `${filterClipLimit.toFixed(1)}`;
+
+    // Mirror to enlarged controls
+    const selEnlarged = document.getElementById("selEnlargedEnhanceMode");
+    const sGainEnlarged = document.getElementById("sliderEnlargedGain");
+    const sContrastEnlarged = document.getElementById("sliderEnlargedContrast");
+    if (selEnlarged) selEnlarged.value = enhanceMode;
+    if (sGainEnlarged) sGainEnlarged.value = filterGain;
+    if (sContrastEnlarged) sContrastEnlarged.value = filterContrast;
 }
 
 /**
@@ -2203,13 +2510,17 @@ function initTestShotViewportEvents() {
         adjustTestShotZoom(delta);
     }, { passive: false });
 
-    // Global Key Listener for arrow navigation
+    // Global Key Listener for arrow navigation & Escape
     window.addEventListener("keydown", (e) => {
-        const modal = document.getElementById("testShotInspectorModal");
-        if (modal && !modal.classList.contains("hidden")) {
+        const testModal = document.getElementById("testShotInspectorModal");
+        if (testModal && !testModal.classList.contains("hidden")) {
             if (e.key === "ArrowLeft") navigateTestShot(-1);
             if (e.key === "ArrowRight") navigateTestShot(1);
             if (e.key === "Escape") closeTestShotInspector();
+        }
+        const liveModal = document.getElementById("enlargedLiveViewModal");
+        if (liveModal && !liveModal.classList.contains("hidden")) {
+            if (e.key === "Escape") closeEnlargedLiveViewModal();
         }
     });
 }
