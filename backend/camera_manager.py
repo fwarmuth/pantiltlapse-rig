@@ -159,17 +159,21 @@ class CameraManager:
         if not self.is_connected or not self._camera:
             return {"status": "ERROR", "message": "Camera is disconnected"}
 
+        val_str = str(value)
+        if param == "aperture":
+            val_str = val_str.replace("f/", "").replace("F/", "").strip()
+
         async with self._lock:
             try:
                 config = self._camera.get_config()
                 child = config.get_child_by_name(child_name)
-                child.set_value(value)
+                child.set_value(val_str)
                 self._camera.set_config(config)
-                setattr(self, param, value)
-                logger.info(f"Updated camera config '{param}' -> '{value}'")
-                return {"status": "OK", "param": param, "value": value}
+                setattr(self, param, val_str)
+                logger.info(f"Updated camera config '{param}' -> '{val_str}'")
+                return {"status": "OK", "param": param, "value": val_str}
             except Exception as e:
-                logger.error(f"Failed to set camera config '{param}' to '{value}': {e}")
+                logger.error(f"Failed to set camera config '{param}' to '{val_str}': {e}")
                 return {"status": "ERROR", "message": str(e)}
 
     async def trigger_capture(self, filename: str | None = None, target_dir: str | None = None) -> dict[str, Any]:

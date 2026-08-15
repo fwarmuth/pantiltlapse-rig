@@ -8,7 +8,7 @@ from uuid import UUID
 import dotenv
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -163,10 +163,16 @@ async def update_rig_limits(req: RigLimitsRequest):
 
 
 @app.post("/api/rig/confirm-zero")
+@app.post("/api/rig/reset-origin")
 async def confirm_physical_zero():
-    """Operator confirms physical zero reference position."""
+    """Operator resets current position as origin (0, 0) and confirms zero reference."""
+    if serial_mgr.is_connected:
+        await serial_mgr.send_command("e")
+        serial_mgr.current_pan = 0.0
+        serial_mgr.current_tilt = 0.0
+        await serial_mgr.send_command("S")
     ref = rig_mgr.confirm_reference()
-    return {"status": "OK", "reference": ref}
+    return {"status": "OK", "reference": ref, "motors": serial_mgr.get_status()}
 
 
 # --- Motor API Endpoints ---
@@ -360,7 +366,38 @@ async def get_camera_preview_stream():
     return StreamingResponse(
         preview_controller.generate_mjpeg_stream(),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Access-Control-Allow-Origin": "*",
+        },
     )
+
+
+@app.get("/api/camera/preview/frame")
+async def get_camera_preview_frame():
+    """Fetch single live view preview JPEG frame with low-latency headers."""
+    if not camera_mgr.is_connected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": "Camera is disconnected"},
+        )
+    try:
+        frame_bytes = await preview_controller._fetch_frame_bytes()
+        return Response(
+            content=frame_bytes,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"status": "ERROR", "message": str(e)},
+        ) from e
 
 
 # --- Integrated Sequence Step Endpoint ---
