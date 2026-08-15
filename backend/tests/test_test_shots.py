@@ -70,6 +70,18 @@ def test_create_and_fetch_test_shot_api():
         assert resp.status_code == 200
         assert len(resp.content) > 0
 
+        # 5. Delete Test Shot
+        resp = client.delete(f"/api/plans/{plan.id}/test-shots/{shot_id}")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "OK"
+
+        # 6. Verify Deletion
+        resp = client.get(f"/api/plans/{plan.id}/test-shots/{shot_id}")
+        assert resp.status_code == 404
+        resp = client.get(f"/api/plans/{plan.id}/test-shots")
+        assert resp.status_code == 200
+        assert len(resp.json()) == 0
+
 
 def test_test_shot_cleanup_on_camera_failure(tmp_path):
     plan = create_sample_plan()

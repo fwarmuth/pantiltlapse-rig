@@ -115,6 +115,7 @@ async def publish_media_artifact(
             })
 
         metadata = {
+            "id": str(artifact_id),
             "artifact_id": str(artifact_id),
             "shot_id": str(artifact_id),
             "created_at": now_utc,

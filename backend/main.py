@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
 from uuid import UUID
 
@@ -665,6 +666,25 @@ async def get_test_shot_detail(plan_id: UUID, shot_id: UUID):
         ) from e
 
 
+@app.delete("/api/plans/{plan_id}/test-shots/{shot_id}")
+async def delete_test_shot(plan_id: UUID, shot_id: UUID):
+    """Delete a test shot and its artifacts."""
+    shot_dir = (plan_store.base_dir / str(plan_id) / "test-shots" / str(shot_id)).resolve()
+    if not shot_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"status": "ERROR", "message": f"Test shot '{shot_id}' not found"},
+        )
+    try:
+        shutil.rmtree(shot_dir)
+        return {"status": "OK", "message": f"Test shot '{shot_id}' deleted successfully"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"status": "ERROR", "message": str(e)},
+        ) from e
+
+
 @app.get("/api/plans/{plan_id}/test-shots/{shot_id}/artifacts/{artifact_type}")
 async def get_test_shot_artifact_file(plan_id: UUID, shot_id: UUID, artifact_type: str):
     """Serve an image artifact file by ID, type, or filename for a test shot."""
@@ -697,13 +717,27 @@ async def get_test_shot_artifact_file(plan_id: UUID, shot_id: UUID, artifact_typ
             pass
 
     if not target_file:
-        if artifact_type == "metadata.json":
+        if artifact_type in ("preview", "preview.jpg", "thumbnail"):
+            # Fall back to original artifact if no separate preview was stored
+            if meta_file.exists():
+                try:
+                    with open(meta_file, encoding="utf-8") as f:
+                        meta = json.load(f)
+                    for art in meta.get("artifacts", []):
+                        if art.get("type") == "original":
+                            fn = art.get("filename") or os.path.basename(art.get("relative_path", ""))
+                            target_file = shot_dir / fn
+                            media_type = art.get("mime_type", media_type)
+                            break
+                except Exception:
+                    pass
+        elif artifact_type == "metadata.json":
             target_file = meta_file
             media_type = "application/json"
         else:
             target_file = shot_dir / artifact_type
 
-    if not target_file.exists():
+    if not target_file or not target_file.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"status": "ERROR", "message": f"Artifact '{artifact_type}' not found"},

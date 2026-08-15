@@ -705,16 +705,139 @@
         </div>
     </div>
 
-    <!-- Modal for Metadata Inspector -->
-    <div id="metaModal" class="modal hidden">
-        <div class="modal-content card">
-            <span class="modal-close" onclick="closeMetaModal()">&times;</span>
-            <h2>Shot Metadata & Artifacts Inspector</h2>
-            <pre id="metaJsonDisplay" class="json-display"></pre>
+    <!-- Comprehensive Big-View Test Shot Verification & Inspection Modal -->
+    <div id="testShotInspectorModal" class="modal hidden">
+        <div class="modal-content card test-shot-modal-card">
+            <!-- Modal Header -->
+            <div class="modal-header-row">
+                <div class="modal-title-wrap">
+                    <h2>📸 Test Shot Verification & Inspection</h2>
+                    <span class="badge" id="inspShotCounterBadge">Shot 1 of 1</span>
+                </div>
+                <div class="modal-nav-controls">
+                    <button class="btn btn-secondary btn-sm" id="btnPrevTestShot" onclick="navigateTestShot(-1)" title="Previous test shot (Left Arrow)">◀ Prev</button>
+                    <button class="btn btn-secondary btn-sm" id="btnNextTestShot" onclick="navigateTestShot(1)" title="Next test shot (Right Arrow)">Next ▶</button>
+                    <span class="modal-close" onclick="closeTestShotInspector()">&times;</span>
+                </div>
+            </div>
+
+            <!-- Modal Body (Split Screen: Image Stage & Diagnostics Sidebar) -->
+            <div class="test-shot-inspector-body">
+                <!-- Left: Big Image Stage & Viewport Controls -->
+                <div class="inspector-stage-container">
+                    <div class="inspector-stage-toolbar">
+                        <div class="stage-tools-left">
+                            <button class="btn-tool" onclick="adjustTestShotZoom(-0.25)" title="Zoom Out (Ctrl+Minus)">🔍 -</button>
+                            <span id="lblTestShotZoomLevel" class="zoom-level-text">Fit (100%)</span>
+                            <button class="btn-tool" onclick="adjustTestShotZoom(0.25)" title="Zoom In (Ctrl+Plus)">🔍 +</button>
+                            <button class="btn-tool" onclick="resetTestShotZoom()" title="Reset to Fit View">Fit View</button>
+                            <button class="btn-tool" onclick="setTestShotActualPixels()" title="1:1 100% Pixel Focus Inspection">1:1 Pixels</button>
+                        </div>
+                        <div class="stage-tools-right">
+                            <button class="btn-tool" id="btnOpenRawImage" onclick="openTestShotOriginalTab()" title="Open full-resolution image in new browser tab">🔗 Open Full Res</button>
+                        </div>
+                    </div>
+
+                    <!-- Interactive Pan/Zoom Viewport -->
+                    <div class="inspector-viewport" id="testShotViewport">
+                        <div class="inspector-image-wrapper" id="testShotImgWrapper">
+                            <img id="testShotBigImage" src="" alt="Test Shot Inspection" draggable="false" />
+                        </div>
+                        <div class="viewport-overlay-badge" id="testShotOverlayDim">
+                            <span id="lblTestShotDims">-- x -- px</span> | <span id="lblTestShotSize">-- KB</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Diagnostics & Verification Sidebar -->
+                <div class="inspector-sidebar-container">
+                    <!-- Key Exposure Badges -->
+                    <div class="sidebar-card">
+                        <div class="sidebar-card-title">Exposure Parameters</div>
+                        <div class="exposure-pills-grid">
+                            <div class="exposure-pill">
+                                <span class="exp-label">SHUTTER</span>
+                                <strong class="exp-val" id="inspValShutter">1/125s</strong>
+                            </div>
+                            <div class="exposure-pill">
+                                <span class="exp-label">APERTURE</span>
+                                <strong class="exp-val" id="inspValAperture">f/4.5</strong>
+                            </div>
+                            <div class="exposure-pill">
+                                <span class="exp-label">ISO</span>
+                                <strong class="exp-val" id="inspValIso">400</strong>
+                            </div>
+                            <div class="exposure-pill">
+                                <span class="exp-label">FORMAT</span>
+                                <strong class="exp-val" id="inspValFormat">JPEG</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Exposure & Timing Verification Assessment -->
+                    <div class="sidebar-card">
+                        <div class="sidebar-card-title">Verification & Quality Checks</div>
+                        <div class="verification-status-box" id="inspVerificationStatusBox">
+                            <div class="v-status-row">
+                                <span class="v-icon" id="vIconExposure">✅</span>
+                                <span class="v-text" id="vTextExposure">Exposure is within recommended range for interval shooting.</span>
+                            </div>
+                            <div class="v-status-row">
+                                <span class="v-icon" id="vIconTiming">✅</span>
+                                <span class="v-text" id="vTextTiming">Exposure duration fits safely within the plan interval.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Rig State at Capture -->
+                    <div class="sidebar-card">
+                        <div class="sidebar-card-title">Rig Angles at Exposure</div>
+                        <div class="rig-pose-summary">
+                            <div class="pose-box">
+                                <span class="pose-label">Pan Angle</span>
+                                <strong class="pose-val" id="inspValPan">0.00°</strong>
+                            </div>
+                            <div class="pose-box">
+                                <span class="pose-label">Tilt Angle</span>
+                                <strong class="pose-val" id="inspValTilt">0.00°</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- File Details & Metadata Details -->
+                    <div class="sidebar-card">
+                        <div class="sidebar-card-title">Capture Details</div>
+                        <div class="meta-field-list">
+                            <div class="meta-field"><span class="m-lbl">Captured:</span> <span class="m-val" id="inspValTime">--</span></div>
+                            <div class="meta-field"><span class="m-lbl">Checksum:</span> <span class="m-val mono" id="inspValSha256" title="Click to copy">--</span></div>
+                            <div class="meta-field"><span class="m-lbl">Plan ID:</span> <span class="m-val mono" id="inspValPlanId">--</span></div>
+                        </div>
+                        <button class="btn btn-secondary btn-xs" style="margin-top:8px; width:100%;" onclick="toggleRawMetadataDrawer()">
+                            📋 View Complete JSON & EXIF Tags
+                        </button>
+                        <div id="rawMetaDrawer" class="raw-meta-drawer hidden">
+                            <pre id="metaJsonDisplay" class="json-display"></pre>
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="sidebar-actions">
+                        <button class="btn btn-primary btn-sm" onclick="adoptCurrentTestShotSettings()" title="Copy these ISO, Shutter, and Aperture settings into current plan">
+                            🎯 Adopt Exposure into Plan
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="retakeTestShotFromInspector()" title="Trigger a new test shot with current settings">
+                            ⚡ Take Another Test Shot
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteCurrentTestShot()" title="Remove this test shot">
+                            🗑️ Delete Test Shot
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- Image Zoom Modal -->
+    <!-- Image Zoom Modal for Live View / Generic Frames -->
     <div id="imageZoomModal" class="modal hidden">
         <div class="modal-content card image-zoom-card">
             <span class="modal-close" onclick="closeImageZoomModal()">&times;</span>
@@ -725,6 +848,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260815_02"></script>
+    <script src="app.js?v=20260815_03"></script>
 </body>
 </html>
