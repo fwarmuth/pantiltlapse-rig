@@ -1952,6 +1952,20 @@ async function triggerPlanTestShot() {
     }
 }
 
+// --------------------------------------------------------------------------
+// Test Shot Verification Inspector & Pan/Zoom Viewport Controller
+// --------------------------------------------------------------------------
+
+let currentTestShotsList = [];
+let activeTestShotIndex = 0;
+let testShotZoom = 1.0;
+let testShotPanX = 0;
+let testShotPanY = 0;
+let isPanningTestShot = false;
+let panStartX = 0;
+let panStartY = 0;
+let testShotListenersInitialized = false;
+
 async function loadTestShotsList() {
     if (!activePlan || !activePlan.id) return;
     try {
@@ -1969,41 +1983,318 @@ function renderTestShotGallery(shots) {
     const gallery = document.getElementById("testShotGallery");
     if (!gallery) return;
     gallery.innerHTML = "";
+    currentTestShotsList = shots || [];
 
-    if (shots.length === 0) {
-        gallery.innerHTML = '<div class="placeholder-box" style="grid-column:1/-1;"><span>No test shots taken yet</span></div>';
+    if (currentTestShotsList.length === 0) {
+        gallery.innerHTML = `
+            <div class="placeholder-box" style="grid-column:1/-1; padding: 24px; text-align: center;">
+                <div style="font-size: 1.5rem; margin-bottom: 6px;">📷</div>
+                <div style="font-weight: 500; color: #94a3b8;">No test shots taken yet</div>
+                <div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;">Click '⚡ Take Test Shot' to capture an exposure verification frame.</div>
+            </div>
+        `;
         return;
     }
 
-    shots.forEach(s => {
+    currentTestShotsList.forEach((s, idx) => {
         const item = document.createElement("div");
         item.className = "gallery-item";
-        const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${s.id}/artifacts/preview.jpg`;
+        const sId = s.id || s.shot_id || s.artifact_id;
+        const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${sId}/artifacts/preview.jpg`;
+        const shutter = s.camera_settings?.shutter_speed || s.requested_settings?.shutter_speed || "1/125";
+        const ap = s.camera_settings?.aperture || s.requested_settings?.aperture || "4.5";
+        const iso = s.camera_settings?.iso || s.requested_settings?.iso || "400";
+        const timeStr = s.created_at ? new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : `#${idx + 1}`;
 
         item.innerHTML = `
-            <img class="gallery-thumb" src="${thumbUrl}" alt="Test Shot" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'100\\' height=\\'80\\'><rect fill=\\'%23111\\' width=\\'100\\' height=\\'80\\'/><text fill=\\'%23666\\' x=\\'50%\\' y=\\'50%\\' text-anchor=\\'middle\\'>RAW</text></svg>'">
+            <div class="gallery-thumb-wrap">
+                <img class="gallery-thumb" src="${thumbUrl}" alt="Test Shot #${idx + 1}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'160\\' height=\\'110\\'><rect fill=\\'%23020617\\' width=\\'160\\' height=\\'110\\'/><text fill=\\'%2364748b\\' x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' font-family=\\'sans-serif\\' font-size=\\'12\\'>PREVIEW</text></svg>'">
+                <div class="gallery-hover-overlay">
+                    <span>🔍 Inspect Verification</span>
+                </div>
+            </div>
             <div class="gallery-info">
-                <span class="gallery-title">${s.camera_settings?.shutter_speed || "1/125"}s f/${s.camera_settings?.aperture || "5.6"}</span>
-                <span class="gallery-sub">ISO ${s.camera_settings?.iso || "400"}</span>
+                <div class="gallery-title">${shutter}s · f/${ap}</div>
+                <div class="gallery-sub">
+                    <span>ISO ${iso}</span>
+                    <span>${timeStr}</span>
+                </div>
             </div>
         `;
-        item.onclick = () => openMetaModal(s);
+        item.onclick = () => openTestShotInspector(idx);
         gallery.appendChild(item);
     });
 }
 
-function openMetaModal(shotMeta) {
-    const modal = document.getElementById("metaModal");
+function openTestShotInspector(index) {
+    if (!currentTestShotsList || currentTestShotsList.length === 0) return;
+    if (index < 0) index = 0;
+    if (index >= currentTestShotsList.length) index = currentTestShotsList.length - 1;
+    activeTestShotIndex = index;
+
+    const shot = currentTestShotsList[activeTestShotIndex];
+    if (!shot) return;
+    const shotId = shot.id || shot.shot_id || shot.artifact_id;
+
+    // Reset zoom and pan on open
+    resetTestShotZoom();
+    initTestShotViewportEvents();
+
+    // 1. Counter & Nav Buttons
+    const badge = document.getElementById("inspShotCounterBadge");
+    if (badge) badge.textContent = `Shot ${activeTestShotIndex + 1} of ${currentTestShotsList.length}`;
+    
+    const prevBtn = document.getElementById("btnPrevTestShot");
+    const nextBtn = document.getElementById("btnNextTestShot");
+    if (prevBtn) prevBtn.disabled = activeTestShotIndex <= 0;
+    if (nextBtn) nextBtn.disabled = activeTestShotIndex >= currentTestShotsList.length - 1;
+
+    // 2. High-Res Image Source & Overlay
+    const img = document.getElementById("testShotBigImage");
+    const imgUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg`;
+    if (img) {
+        img.src = imgUrl;
+        img.onload = () => {
+            const dimEl = document.getElementById("lblTestShotDims");
+            if (dimEl) dimEl.textContent = `${img.naturalWidth || 1920} × ${img.naturalHeight || 1080} px`;
+        };
+    }
+
+    const origArtifact = (shot.artifacts || []).find(a => a.type === "original") || (shot.artifacts || [])[0];
+    const sizeEl = document.getElementById("lblTestShotSize");
+    if (sizeEl) {
+        const bytes = origArtifact?.byte_size || 0;
+        sizeEl.textContent = bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
+    }
+
+    // 3. Exposure Badges
+    const shutter = shot.camera_settings?.shutter_speed || "1/125";
+    const aperture = shot.camera_settings?.aperture || "4.5";
+    const iso = shot.camera_settings?.iso || "400";
+    const format = shot.camera_settings?.camera_format || "JPEG";
+
+    document.getElementById("inspValShutter").textContent = shutter.endsWith("s") ? shutter : `${shutter}s`;
+    document.getElementById("inspValAperture").textContent = aperture.startsWith("f/") ? aperture : `f/${aperture}`;
+    document.getElementById("inspValIso").textContent = iso;
+    document.getElementById("inspValFormat").textContent = format;
+
+    // 4. Verification Diagnostics & Interval Clearance Check
+    const planInterval = parseFloat(document.getElementById("planInterval")?.value) || 5.0;
+    const planSettle = parseFloat(document.getElementById("planSettle")?.value) || 0.5;
+    
+    // Parse shutter duration in seconds
+    let shutterSec = 0.008; // default ~ 1/125
+    if (shutter.includes("/")) {
+        const parts = shutter.split("/");
+        shutterSec = (parseFloat(parts[0]) || 1) / (parseFloat(parts[1]) || 125);
+    } else {
+        shutterSec = parseFloat(shutter.replace("s", "")) || 1.0;
+    }
+
+    const totalShotBudget = shutterSec + planSettle;
+    const vIconTiming = document.getElementById("vIconTiming");
+    const vTextTiming = document.getElementById("vTextTiming");
+    if (vIconTiming && vTextTiming) {
+        if (totalShotBudget >= planInterval) {
+            vIconTiming.textContent = "⚠️";
+            vTextTiming.innerHTML = `<strong style="color:#f87171;">Timing Warning:</strong> Exposure (${shutterSec.toFixed(2)}s) + Settle (${planSettle.toFixed(1)}s) = ${totalShotBudget.toFixed(2)}s exceeds Interval (${planInterval.toFixed(1)}s). Increase interval or shorten shutter speed!`;
+        } else {
+            vIconTiming.textContent = "✅";
+            vTextTiming.innerHTML = `<strong>Interval Clearance:</strong> Exposure (${shutterSec.toFixed(2)}s) + Settle (${planSettle.toFixed(1)}s) = ${totalShotBudget.toFixed(2)}s fits comfortably inside ${planInterval.toFixed(1)}s interval.`;
+        }
+    }
+
+    const vIconExposure = document.getElementById("vIconExposure");
+    const vTextExposure = document.getElementById("vTextExposure");
+    if (vIconExposure && vTextExposure) {
+        const isoNum = parseInt(iso, 10) || 400;
+        if (isoNum >= 6400) {
+            vIconExposure.textContent = "ℹ️";
+            vTextExposure.innerHTML = `<strong style="color:#fbbf24;">High ISO Sensitivity:</strong> ISO ${isoNum} will enable dark scene capture but may introduce noise. Verify shadow sharpness.`;
+        } else {
+            vIconExposure.textContent = "✅";
+            vTextExposure.innerHTML = `<strong>Exposure Check:</strong> Aperture f/${aperture} at ISO ${iso} offers crisp depth of field and low noise.`;
+        }
+    }
+
+    // 5. Rig Angles at Exposure
+    const panAngle = shot.rig_pose?.pan_deg ?? shot.extra_metadata?.rig_pan ?? latestPan ?? 0.0;
+    const tiltAngle = shot.rig_pose?.tilt_deg ?? shot.extra_metadata?.rig_tilt ?? latestTilt ?? 0.0;
+    document.getElementById("inspValPan").textContent = `${typeof panAngle === 'number' ? panAngle.toFixed(2) : panAngle}°`;
+    document.getElementById("inspValTilt").textContent = `${typeof tiltAngle === 'number' ? tiltAngle.toFixed(2) : tiltAngle}°`;
+
+    // 6. Capture Metadata Details
+    const timeEl = document.getElementById("inspValTime");
+    if (timeEl) timeEl.textContent = shot.created_at ? new Date(shot.created_at).toLocaleString() : "Just now";
+    
+    const shaEl = document.getElementById("inspValSha256");
+    if (shaEl) {
+        const sha = origArtifact?.checksum_sha256 || "--";
+        shaEl.textContent = sha.length > 16 ? sha.substring(0, 16) + "..." : sha;
+        shaEl.onclick = () => {
+            navigator.clipboard.writeText(sha);
+            alert("Copied SHA256 checksum to clipboard!");
+        };
+    }
+
+    const planIdEl = document.getElementById("inspValPlanId");
+    if (planIdEl) planIdEl.textContent = activePlan.id ? activePlan.id.substring(0, 12) + "..." : "--";
+
+    // 7. Complete Raw JSON Drawer
     const jsonPre = document.getElementById("metaJsonDisplay");
-    if (modal && jsonPre) {
-        jsonPre.textContent = JSON.stringify(shotMeta, null, 2);
-        modal.classList.remove("hidden");
+    if (jsonPre) jsonPre.textContent = JSON.stringify(shot, null, 2);
+
+    // Show modal
+    document.getElementById("testShotInspectorModal")?.classList.remove("hidden");
+}
+
+function closeTestShotInspector() {
+    document.getElementById("testShotInspectorModal")?.classList.add("hidden");
+    const drawer = document.getElementById("rawMetaDrawer");
+    if (drawer) drawer.classList.add("hidden");
+}
+
+function navigateTestShot(delta) {
+    openTestShotInspector(activeTestShotIndex + delta);
+}
+
+function toggleRawMetadataDrawer() {
+    const drawer = document.getElementById("rawMetaDrawer");
+    if (drawer) drawer.classList.toggle("hidden");
+}
+
+// --------------------------------------------------------------------------
+// Pan & Zoom Viewport Controls for Sharpness Inspection
+// --------------------------------------------------------------------------
+
+function initTestShotViewportEvents() {
+    if (testShotListenersInitialized) return;
+    testShotListenersInitialized = true;
+
+    const viewport = document.getElementById("testShotViewport");
+    if (!viewport) return;
+
+    viewport.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return; // Left click only
+        isPanningTestShot = true;
+        panStartX = e.clientX - testShotPanX;
+        panStartY = e.clientY - testShotPanY;
+        viewport.style.cursor = "grabbing";
+    });
+
+    window.addEventListener("mousemove", (e) => {
+        if (!isPanningTestShot) return;
+        testShotPanX = e.clientX - panStartX;
+        testShotPanY = e.clientY - panStartY;
+        updateTestShotTransform();
+    });
+
+    window.addEventListener("mouseup", () => {
+        if (isPanningTestShot) {
+            isPanningTestShot = false;
+            const vp = document.getElementById("testShotViewport");
+            if (vp) vp.style.cursor = "grab";
+        }
+    });
+
+    viewport.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.2 : -0.2;
+        adjustTestShotZoom(delta);
+    }, { passive: false });
+
+    // Global Key Listener for arrow navigation
+    window.addEventListener("keydown", (e) => {
+        const modal = document.getElementById("testShotInspectorModal");
+        if (modal && !modal.classList.contains("hidden")) {
+            if (e.key === "ArrowLeft") navigateTestShot(-1);
+            if (e.key === "ArrowRight") navigateTestShot(1);
+            if (e.key === "Escape") closeTestShotInspector();
+        }
+    });
+}
+
+function adjustTestShotZoom(delta) {
+    testShotZoom = Math.max(0.5, Math.min(5.0, Math.round((testShotZoom + delta) * 100) / 100));
+    updateTestShotTransform();
+}
+
+function resetTestShotZoom() {
+    testShotZoom = 1.0;
+    testShotPanX = 0;
+    testShotPanY = 0;
+    updateTestShotTransform();
+}
+
+function setTestShotActualPixels() {
+    testShotZoom = 2.0; // 100% pixel zoom
+    updateTestShotTransform();
+}
+
+function updateTestShotTransform() {
+    const wrapper = document.getElementById("testShotImgWrapper");
+    const lbl = document.getElementById("lblTestShotZoomLevel");
+    if (wrapper) {
+        wrapper.style.transform = `translate(${testShotPanX}px, ${testShotPanY}px) scale(${testShotZoom})`;
+    }
+    if (lbl) {
+        lbl.textContent = testShotZoom === 1.0 ? "Fit (100%)" : `${Math.round(testShotZoom * 100)}%`;
     }
 }
 
-function closeMetaModal() {
-    const modal = document.getElementById("metaModal");
-    if (modal) modal.classList.add("hidden");
+function openTestShotOriginalTab() {
+    const shot = currentTestShotsList[activeTestShotIndex];
+    if (!shot || !activePlan) return;
+    const shotId = shot.id || shot.shot_id || shot.artifact_id;
+    const origUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/original`;
+    window.open(origUrl, "_blank");
+}
+
+function adoptCurrentTestShotSettings() {
+    const shot = currentTestShotsList[activeTestShotIndex];
+    if (!shot || !activePlan) return;
+
+    const iso = shot.camera_settings?.iso || shot.requested_settings?.iso;
+    const shutter = shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed;
+    const ap = shot.camera_settings?.aperture || shot.requested_settings?.aperture;
+    const fmt = shot.camera_settings?.camera_format || shot.requested_settings?.camera_format;
+
+    if (iso && document.getElementById("acqIso")) document.getElementById("acqIso").value = iso;
+    if (shutter && document.getElementById("acqShutter")) document.getElementById("acqShutter").value = shutter;
+    if (ap && document.getElementById("acqAperture")) document.getElementById("acqAperture").value = ap;
+    if (fmt && document.getElementById("acqFormat")) document.getElementById("acqFormat").value = fmt;
+
+    saveCurrentPlan();
+    alert(`✅ Adopted test shot settings:\n• ISO: ${iso || "auto"}\n• Shutter: ${shutter || "auto"}\n• Aperture: ${ap || "auto"}\n\nSaved to '${activePlan.name}'!`);
+}
+
+async function retakeTestShotFromInspector() {
+    closeTestShotInspector();
+    await triggerPlanTestShot();
+}
+
+async function deleteCurrentTestShot() {
+    const shot = currentTestShotsList[activeTestShotIndex];
+    if (!shot || !activePlan) return;
+    if (!confirm("Are you sure you want to delete this test shot?")) return;
+
+    const shotId = shot.id || shot.shot_id || shot.artifact_id;
+    try {
+        const res = await fetch(`${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}`, { method: "DELETE" });
+        if (res.ok) {
+            await loadTestShotsList();
+            if (currentTestShotsList.length === 0) {
+                closeTestShotInspector();
+            } else {
+                openTestShotInspector(Math.min(activeTestShotIndex, currentTestShotsList.length - 1));
+            }
+        } else {
+            const data = await res.json();
+            alert(data.detail?.message || "Failed to delete test shot");
+        }
+    } catch (e) {
+        console.error("Delete test shot error:", e);
+    }
 }
 
 // ==========================================================================
