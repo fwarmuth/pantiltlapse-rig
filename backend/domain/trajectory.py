@@ -1,8 +1,6 @@
-from uuid import UUID
-
 from pydantic import BaseModel, Field
 
-from domain.models import Pose, RigSnapshot, Schedule, Trajectory, TransitionMode
+from domain.models import AxisKeyframe, Pose, RigSnapshot, Schedule, Trajectory, TransitionMode
 
 
 class TrajectorySample(BaseModel):
@@ -12,9 +10,6 @@ class TrajectorySample(BaseModel):
     shot_index: int = Field(..., ge=0, description="0-based shot index")
     progress: float = Field(..., ge=0.0, le=1.0, description="Normalized progress t in [0.0, 1.0]")
     pose: Pose = Field(..., description="Sampled pan/tilt pose")
-    active_segment: int = Field(..., ge=0, description="Index j of keyframe segment [K_j, K_{j+1}]")
-    keyframe_a_id: UUID = Field(..., description="Starting keyframe ID")
-    keyframe_b_id: UUID = Field(..., description="Ending keyframe ID")
 
 
 class TrajectorySamplingResult(BaseModel):
@@ -31,36 +26,74 @@ class TrajectorySamplingResult(BaseModel):
     warnings: list[str] = Field(default_factory=list, description="Planning warnings")
 
 
-def _calculate_tangent(keyframes: list, idx: int, axis: str) -> float:
+def _calculate_track_tangents(keyframes: list[AxisKeyframe]) -> list[float]:
     """
-    Calculate Hermite tangent for keyframe idx along given axis ('pan_deg' or 'tilt_deg').
+    Calculate Hermite tangents for an axis keyframe track.
     Uses central differences for interior keyframes and forward/backward differences for endpoints,
     scaled by keyframe.tangent_scale.
     """
-    kf = keyframes[idx]
-    scale = kf.tangent_scale
-    if scale == 0.0:
-        return 0.0
-
     num_kfs = len(keyframes)
+    tangents: list[float] = []
 
-    if idx == 0:
-        p_curr = getattr(keyframes[0].pose, axis)
-        p_next = getattr(keyframes[1].pose, axis)
-        dt = keyframes[1].progress - keyframes[0].progress
-        slope = (p_next - p_curr) / dt if dt > 0 else 0.0
-    elif idx == num_kfs - 1:
-        p_prev = getattr(keyframes[-2].pose, axis)
-        p_curr = getattr(keyframes[-1].pose, axis)
-        dt = keyframes[-1].progress - keyframes[-2].progress
-        slope = (p_curr - p_prev) / dt if dt > 0 else 0.0
-    else:
-        p_prev = getattr(keyframes[idx - 1].pose, axis)
-        p_next = getattr(keyframes[idx + 1].pose, axis)
-        dt = keyframes[idx + 1].progress - keyframes[idx - 1].progress
-        slope = (p_next - p_prev) / dt if dt > 0 else 0.0
+    for idx, kf in enumerate(keyframes):
+        scale = kf.tangent_scale
+        if scale == 0.0:
+            tangents.append(0.0)
+            continue
 
-    return slope * scale
+        if idx == 0:
+            dt = keyframes[1].progress - keyframes[0].progress
+            slope = (keyframes[1].value - keyframes[0].value) / dt if dt > 0 else 0.0
+        elif idx == num_kfs - 1:
+            dt = keyframes[-1].progress - keyframes[-2].progress
+            slope = (keyframes[-1].value - keyframes[-2].value) / dt if dt > 0 else 0.0
+        else:
+            dt = keyframes[idx + 1].progress - keyframes[idx - 1].progress
+            slope = (keyframes[idx + 1].value - keyframes[idx - 1].value) / dt if dt > 0 else 0.0
+
+        tangents.append(slope * scale)
+
+    return tangents
+
+
+def _interpolate_track_value(keyframes: list[AxisKeyframe], tangents: list[float], t: float) -> float:
+    """
+    Interpolate the value of a single axis track at progress t.
+    """
+    num_kfs = len(keyframes)
+    seg_idx = 0
+    for i in range(num_kfs - 1):
+        if keyframes[i].progress <= t:
+            seg_idx = i
+        if keyframes[i + 1].progress >= t:
+            break
+    if seg_idx >= num_kfs - 1:
+        seg_idx = num_kfs - 2
+
+    kf_a = keyframes[seg_idx]
+    kf_b = keyframes[seg_idx + 1]
+
+    h = kf_b.progress - kf_a.progress
+    u = max(0.0, min(1.0, (t - kf_a.progress) / h)) if h > 0 else 0.0
+
+    if kf_a.outgoing_mode == TransitionMode.LINEAR:
+        return kf_a.value + u * (kf_b.value - kf_a.value)
+
+    # Cubic Hermite Spline
+    h00 = 2 * (u ** 3) - 3 * (u ** 2) + 1
+    h10 = (u ** 3) - 2 * (u ** 2) + u
+    h01 = -2 * (u ** 3) + 3 * (u ** 2)
+    h11 = (u ** 3) - (u ** 2)
+
+    d_a = tangents[seg_idx]
+    d_b = tangents[seg_idx + 1]
+
+    return (
+        h00 * kf_a.value
+        + h10 * h * d_a
+        + h01 * kf_b.value
+        + h11 * h * d_b
+    )
 
 
 def sample_trajectory(
@@ -69,83 +102,28 @@ def sample_trajectory(
     rig_limits: RigSnapshot | None = None,
 ) -> TrajectorySamplingResult:
     """
-    Generate deterministic pose samples for a trajectory across total_shots.
-    Supports linear and cubic Hermite interpolation per keyframe segment.
+    Generate deterministic pose samples for independent Pan and Tilt tracks across total_shots.
+    Supports linear and cubic Hermite interpolation per track segment.
     Validates targets against rig_limits (defaulting to 0.0° min, 80.0° max tilt).
     """
     if rig_limits is None:
         rig_limits = RigSnapshot(tilt_min_deg=0.0, tilt_max_deg=80.0)
 
-    keyframes = trajectory.keyframes
-    num_keyframes = len(keyframes)
     total_shots = schedule.total_shots
-
     samples: list[TrajectorySample] = []
     errors: list[str] = []
     warnings: list[str] = []
 
-    # Pre-calculate Hermite tangents for all keyframes
-    pan_tangents = [_calculate_tangent(keyframes, i, "pan_deg") for i in range(num_keyframes)]
-    tilt_tangents = [_calculate_tangent(keyframes, i, "tilt_deg") for i in range(num_keyframes)]
+    # Pre-calculate Hermite tangents for each track independently
+    pan_tangents = _calculate_track_tangents(trajectory.pan_keyframes)
+    tilt_tangents = _calculate_track_tangents(trajectory.tilt_keyframes)
 
     for shot_idx in range(total_shots):
         t = shot_idx / (total_shots - 1) if total_shots > 1 else 0.0
-        # Clamp progress to [0.0, 1.0] for precision safety
         t = max(0.0, min(1.0, t))
 
-        # Find keyframe segment [seg_idx, seg_idx + 1]
-        seg_idx = 0
-        for i in range(num_keyframes - 1):
-            if keyframes[i].progress <= t:
-                seg_idx = i
-            if keyframes[i + 1].progress >= t:
-                break
-        # Guard against trailing segment overflow
-        if seg_idx >= num_keyframes - 1:
-            seg_idx = num_keyframes - 2
-
-        kf_a = keyframes[seg_idx]
-        kf_b = keyframes[seg_idx + 1]
-
-        p_a = kf_a.progress
-        p_b = kf_b.progress
-        h = p_b - p_a
-
-        if h <= 0:
-            u = 0.0
-        else:
-            u = (t - p_a) / h
-        u = max(0.0, min(1.0, u))
-
-        mode = kf_a.outgoing_mode
-
-        if mode == TransitionMode.LINEAR:
-            sampled_pan = kf_a.pose.pan_deg + u * (kf_b.pose.pan_deg - kf_a.pose.pan_deg)
-            sampled_tilt = kf_a.pose.tilt_deg + u * (kf_b.pose.tilt_deg - kf_a.pose.tilt_deg)
-        else:
-            # Cubic Hermite Spline
-            h00 = 2 * (u ** 3) - 3 * (u ** 2) + 1
-            h10 = (u ** 3) - 2 * (u ** 2) + u
-            h01 = -2 * (u ** 3) + 3 * (u ** 2)
-            h11 = (u ** 3) - (u ** 2)
-
-            d_pan_a = pan_tangents[seg_idx]
-            d_pan_b = pan_tangents[seg_idx + 1]
-            d_tilt_a = tilt_tangents[seg_idx]
-            d_tilt_b = tilt_tangents[seg_idx + 1]
-
-            sampled_pan = (
-                h00 * kf_a.pose.pan_deg
-                + h10 * h * d_pan_a
-                + h01 * kf_b.pose.pan_deg
-                + h11 * h * d_pan_b
-            )
-            sampled_tilt = (
-                h00 * kf_a.pose.tilt_deg
-                + h10 * h * d_tilt_a
-                + h01 * kf_b.pose.tilt_deg
-                + h11 * h * d_tilt_b
-            )
+        sampled_pan = _interpolate_track_value(trajectory.pan_keyframes, pan_tangents, t)
+        sampled_tilt = _interpolate_track_value(trajectory.tilt_keyframes, tilt_tangents, t)
 
         pose = Pose(pan_deg=round(sampled_pan, 4), tilt_deg=round(sampled_tilt, 4))
 
@@ -163,9 +141,6 @@ def sample_trajectory(
                 shot_index=shot_idx,
                 progress=round(t, 6),
                 pose=pose,
-                active_segment=seg_idx,
-                keyframe_a_id=kf_a.id,
-                keyframe_b_id=kf_b.id,
             )
         )
 

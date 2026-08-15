@@ -222,9 +222,9 @@
 
                     <div class="card">
                         <div class="card-title-row">
-                            <h3>📍 Keyframe Waypoints</h3>
-                            <button class="btn btn-primary btn-sm" onclick="addCurrentPoseKeyframe()">
-                                ➕ Capture Current Rig Pose
+                            <h3>📍 Keyframe Waypoint Tracks</h3>
+                            <button class="btn btn-primary btn-sm" onclick="addCurrentAngleToActiveTrack()">
+                                ➕ Capture Rig <span id="lblActiveTrackCap">Pan</span>
                             </button>
                         </div>
 
@@ -233,27 +233,37 @@
                             <strong class="mono-sub">Pan: <span id="keyframeCurrPan">0.00°</span> | Tilt: <span id="keyframeCurrTilt">0.00°</span></strong>
                         </div>
 
+                        <!-- Track Tabs Switcher -->
+                        <div class="track-tabs-row">
+                            <button class="btn-track-tab active" id="tabTrackPan" onclick="switchTrackTab('pan')">
+                                <span class="track-dot pan-dot"></span> Pan Track (<span id="panCount">2</span>)
+                            </button>
+                            <button class="btn-track-tab" id="tabTrackTilt" onclick="switchTrackTab('tilt')">
+                                <span class="track-dot tilt-dot"></span> Tilt Track (<span id="tiltCount">2</span>)
+                            </button>
+                        </div>
+
                         <!-- Keyframe Table -->
                         <div class="table-wrapper">
                             <table class="keyframe-table">
                                 <thead>
                                     <tr>
-                                        <th>Progress (t)</th>
-                                        <th>Pan (°)</th>
-                                        <th>Tilt (°)</th>
-                                        <th>Curve</th>
-                                        <th>Actions</th>
+                                        <th style="width: 110px;">Keyframe</th>
+                                        <th style="width: 120px;">Progress (t)</th>
+                                        <th>Angle (°)</th>
+                                        <th style="width: 100px;">Curve</th>
+                                        <th style="width: 135px;">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody id="keyframeTableBody">
-                                    <!-- Populated dynamically by app.js -->
+                                    <!-- Populated dynamically by app.js based on active track tab -->
                                 </tbody>
                             </table>
                         </div>
 
                         <div class="btn-row" style="margin-top:10px;">
                             <button class="btn btn-secondary btn-sm flex-1" onclick="addNewIntermediateKeyframe()">
-                                + Add Waypoint at t=0.5
+                                + Add Waypoint on <span id="lblActiveTrackAdd">Pan Track</span>
                             </button>
                         </div>
                     </div>
@@ -262,28 +272,85 @@
                     <div class="card">
                         <div class="card-title-row">
                             <h3>📈 Trajectory Curve & Motion Rehearsal</h3>
-                            <span class="badge" id="badgeReportStatus">Clearance: UNTESTED</span>
+                            <div class="curve-mode-selector">
+                                <button class="btn-curve-filter active" id="btnFilterAll" onclick="setCurveFilter('all')">All Channels</button>
+                                <button class="btn-curve-filter" id="btnFilterPan" onclick="setCurveFilter('pan')">Pan (Cyan)</button>
+                                <button class="btn-curve-filter" id="btnFilterTilt" onclick="setCurveFilter('tilt')">Tilt (Emerald)</button>
+                            </div>
                         </div>
 
                         <!-- SVG Curve Plot -->
-                        <div class="plot-container">
+                        <div class="plot-container" id="plotWrapper">
                             <div class="plot-legend">
                                 <span class="legend-item pan-legend"><span class="legend-color"></span> Pan (°)</span>
                                 <span class="legend-item tilt-legend"><span class="legend-color"></span> Tilt (°)</span>
+                                <span class="plot-hint">💡 Drag nodes (↕ angle, ↔ progress). Double-click curve to add waypoint.</span>
                                 <span id="plotDiagnostics" class="diag-text">--</span>
                             </div>
-                            <svg id="svgPlot" class="svg-plot" viewBox="0 0 500 110" preserveAspectRatio="none">
-                                <line x1="0" y1="55" x2="500" y2="55" stroke="rgba(255,255,255,0.1)" stroke-dasharray="4"/>
-                                <path id="pathPan" d="M 0 55 L 500 55" fill="none" stroke="#38bdf8" stroke-width="2.5"/>
-                                <path id="pathTilt" d="M 0 55 L 500 55" fill="none" stroke="#34d399" stroke-width="2.5"/>
-                            </svg>
+
+                            <div class="svg-container-relative">
+                                <svg id="svgPlot" class="svg-plot" viewBox="0 0 640 250" preserveAspectRatio="none">
+                                    <defs>
+                                        <filter id="cyanGlow" x="-20%" y="-20%" width="140%" height="140%">
+                                            <feDropShadow dx="0" dy="0" stdDeviation="2.5" flood-color="#38bdf8" flood-opacity="0.6"/>
+                                        </filter>
+                                        <filter id="emeraldGlow" x="-20%" y="-20%" width="140%" height="140%">
+                                            <feDropShadow dx="0" dy="0" stdDeviation="2.5" flood-color="#34d399" flood-opacity="0.6"/>
+                                        </filter>
+                                    </defs>
+                                    <!-- Background grid, axes, curves, waypoint stems, and interactive keyframe nodes drawn dynamically -->
+                                    <g id="svgGrid"></g>
+                                    <g id="svgZeroLine"></g>
+                                    <g id="svgStems"></g>
+                                    <path id="pathPan" d="" fill="none" stroke="#38bdf8" stroke-width="2.5" filter="url(#cyanGlow)"/>
+                                    <path id="pathTilt" d="" fill="none" stroke="#34d399" stroke-width="2.5" filter="url(#emeraldGlow)"/>
+                                    <g id="svgNodes"></g>
+                                    <g id="svgPlayhead" style="display:none;"></g>
+                                    <g id="svgAxes"></g>
+                                </svg>
+                                <div id="curveTooltip" class="curve-tooltip" style="display: none;"></div>
+                            </div>
+
+                            <!-- Selected Waypoint Inspector Toolbar -->
+                            <div class="waypoint-inspector" id="waypointInspector">
+                                <div class="inspector-badge">
+                                    <span id="inspLabel" class="insp-title">Waypoint #1 (Start)</span>
+                                    <span id="inspTime" class="insp-sub">t = 0.00 (0%)</span>
+                                </div>
+                                <div class="inspector-controls">
+                                    <div class="insp-group">
+                                        <label>Pan:</label>
+                                        <input type="number" id="inspPan" step="0.5" onchange="onInspectorChange('pan', this.value)">
+                                    </div>
+                                    <div class="insp-group">
+                                        <label>Tilt:</label>
+                                        <input type="number" id="inspTilt" step="0.5" onchange="onInspectorChange('tilt', this.value)">
+                                    </div>
+                                    <div class="insp-group">
+                                        <label>Progress:</label>
+                                        <input type="number" id="inspProgress" min="0" max="1" step="0.05" onchange="onInspectorChange('progress', this.value)">
+                                    </div>
+                                    <div class="insp-group">
+                                        <label>Curve:</label>
+                                        <select id="inspMode" onchange="onInspectorChange('mode', this.value)">
+                                            <option value="smooth">Smooth</option>
+                                            <option value="linear">Linear</option>
+                                        </select>
+                                    </div>
+                                    <div class="insp-actions">
+                                        <button class="btn btn-secondary btn-xs" onclick="visitSelectedKeyframePose()" title="Move Rig to this pose">🎯 Go</button>
+                                        <button class="btn btn-accent btn-xs" onclick="overwriteSelectedKeyframePose()" title="Update with current rig angles">📍 Set</button>
+                                        <button class="btn btn-danger btn-xs" id="btnInspDelete" onclick="deleteSelectedKeyframe()" title="Delete waypoint">✕</button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Motion Dry-Run Controls -->
                         <div class="dry-run-box">
                             <div class="dry-run-header">
                                 <h4>🚀 Motion Clearance Test (Dry Run)</h4>
-                                <span id="dryRunValPct" class="mono-sub">0%</span>
+                                <span class="badge" id="badgeReportStatus">Clearance: UNTESTED</span>
                             </div>
 
                             <div class="progress-bar-container">
@@ -291,7 +358,7 @@
                             </div>
 
                             <div class="metric-row" style="margin: 6px 0;">
-                                <span class="mono-sub">Rehearsal Waypoint: <strong id="dryRunValShot">0 / 0</strong></span>
+                                <span class="mono-sub">Rehearsal Waypoint: <strong id="dryRunValShot">0 / 0</strong> (<span id="dryRunValPct">0%</span>)</span>
                             </div>
 
                             <div class="btn-row">

@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from domain.models import Keyframe, Pose, Schedule, SequencePlan, Trajectory, TransitionMode
+from domain.models import AxisKeyframe, Schedule, SequencePlan, Trajectory, TransitionMode
 from main import app, plan_store
 
 
@@ -18,9 +18,15 @@ def use_temp_plan_store(tmp_path):
 
 
 def create_sample_plan_payload(name: str = "API Test Plan") -> dict:
-    kf1 = Keyframe(progress=0.0, pose=Pose(pan_deg=0.0, tilt_deg=0.0), outgoing_mode=TransitionMode.LINEAR)
-    kf2 = Keyframe(progress=1.0, pose=Pose(pan_deg=180.0, tilt_deg=60.0), outgoing_mode=TransitionMode.SMOOTH)
-    traj = Trajectory(keyframes=[kf1, kf2])
+    pan_kfs = [
+        AxisKeyframe(progress=0.0, value=0.0, outgoing_mode=TransitionMode.LINEAR),
+        AxisKeyframe(progress=1.0, value=180.0, outgoing_mode=TransitionMode.SMOOTH),
+    ]
+    tilt_kfs = [
+        AxisKeyframe(progress=0.0, value=0.0, outgoing_mode=TransitionMode.LINEAR),
+        AxisKeyframe(progress=1.0, value=60.0, outgoing_mode=TransitionMode.SMOOTH),
+    ]
+    traj = Trajectory(pan_keyframes=pan_kfs, tilt_keyframes=tilt_kfs)
     sched = Schedule(total_shots=10, interval_s=5.0)
     plan = SequencePlan(name=name, trajectory=traj, schedule=sched)
     return plan.model_dump(mode="json")
@@ -50,7 +56,8 @@ def test_plan_api_full_workflow():
         assert resp.status_code == 200
         detail = resp.json()
         assert detail["id"] == plan_id
-        assert len(detail["trajectory"]["keyframes"]) == 2
+        assert len(detail["trajectory"]["pan_keyframes"]) == 2
+        assert len(detail["trajectory"]["tilt_keyframes"]) == 2
 
         # 4. Get Trajectory Samples (GET /api/plans/{id}/trajectory)
         resp = client.get(f"/api/plans/{plan_id}/trajectory")

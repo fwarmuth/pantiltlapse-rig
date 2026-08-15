@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from domain.models import Keyframe, Pose, Schedule, SequencePlan, Trajectory, TransitionMode
+from domain.models import AxisKeyframe, Schedule, SequencePlan, Trajectory, TransitionMode
 from fake_camera_manager import FakeCameraManager
 from main import app, coordinator, plan_store, rig_mgr, serial_mgr
 
@@ -33,9 +33,15 @@ def setup_dry_run_env(tmp_path):
 
 
 def create_test_plan() -> SequencePlan:
-    kf1 = Keyframe(progress=0.0, pose=Pose(pan_deg=0.0, tilt_deg=0.0), outgoing_mode=TransitionMode.LINEAR)
-    kf2 = Keyframe(progress=1.0, pose=Pose(pan_deg=100.0, tilt_deg=50.0), outgoing_mode=TransitionMode.SMOOTH)
-    traj = Trajectory(keyframes=[kf1, kf2])
+    pan_kfs = [
+        AxisKeyframe(progress=0.0, value=0.0, outgoing_mode=TransitionMode.LINEAR),
+        AxisKeyframe(progress=1.0, value=100.0, outgoing_mode=TransitionMode.SMOOTH),
+    ]
+    tilt_kfs = [
+        AxisKeyframe(progress=0.0, value=0.0, outgoing_mode=TransitionMode.LINEAR),
+        AxisKeyframe(progress=1.0, value=50.0, outgoing_mode=TransitionMode.SMOOTH),
+    ]
+    traj = Trajectory(pan_keyframes=pan_kfs, tilt_keyframes=tilt_kfs)
     sched = Schedule(total_shots=5, interval_s=2.0)
     plan = SequencePlan(name="Dry Run Test Plan", trajectory=traj, schedule=sched)
     return plan_store.save_plan(plan)
@@ -112,6 +118,7 @@ def test_dry_run_lock_conflict():
 
         # Manually lock coordinator mode to RECORDING
         asyncio.run(coordinator.acquire("RECORDING"))
+        serial_mgr.is_connected = True
 
         resp = client.post(f"/api/plans/{plan.id}/dry-run/start")
         assert resp.status_code == 409

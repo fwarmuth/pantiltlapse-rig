@@ -32,14 +32,14 @@ class Pose(BaseModel):
     tilt_deg: float = Field(..., description="Tilt angle in degrees")
 
 
-class Keyframe(BaseModel):
+class AxisKeyframe(BaseModel):
     """
-    A single waypoint along a trajectory with progress in [0.0, 1.0].
+    A single keyframe along an axis motion track with progress in [0.0, 1.0].
     """
     id: UUID = Field(default_factory=uuid4, description="Unique keyframe ID")
     label: str | None = Field(default=None, description="Optional user-facing label")
     progress: float = Field(..., ge=0.0, le=1.0, description="Normalized progress from 0.0 to 1.0")
-    pose: Pose = Field(..., description="Target pose at this keyframe")
+    value: float = Field(..., description="Target angle in degrees for this axis")
     outgoing_mode: TransitionMode = Field(
         default=TransitionMode.SMOOTH,
         description="Interpolation curve leaving this keyframe: 'linear' or 'smooth'"
@@ -54,30 +54,27 @@ class Keyframe(BaseModel):
 
 class Trajectory(BaseModel):
     """
-    Sequence of keyframes defining the path.
-    Enforces progress starting at 0.0, ending at 1.0, and strictly increasing.
+    Sequence of keyframes defining independent motion tracks for Pan and Tilt.
+    Enforces progress starting at 0.0, ending at 1.0, and strictly increasing per track.
     """
-    keyframes: list[Keyframe] = Field(..., min_length=2, description="Keyframes defining the path")
+    pan_keyframes: list[AxisKeyframe] = Field(..., min_length=2, description="Keyframes for Pan axis")
+    tilt_keyframes: list[AxisKeyframe] = Field(..., min_length=2, description="Keyframes for Tilt axis")
 
     @model_validator(mode="after")
-    def validate_keyframes(self) -> "Trajectory":
-        if not self.keyframes:
-            raise ValueError("Trajectory must have at least 2 keyframes")
-
-        # Check endpoints
-        if abs(self.keyframes[0].progress - 0.0) > 1e-6:
-            raise ValueError(f"First keyframe progress must be 0.0, got {self.keyframes[0].progress}")
-        if abs(self.keyframes[-1].progress - 1.0) > 1e-6:
-            raise ValueError(f"Last keyframe progress must be 1.0, got {self.keyframes[-1].progress}")
-
-        # Check strictly increasing progress
-        for i in range(len(self.keyframes) - 1):
-            if self.keyframes[i + 1].progress <= self.keyframes[i].progress:
-                raise ValueError(
-                    f"Keyframe progress must be strictly increasing: keyframe {i} ({self.keyframes[i].progress}) "
-                    f">= keyframe {i+1} ({self.keyframes[i+1].progress})"
-                )
-
+    def validate_tracks(self) -> "Trajectory":
+        for name, kfs in [("pan", self.pan_keyframes), ("tilt", self.tilt_keyframes)]:
+            if not kfs or len(kfs) < 2:
+                raise ValueError(f"{name}_keyframes must have at least 2 keyframes")
+            if abs(kfs[0].progress - 0.0) > 1e-6:
+                raise ValueError(f"First {name} keyframe progress must be 0.0, got {kfs[0].progress}")
+            if abs(kfs[-1].progress - 1.0) > 1e-6:
+                raise ValueError(f"Last {name} keyframe progress must be 1.0, got {kfs[-1].progress}")
+            for i in range(len(kfs) - 1):
+                if kfs[i + 1].progress <= kfs[i].progress:
+                    raise ValueError(
+                        f"{name} keyframe progress must be strictly increasing: index {i} ({kfs[i].progress}) "
+                        f">= index {i+1} ({kfs[i+1].progress})"
+                    )
         return self
 
 
