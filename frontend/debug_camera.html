@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CameraCommander — Camera & GPhoto2 Debug Workbench</title>
+    <link rel="stylesheet" href="style.css?v=20260815_05">
+    <style>
+        body {
+            background-color: #060913;
+            color: #f1f5f9;
+            margin: 0;
+            padding: 16px 24px;
+            font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
+        }
+        .debug-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 14px;
+            border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+            margin-bottom: 16px;
+        }
+        .debug-title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .debug-title-wrap h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin: 0;
+            color: #f8fafc;
+        }
+        .debug-grid {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 16px;
+        }
+        .debug-card {
+            background: #0b1120;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .debug-card h3 {
+            font-size: 0.92rem;
+            font-weight: 600;
+            margin: 0;
+            color: #38bdf8;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .viewport-tabs {
+            display: flex;
+            gap: 4px;
+            background: rgba(15, 23, 42, 0.8);
+            padding: 3px;
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .tab-btn.active {
+            background: #1e293b;
+            color: #38bdf8;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        .debug-stream-viewport {
+            width: 100%;
+            height: 400px;
+            background: #020617;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            user-select: none;
+        }
+        .debug-stream-viewport canvas {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .zoomable-capture-wrapper {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            overflow: hidden;
+            cursor: grab;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+        }
+        .zoomable-capture-wrapper:active {
+            cursor: grabbing;
+        }
+        .zoomable-capture-img {
+            max-width: none;
+            max-height: none;
+            transform-origin: 0 0;
+            transition: transform 0.05s ease-out;
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+        .capture-hud-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: var(--radius-sm);
+            padding: 6px 10px;
+            font-size: 0.72rem;
+            font-family: var(--font-mono);
+            color: #cbd5e1;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .zoom-controls-floating {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(15, 23, 42, 0.88);
+            backdrop-filter: blur(6px);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: var(--radius-sm);
+            padding: 4px 6px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            z-index: 10;
+        }
+        .zoom-btn {
+            background: #1e293b;
+            border: 1px solid rgba(255,255,255,0.1);
+            color: #f8fafc;
+            font-size: 0.72rem;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .zoom-btn:hover {
+            background: #334155;
+            color: #38bdf8;
+        }
+        .debug-focus-panel {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: var(--radius-sm);
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .focus-row {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .console-log-box {
+            background: #020617;
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            border-radius: var(--radius-sm);
+            padding: 10px;
+            font-family: var(--font-mono, monospace);
+            font-size: 0.72rem;
+            color: #38bdf8;
+            height: 240px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.45;
+        }
+        .log-entry {
+            margin-bottom: 6px;
+            border-bottom: 1px dashed rgba(255,255,255,0.05);
+            padding-bottom: 4px;
+        }
+        .log-req { color: #fde047; }
+        .log-res-ok { color: #4ade80; }
+        .log-res-err { color: #f87171; }
+        .widget-table-wrap {
+            max-height: 260px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            margin-top: 8px;
+        }
+        .widget-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.72rem;
+            font-family: var(--font-mono);
+        }
+        .widget-table th, .widget-table td {
+            padding: 6px 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            text-align: left;
+        }
+        .widget-table th {
+            background: #1e293b;
+            color: var(--text-muted);
+            position: sticky;
+            top: 0;
+        }
+        .widget-table tr:hover {
+            background: rgba(56, 189, 248, 0.08);
+        }
+        .raw-input-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        @media (max-width: 1024px) {
+            .debug-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <div class="debug-header">
+        <div class="debug-title-wrap">
+            <h1>🛠️ Camera & GPhoto2 Debug Workbench</h1>
+            <span class="badge" id="dbgCameraModelBadge">Camera: Loading...</span>
+            <span class="badge" id="dbgStreamStatusBadge">Live Stream: IDLE</span>
+        </div>
+        <div style="display:flex; gap:8px;">
+            <a href="/" class="btn btn-secondary btn-sm">← Main Application</a>
+        </div>
+    </div>
+
+    <div class="debug-grid">
+        <!-- LEFT COLUMN: Live Stream & Full Capture Zoom Inspection & Focus Controls -->
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+            
+            <!-- Viewport Stage Card (Live Stream OR Full Resolution Capture Inspector) -->
+            <div class="debug-card">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <div class="viewport-tabs">
+                        <button class="tab-btn active" id="tabLiveStream" onclick="switchViewportTab('live')">👁️ Live Stream</button>
+                        <button class="tab-btn" id="tabFullCapture" onclick="switchViewportTab('capture')">🖼️ Full Capture Zoom Inspector</button>
+                    </div>
+
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button class="btn btn-accent btn-sm" id="btnTakeFullCapture" onclick="takeFullDebugCapture()">📸 Full Shutter Capture</button>
+                        <span id="dbgFpsLabel" style="font-family: var(--font-mono); font-size: 0.78rem; color: #4ade80;">0.0 FPS</span>
+                    </div>
+                </div>
+
+                <!-- 1. Live Viewport -->
+                <div class="debug-stream-viewport" id="dbgLiveStreamContainer">
+                    <canvas id="dbgLiveCanvas" width="640" height="480"></canvas>
+                    <div id="dbgPlaceholder" style="position:absolute; text-align:center; color:#64748b;">
+                        <div style="font-size:1.8rem; margin-bottom:4px;">📷</div>
+                        <div>Live Stream Inactive</div>
+                    </div>
+                </div>
+
+                <!-- 2. Full Capture Zoom Inspector Viewport -->
+                <div class="debug-stream-viewport" id="dbgFullCaptureContainer" style="display: none;">
+                    <div class="zoomable-capture-wrapper" id="captureZoomWrapper">
+                        <img id="dbgFullCaptureImg" class="zoomable-capture-img" src="" alt="Full Capture" />
+                        <div id="dbgCapturePlaceholder" style="text-align:center; color:#64748b;">
+                            <div style="font-size:2rem; margin-bottom:6px;">📸</div>
+                            <div>No Full Capture Yet</div>
+                            <div style="font-size: 0.75rem; margin-top: 4px; color: #475569;">Click "📸 Full Shutter Capture" to take and inspect a full-resolution photo.</div>
+                        </div>
+                    </div>
+
+                    <!-- Telemetry Overlay -->
+                    <div class="capture-hud-overlay" id="dbgCaptureHud" style="display: none;">
+                        <div style="color: #38bdf8; font-weight: 600;" id="hudFilename">photo.jpg</div>
+                        <div id="hudDimensions">-- × -- px</div>
+                        <div id="hudExposure" style="color: #4ade80;">ISO -- | --s | f/--</div>
+                    </div>
+
+                    <!-- Floating Zoom Controls -->
+                    <div class="zoom-controls-floating" id="dbgZoomControls" style="display: none;">
+                        <button class="zoom-btn" id="btnToggleLockZoom" onclick="toggleLockZoom()" title="Keep current zoom level and pan position when taking new shots" style="color: #4ade80; border-color: rgba(74, 222, 128, 0.4);">🔒 Lock Zoom</button>
+                        <button class="zoom-btn" onclick="adjustZoom(-0.25)">−</button>
+                        <span id="lblZoomLevel" style="font-size: 0.72rem; font-family: var(--font-mono); min-width: 48px; text-align: center; color: #38bdf8;">100%</span>
+                        <button class="zoom-btn" onclick="adjustZoom(+0.25)">+</button>
+                        <button class="zoom-btn" onclick="setZoom(1.0)">1:1 (100%)</button>
+                        <button class="zoom-btn" onclick="setZoom(2.0)">2x</button>
+                        <button class="zoom-btn" onclick="setZoom(4.0)">4x</button>
+                        <button class="zoom-btn" onclick="fitImageToViewport()">Fit</button>
+                        <button class="zoom-btn" onclick="openFullImageExternal()">↗ New Tab</button>
+                    </div>
+                </div>
+
+                <!-- Viewport Bottom Controls -->
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn btn-primary btn-sm" id="btnDbgToggleStream" onclick="toggleDebugStream()">▶ Start Live Stream</button>
+                        <button class="btn btn-secondary btn-sm" onclick="fetchSingleDebugFrame()">📸 Single Frame</button>
+                    </div>
+
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <label style="font-size: 0.75rem; color: #94a3b8;">Stream Filter:</label>
+                        <select id="dbgFilterMode" class="dropdown dropdown-xs" onchange="dbgEnhanceMode = this.value">
+                            <option value="none">Raw (None)</option>
+                            <option value="clahe">CLAHE Contrast</option>
+                            <option value="gain_gamma">Gain & Gamma</option>
+                            <option value="night_vision">Night Green</option>
+                            <option value="edges">Edge Assist</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Focus Controls & Diagnostic Stepping -->
+            <div class="debug-card">
+                <h3>
+                    <span>🎯 Manual Focus & Autofocus Stepping</span>
+                    <span id="dbgFocusStatus" style="font-size: 0.75rem; color: #38bdf8;">Idle</span>
+                </h3>
+
+                <div class="debug-focus-panel">
+                    <div style="font-size: 0.75rem; font-weight: 600; color: #94a3b8;">DISCRETE STEPPING BUTTONS</div>
+                    <div class="focus-row">
+                        <button class="btn btn-secondary btn-sm" onclick="sendFocusStep('far', 3)">⏪ Far 3 (Coarse)</button>
+                        <button class="btn btn-secondary btn-sm" onclick="sendFocusStep('far', 2)">◀ Far 2 (Med)</button>
+                        <button class="btn btn-secondary btn-sm" onclick="sendFocusStep('far', 1)">‹ Far 1 (Fine)</button>
+                        <button class="btn btn-accent btn-sm" onclick="sendAutofocus()">🎯 Trigger Autofocus</button>
+                        <button class="btn btn-secondary btn-sm" onclick="sendFocusStep('near', 1)">Near 1 (Fine) ›</button>
+                        <button class="btn btn-secondary btn-sm" onclick="sendFocusStep('near', 2)">Near 2 (Med) ▶</button>
+                        <button class="btn btn-secondary btn-sm" onclick="sendFocusStep('near', 3)">Near 3 (Coarse) ⏩</button>
+                    </div>
+                </div>
+
+                <!-- Custom Raw Focus Drive Tester -->
+                <div class="debug-focus-panel">
+                    <div style="font-size: 0.75rem; font-weight: 600; color: #94a3b8;">RAW FOCUS DRIVE STRING TESTER</div>
+                    <div class="raw-input-row">
+                        <input type="text" id="txtRawFocusValue" class="input-field" placeholder="e.g. Near 1, Far 2, 1, -1, Near: Step 1" style="flex:1;">
+                        <button class="btn btn-secondary btn-sm" onclick="sendCustomRawFocus()">⚡ Send to manualfocusdrive</button>
+                    </div>
+                    <div style="font-size: 0.7rem; color: #64748b;">
+                        Tests direct assignment to camera's <code>manualfocusdrive</code> widget with arbitrary strings or step integers.
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+
+        <!-- RIGHT COLUMN: Exposure Controls, Raw Widget Inspector, Log Console -->
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+            
+            <!-- Exposure Settings -->
+            <div class="debug-card">
+                <h3>
+                    <span>📸 Exposure Parameters</span>
+                    <button class="btn btn-secondary btn-xs" onclick="loadCameraChoices()">🔄 Refresh Config</button>
+                </h3>
+
+                <div class="control-grid-3">
+                    <div class="control-group">
+                        <label>ISO Sensitivity</label>
+                        <select id="dbgSelIso" class="dropdown" onchange="setCameraParam('iso', this.value)">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label>Shutter Speed</label>
+                        <select id="dbgSelShutter" class="dropdown" onchange="setCameraParam('shutter_speed', this.value)">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label>Aperture (f-stop)</label>
+                        <select id="dbgSelAperture" class="dropdown" onchange="setCameraParam('aperture', this.value)">
+                            <option value="">Loading...</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live Command & Response Log Console -->
+            <div class="debug-card">
+                <h3>
+                    <span>📜 Backend GPhoto2 Command Activity Log</span>
+                    <button class="btn btn-secondary btn-xs" onclick="clearConsoleLog()">🧹 Clear Log</button>
+                </h3>
+
+                <div class="console-log-box" id="dbgConsoleLog">
+[System] Debug workbench loaded. Ready to execute commands.
+                </div>
+            </div>
+
+            <!-- GPhoto2 Full Widget Tree Explorer -->
+            <div class="debug-card">
+                <h3>
+                    <span>🔍 Full Camera Widget Tree Explorer</span>
+                    <button class="btn btn-primary btn-xs" onclick="dumpAllCameraWidgets()">🔍 Scan Camera Widgets</button>
+                </h3>
+
+                <div class="raw-input-row" style="margin-top: 4px;">
+                    <input type="text" id="txtRawWidgetName" class="input-field" placeholder="Widget Name (e.g. manualfocusdrive, eoszoom)" style="flex:1;">
+                    <input type="text" id="txtRawWidgetVal" class="input-field" placeholder="Value to Set" style="width: 140px;">
+                    <button class="btn btn-secondary btn-xs" onclick="setRawWidgetDirect()">Set</button>
+                </div>
+
+                <div class="widget-table-wrap">
+                    <table class="widget-table" id="dbgWidgetTable">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Value</th>
+                                <th>Choices / Range</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dbgWidgetTableBody">
+                            <tr><td colspan="4" style="text-align:center; color:#64748b; padding:16px;">Click 'Scan Camera Widgets' to query all native gphoto2 widgets.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = "";
+        let isStreaming = false;
+        let dbgEnhanceMode = "none";
+        let lastFrameTime = performance.now();
+        let fps = 0.0;
+        let abortCtrl = null;
+
+        // Capture Zoom & Pan State
+        let currentScale = 1.0;
+        let panX = 0;
+        let panY = 0;
+        let isPanning = false;
+        let startPanX = 0;
+        let startPanY = 0;
+        let activeTab = "live";
+        let latestPhotoUrl = "";
+        let lockZoomOnRecapture = true;
+        let hasCapturedImage = false;
+
+        function toggleLockZoom() {
+            lockZoomOnRecapture = !lockZoomOnRecapture;
+            const btn = document.getElementById("btnToggleLockZoom");
+            if (btn) {
+                if (lockZoomOnRecapture) {
+                    btn.textContent = "🔒 Lock Zoom";
+                    btn.style.color = "#4ade80";
+                    btn.style.borderColor = "rgba(74, 222, 128, 0.4)";
+                } else {
+                    btn.textContent = "🔓 Auto-Fit";
+                    btn.style.color = "#94a3b8";
+                    btn.style.borderColor = "rgba(255, 255, 255, 0.1)";
+                }
+            }
+        }
+
+        function log(msg, type = "info") {
+            const box = document.getElementById("dbgConsoleLog");
+            if (!box) return;
+            const time = new Date().toLocaleTimeString();
+            const div = document.createElement("div");
+            div.className = "log-entry";
+
+            if (type === "req") {
+                div.className += " log-req";
+                div.textContent = `[${time}] 📤 REQ: ${msg}`;
+            } else if (type === "ok") {
+                div.className += " log-res-ok";
+                div.textContent = `[${time}] ✅ RES (200): ${msg}`;
+            } else if (type === "err") {
+                div.className += " log-res-err";
+                div.textContent = `[${time}] ❌ ERR: ${msg}`;
+            } else {
+                div.textContent = `[${time}] ℹ️ ${msg}`;
+            }
+
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function clearConsoleLog() {
+            document.getElementById("dbgConsoleLog").innerHTML = "";
+            log("Log cleared.");
+        }
+
+        function switchViewportTab(tab) {
+            activeTab = tab;
+            const tabLive = document.getElementById("tabLiveStream");
+            const tabCap = document.getElementById("tabFullCapture");
+            const contLive = document.getElementById("dbgLiveStreamContainer");
+            const contCap = document.getElementById("dbgFullCaptureContainer");
+
+            if (tab === "live") {
+                tabLive.classList.add("active");
+                tabCap.classList.remove("active");
+                contLive.style.display = "flex";
+                contCap.style.display = "none";
+            } else {
+                tabCap.classList.add("active");
+                tabLive.classList.remove("active");
+                contCap.style.display = "flex";
+                contLive.style.display = "none";
+                if (!hasCapturedImage || !lockZoomOnRecapture) {
+                    fitImageToViewport();
+                } else {
+                    applyTransform();
+                }
+            }
+        }
+
+        async function initDebugWorkbench() {
+            log("Initializing camera status and choices...");
+            initCapturePanZoom();
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/status`);
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById("dbgCameraModelBadge").textContent = `Camera: ${data.model || "Connected"}`;
+                    log(`Camera Model: ${data.model || "Unknown"} (Connected: ${data.connected})`);
+                    if (data.has_latest_photo) {
+                        loadLatestCapturedPhoto(data, false);
+                    }
+                }
+            } catch (e) {
+                log(`Camera status check failed: ${e}`, "err");
+            }
+            await loadCameraChoices();
+        }
+
+        async function loadCameraChoices() {
+            log("GET /api/camera/config/choices", "req");
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/config/choices`);
+                const data = await res.json();
+                if (res.ok) {
+                    log(JSON.stringify(data, null, 2), "ok");
+                    populateDropdown("dbgSelIso", data.choices?.iso || []);
+                    populateDropdown("dbgSelShutter", data.choices?.shutter_speed || []);
+                    populateDropdown("dbgSelAperture", data.choices?.aperture || []);
+
+                    const statusRes = await fetch(`${API_BASE}/api/camera/status`);
+                    if (statusRes.ok) {
+                        const sData = await statusRes.json();
+                        if (sData.iso) document.getElementById("dbgSelIso").value = sData.iso;
+                        if (sData.shutter_speed) document.getElementById("dbgSelShutter").value = sData.shutter_speed;
+                        if (sData.aperture) document.getElementById("dbgSelAperture").value = sData.aperture;
+                    }
+                } else {
+                    log(JSON.stringify(data), "err");
+                }
+            } catch (e) {
+                log(`Fetch choices failed: ${e}`, "err");
+            }
+        }
+
+        function populateDropdown(elId, choices) {
+            const el = document.getElementById(elId);
+            if (!el) return;
+            el.innerHTML = "";
+            choices.forEach(c => {
+                const opt = document.createElement("option");
+                opt.value = c;
+                opt.textContent = c;
+                el.appendChild(opt);
+            });
+        }
+
+        async function setCameraParam(param, value) {
+            log(`POST /api/camera/config -> {param: "${param}", value: "${value}"}`, "req");
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/config`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ param, value })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    log(JSON.stringify(data), "ok");
+                } else {
+                    log(JSON.stringify(data), "err");
+                    alert(`Failed to set ${param}: ${data.detail?.message || "Error"}`);
+                }
+            } catch (e) {
+                log(`Set config failed: ${e}`, "err");
+            }
+        }
+
+        // --- FULL SHUTTER CAPTURE & ZOOM INSPECTION ---
+
+        async function takeFullDebugCapture() {
+            const btn = document.getElementById("btnTakeFullCapture");
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = "⏳ Capturing Full Photo...";
+            log("POST /api/camera/trigger", "req");
+
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/trigger`, { method: "POST" });
+                const data = await res.json();
+                if (res.ok) {
+                    log(JSON.stringify(data, null, 2), "ok");
+                    switchViewportTab("capture");
+                    loadLatestCapturedPhoto(data, true);
+                } else {
+                    log(JSON.stringify(data), "err");
+                    alert(`Capture failed: ${data.detail?.message || data.message || "Error"}`);
+                }
+            } catch (e) {
+                log(`Capture request error: ${e}`, "err");
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        }
+
+        function loadLatestCapturedPhoto(meta, isRecapture = false) {
+            const img = document.getElementById("dbgFullCaptureImg");
+            const placeholder = document.getElementById("dbgCapturePlaceholder");
+            const hud = document.getElementById("dbgCaptureHud");
+            const zoomControls = document.getElementById("dbgZoomControls");
+
+            latestPhotoUrl = `${API_BASE}/api/camera/preview/latest?t=${Date.now()}`;
+            img.onload = () => {
+                placeholder.style.display = "none";
+                hud.style.display = "flex";
+                zoomControls.style.display = "flex";
+                document.getElementById("hudFilename").textContent = meta.filename || meta.latest_photo_filename || "capture.jpg";
+                document.getElementById("hudDimensions").textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
+
+                const iso = document.getElementById("dbgSelIso").value || meta.iso || "--";
+                const shutter = document.getElementById("dbgSelShutter").value || meta.shutter_speed || "--";
+                const aperture = document.getElementById("dbgSelAperture").value || meta.aperture || "--";
+                document.getElementById("hudExposure").textContent = `ISO ${iso} | ${shutter}s | f/${aperture}`;
+
+                if (isRecapture && lockZoomOnRecapture && hasCapturedImage) {
+                    // Retain exact current zoom scale and pan position!
+                    applyTransform();
+                    log(`Updated photo in inspector (${img.naturalWidth}x${img.naturalHeight} px) with zoom locked at ${Math.round(currentScale * 100)}%.`, "ok");
+                } else {
+                    fitImageToViewport();
+                    hasCapturedImage = true;
+                    log(`Loaded full capture into inspector (${img.naturalWidth}x${img.naturalHeight} px). Ready for deep zoom.`, "ok");
+                }
+            };
+            img.src = latestPhotoUrl;
+        }
+
+        function initCapturePanZoom() {
+            const wrapper = document.getElementById("captureZoomWrapper");
+            const img = document.getElementById("dbgFullCaptureImg");
+
+            wrapper.addEventListener("mousedown", (e) => {
+                if (!img.src) return;
+                isPanning = true;
+                startPanX = e.clientX - panX;
+                startPanY = e.clientY - panY;
+            });
+
+            window.addEventListener("mousemove", (e) => {
+                if (!isPanning) return;
+                panX = e.clientX - startPanX;
+                panY = e.clientY - startPanY;
+                applyTransform();
+            });
+
+            window.addEventListener("mouseup", () => {
+                isPanning = false;
+            });
+
+            wrapper.addEventListener("wheel", (e) => {
+                if (!img.src) return;
+                e.preventDefault();
+
+                const rect = wrapper.getBoundingClientRect();
+                const mouseX = e.clientX - rect.left;
+                const mouseY = e.clientY - rect.top;
+
+                const zoomFactor = e.deltaY < 0 ? 1.18 : 0.85;
+                const newScale = Math.max(0.1, Math.min(12.0, currentScale * zoomFactor));
+
+                // Zoom centered around mouse pointer
+                panX = mouseX - (mouseX - panX) * (newScale / currentScale);
+                panY = mouseY - (mouseY - panY) * (newScale / currentScale);
+                currentScale = newScale;
+
+                applyTransform();
+            }, { passive: false });
+        }
+
+        function applyTransform() {
+            const img = document.getElementById("dbgFullCaptureImg");
+            img.style.transform = `translate(${panX}px, ${panY}px) scale(${currentScale})`;
+            const lbl = document.getElementById("lblZoomLevel");
+            if (lbl) lbl.textContent = `${Math.round(currentScale * 100)}%`;
+        }
+
+        function adjustZoom(delta) {
+            const newScale = Math.max(0.1, Math.min(12.0, currentScale + delta));
+            setZoom(newScale);
+        }
+
+        function setZoom(scale) {
+            const wrapper = document.getElementById("captureZoomWrapper");
+            const img = document.getElementById("dbgFullCaptureImg");
+            if (!img.naturalWidth) return;
+
+            const rect = wrapper.getBoundingClientRect();
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+
+            panX = centerX - (centerX - panX) * (scale / currentScale);
+            panY = centerY - (centerY - panY) * (scale / currentScale);
+            currentScale = scale;
+            applyTransform();
+        }
+
+        function fitImageToViewport() {
+            const wrapper = document.getElementById("captureZoomWrapper");
+            const img = document.getElementById("dbgFullCaptureImg");
+            if (!img.naturalWidth || !wrapper) return;
+
+            const rect = wrapper.getBoundingClientRect();
+            const scaleX = rect.width / img.naturalWidth;
+            const scaleY = rect.height / img.naturalHeight;
+            currentScale = Math.min(scaleX, scaleY, 1.0) * 0.95;
+
+            panX = (rect.width - img.naturalWidth * currentScale) / 2;
+            panY = (rect.height - img.naturalHeight * currentScale) / 2;
+            applyTransform();
+        }
+
+        function openFullImageExternal() {
+            if (latestPhotoUrl) {
+                window.open(latestPhotoUrl, "_blank");
+            }
+        }
+
+        // --- FOCUS STEPPING ---
+
+        async function sendFocusStep(direction, stepSize) {
+            const statusEl = document.getElementById("dbgFocusStatus");
+            if (statusEl) statusEl.textContent = `Stepping ${direction} ${stepSize}...`;
+            log(`POST /api/camera/focus/step -> {direction: "${direction}", step_size: ${stepSize}}`, "req");
+
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/focus/step`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ direction, step_size: stepSize })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    log(JSON.stringify(data), "ok");
+                    if (statusEl) statusEl.textContent = `${direction.toUpperCase()} ${stepSize} OK (widget: ${data.widget || "manualfocusdrive"}, value: ${data.applied_value})`;
+                } else {
+                    log(JSON.stringify(data), "err");
+                    if (statusEl) statusEl.textContent = `ERR: ${data.detail?.message || "Failed"}`;
+                }
+            } catch (e) {
+                log(`Focus step error: ${e}`, "err");
+                if (statusEl) statusEl.textContent = "Error";
+            }
+        }
+
+        async function sendAutofocus() {
+            log("POST /api/camera/focus/autofocus", "req");
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/focus/autofocus`, { method: "POST" });
+                const data = await res.json();
+                if (res.ok) {
+                    log(JSON.stringify(data), "ok");
+                } else {
+                    log(JSON.stringify(data), "err");
+                }
+            } catch (e) {
+                log(`Autofocus error: ${e}`, "err");
+            }
+        }
+
+        async function sendCustomRawFocus() {
+            const val = document.getElementById("txtRawFocusValue").value.trim();
+            if (!val) {
+                alert("Enter a value to set on manualfocusdrive");
+                return;
+            }
+            log(`POST /api/debug/camera/set-raw-widget -> {widget_name: "manualfocusdrive", value: "${val}"}`, "req");
+            try {
+                const res = await fetch(`${API_BASE}/api/debug/camera/set-raw-widget`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ widget_name: "manualfocusdrive", value: val })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    log(JSON.stringify(data), "ok");
+                } else {
+                    log(JSON.stringify(data), "err");
+                }
+            } catch (e) {
+                log(`Custom focus drive error: ${e}`, "err");
+            }
+        }
+
+        async function dumpAllCameraWidgets() {
+            log("GET /api/debug/camera/widgets", "req");
+            const tbody = document.getElementById("dbgWidgetTableBody");
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:12px;">Querying camera configuration tree...</td></tr>';
+
+            try {
+                const res = await fetch(`${API_BASE}/api/debug/camera/widgets`);
+                const data = await res.json();
+                if (res.ok) {
+                    log(`Found ${data.count || 0} widgets.`, "ok");
+                    tbody.innerHTML = "";
+                    (data.widgets || []).forEach(w => {
+                        const tr = document.createElement("tr");
+                        const choicesStr = (w.choices && w.choices.length > 0) ? w.choices.join(", ") : "--";
+                        tr.innerHTML = `
+                            <td style="color:#38bdf8; font-weight:600; cursor:pointer;" onclick="fillRawWidget('${w.name}', '${w.value || ""}')" title="Click to fill raw setter">${w.name}</td>
+                            <td>${w.type}</td>
+                            <td style="color:#4ade80;">${w.value || "--"}</td>
+                            <td style="color:#94a3b8; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${choicesStr}">${choicesStr}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                } else {
+                    log(JSON.stringify(data), "err");
+                    tbody.innerHTML = `<tr><td colspan="4" style="color:#f87171; text-align:center;">Error: ${data.detail?.message || "Failed"}</td></tr>`;
+                }
+            } catch (e) {
+                log(`Widget dump error: ${e}`, "err");
+            }
+        }
+
+        function fillRawWidget(name, val) {
+            document.getElementById("txtRawWidgetName").value = name;
+            document.getElementById("txtRawWidgetVal").value = val;
+        }
+
+        async function setRawWidgetDirect() {
+            const name = document.getElementById("txtRawWidgetName").value.trim();
+            const val = document.getElementById("txtRawWidgetVal").value.trim();
+            if (!name) {
+                alert("Enter widget name");
+                return;
+            }
+            log(`POST /api/debug/camera/set-raw-widget -> {widget_name: "${name}", value: "${val}"}`, "req");
+            try {
+                const res = await fetch(`${API_BASE}/api/debug/camera/set-raw-widget`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ widget_name: name, value: val })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    log(JSON.stringify(data), "ok");
+                } else {
+                    log(JSON.stringify(data), "err");
+                }
+            } catch (e) {
+                log(`Set raw widget error: ${e}`, "err");
+            }
+        }
+
+        // --- LIVE STREAM LOOP ---
+
+        async function toggleDebugStream() {
+            if (isStreaming) {
+                stopDebugStream();
+            } else {
+                startDebugStream();
+            }
+        }
+
+        async function startDebugStream() {
+            log("POST /api/camera/preview/start", "req");
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/preview/start`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ gain: 1.0 })
+                });
+                if (res.ok) {
+                    isStreaming = true;
+                    document.getElementById("btnDbgToggleStream").textContent = "⏹ Stop Live Stream";
+                    document.getElementById("dbgPlaceholder").style.display = "none";
+                    document.getElementById("dbgStreamStatusBadge").textContent = "Live Stream: STREAMING";
+                    abortCtrl = new AbortController();
+                    runDebugStreamLoop();
+                    log("Live view stream started.", "ok");
+                } else {
+                    const data = await res.json();
+                    log(JSON.stringify(data), "err");
+                }
+            } catch (e) {
+                log(`Stream start error: ${e}`, "err");
+            }
+        }
+
+        async function stopDebugStream() {
+            isStreaming = false;
+            if (abortCtrl) {
+                abortCtrl.abort();
+                abortCtrl = null;
+            }
+            log("POST /api/camera/preview/stop", "req");
+            try {
+                await fetch(`${API_BASE}/api/camera/preview/stop`, { method: "POST" });
+            } catch (e) {}
+            document.getElementById("btnDbgToggleStream").textContent = "▶ Start Live Stream";
+            document.getElementById("dbgPlaceholder").style.display = "block";
+            document.getElementById("dbgStreamStatusBadge").textContent = "Live Stream: IDLE";
+            document.getElementById("dbgFpsLabel").textContent = "0.0 FPS";
+        }
+
+        async function fetchSingleDebugFrame() {
+            log("GET /api/camera/preview/frame (Single)", "req");
+            const canvas = document.getElementById("dbgLiveCanvas");
+            const ctx = canvas.getContext("2d");
+            try {
+                const res = await fetch(`${API_BASE}/api/camera/preview/frame?t=${Date.now()}`);
+                if (res.ok) {
+                    const blob = await res.blob();
+                    const bitmap = await createImageBitmap(blob);
+                    canvas.width = bitmap.width;
+                    canvas.height = bitmap.height;
+                    ctx.drawImage(bitmap, 0, 0);
+                    bitmap.close();
+                    document.getElementById("dbgPlaceholder").style.display = "none";
+                    log(`Single frame captured: ${canvas.width}x${canvas.height} px`, "ok");
+                } else {
+                    log("Single frame fetch failed", "err");
+                }
+            } catch (e) {
+                log(`Single frame error: ${e}`, "err");
+            }
+        }
+
+        async function runDebugStreamLoop() {
+            const canvas = document.getElementById("dbgLiveCanvas");
+            const ctx = canvas.getContext("2d");
+
+            while (isStreaming) {
+                try {
+                    const res = await fetch(`${API_BASE}/api/camera/preview/frame?t=${Date.now()}`, {
+                        signal: abortCtrl ? abortCtrl.signal : undefined
+                    });
+                    if (res.ok) {
+                        const blob = await res.blob();
+                        const bitmap = await createImageBitmap(blob);
+                        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+                            canvas.width = bitmap.width;
+                            canvas.height = bitmap.height;
+                        }
+                        ctx.drawImage(bitmap, 0, 0);
+                        bitmap.close();
+
+                        const now = performance.now();
+                        const delta = now - lastFrameTime;
+                        lastFrameTime = now;
+                        if (delta > 0) {
+                            fps = 0.8 * fps + 0.2 * (1000 / delta);
+                            document.getElementById("dbgFpsLabel").textContent = `${fps.toFixed(1)} FPS`;
+                        }
+                    }
+                } catch (err) {
+                    if (err.name !== "AbortError") {
+                        console.debug("Debug stream frame error:", err);
+                    }
+                }
+                await new Promise(r => setTimeout(r, 65));
+            }
+        }
+
+        window.onload = initDebugWorkbench;
+    </script>
+</body>
+</html>

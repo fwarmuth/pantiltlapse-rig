@@ -25,11 +25,107 @@ class FakeCameraManager:
         self.aperture = "5.6"
         self.latest_photo_path: str | None = None
         self.last_capture_time: float = 0.0
+        self.focus_position: float = 50.0
 
     async def initialize(self) -> bool:
         logger.info("Initializing FakeCameraManager...")
         self.is_connected = True
         return True
+
+    async def step_focus(self, direction: str, step_size: int = 1) -> dict[str, Any]:
+        """Simulate manual focus step in fake camera."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Fake camera is disconnected"}
+
+        direction = direction.lower()
+        if direction not in ("near", "far"):
+            return {"status": "ERROR", "message": "Direction must be 'near' or 'far'"}
+
+        step_size = max(1, min(3, int(step_size)))
+        delta = (-1.0 if direction == "far" else 1.0) * (step_size * 2.5)
+        self.focus_position = max(0.0, min(100.0, self.focus_position + delta))
+        drive_str = f"{direction.capitalize()} {step_size}"
+        logger.info(f"Simulated focus drive: {drive_str} (focus position: {self.focus_position:.1f}%)")
+        return {
+            "status": "OK",
+            "direction": direction,
+            "step_size": step_size,
+            "drive": drive_str,
+            "focus_position": round(self.focus_position, 1),
+            "fake": True,
+        }
+
+    async def trigger_autofocus(self) -> dict[str, Any]:
+        """Simulate autofocus lock in fake camera."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Fake camera is disconnected"}
+
+        await asyncio.sleep(0.2)
+        self.focus_position = 50.0
+        logger.info("Simulated autofocus completed")
+        return {"status": "OK", "message": "Autofocus locked", "focus_position": 50.0, "fake": True}
+
+    async def get_all_widgets(self) -> list[dict[str, Any]]:
+        """Return simulated widget tree for debug interface."""
+        return [
+            {
+                "name": "manualfocusdrive",
+                "label": "Manual Focus Drive",
+                "type": "radio",
+                "value": "None",
+                "readonly": False,
+                "choices": ["Near 1", "Near 2", "Near 3", "None", "Far 1", "Far 2", "Far 3"],
+            },
+            {
+                "name": "autofocusdrive",
+                "label": "Autofocus Drive",
+                "type": "toggle",
+                "value": "0",
+                "readonly": False,
+                "choices": ["0", "1"],
+            },
+            {
+                "name": "iso",
+                "label": "ISO Speed",
+                "type": "radio",
+                "value": self.iso,
+                "readonly": False,
+                "choices": ["100", "200", "400", "800", "1600", "3200", "6400"],
+            },
+            {
+                "name": "shutterspeed",
+                "label": "Shutter Speed",
+                "type": "radio",
+                "value": self.shutter_speed,
+                "readonly": False,
+                "choices": ["1/1000", "1/500", "1/250", "1/125", "1/60", "1/30", "1/4", "1s"],
+            },
+            {
+                "name": "aperture",
+                "label": "Aperture",
+                "type": "radio",
+                "value": self.aperture,
+                "readonly": False,
+                "choices": ["1.4", "2.8", "4.0", "4.5", "5.6", "8.0", "11.0", "16.0"],
+            },
+            {
+                "name": "capturetarget",
+                "label": "Capture Target",
+                "type": "radio",
+                "value": "Internal RAM",
+                "readonly": False,
+                "choices": ["Internal RAM", "Memory card"],
+            },
+        ]
+
+    async def set_raw_widget(self, name: str, value: Any) -> dict[str, Any]:
+        """Simulate setting raw widget."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Fake camera is disconnected"}
+        if name in ("iso", "shutter_speed", "shutterspeed", "aperture"):
+            k = "shutter_speed" if name == "shutterspeed" else name
+            setattr(self, k, str(value))
+        return {"status": "OK", "widget": name, "value": value, "fake": True}
 
     async def refresh_config(self) -> dict[str, str]:
         return {"iso": self.iso, "shutter_speed": self.shutter_speed, "aperture": self.aperture}

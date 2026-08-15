@@ -52,3 +52,60 @@ def test_post_camera_config_validation():
         resp_invalid = client.post("/api/camera/config", json={"param": "iso", "value": "INVALID_ISO_VALUE_999"})
         assert resp_invalid.status_code == 422
         assert "invalid" in resp_invalid.json()["detail"]["message"].lower()
+
+
+def test_focus_stepping_and_autofocus():
+    with TestClient(app) as client:
+        # 1. Step focus near (fine)
+        resp = client.post("/api/camera/focus/step", json={"direction": "near", "step_size": 1})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "OK"
+        assert data["direction"] == "near"
+        assert data["step_size"] == 1
+
+        # 2. Step focus far (coarse)
+        resp = client.post("/api/camera/focus/step", json={"direction": "far", "step_size": 3})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "OK"
+        assert data["direction"] == "far"
+        assert data["step_size"] == 3
+
+        # 3. Autofocus trigger
+        resp = client.post("/api/camera/focus/autofocus")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "OK"
+
+        # 4. Disconnected camera error check
+        main.camera_mgr.is_connected = False
+        try:
+            resp = client.post("/api/camera/focus/step", json={"direction": "near", "step_size": 1})
+            assert resp.status_code == 503
+        finally:
+            main.camera_mgr.is_connected = True
+
+
+def test_debug_camera_endpoints():
+    with TestClient(app) as client:
+        # 1. Test HTML debug page
+        resp = client.get("/debug/camera")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert "Camera & GPhoto2 Debug Workbench" in resp.text
+
+        # 2. Test widgets list endpoint
+        resp = client.get("/api/debug/camera/widgets")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "OK"
+        assert data["count"] > 0
+        assert any(w["name"] == "manualfocusdrive" for w in data["widgets"])
+
+        # 3. Test raw widget setter endpoint
+        resp = client.post(
+            "/api/debug/camera/set-raw-widget",
+            json={"widget_name": "manualfocusdrive", "value": "Near 1"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "OK"
