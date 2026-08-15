@@ -19,10 +19,20 @@ let activeCoordinatorMode = "IDLE";
 
 // Plan State
 let activePlan = null;
-let currentKeyframes = [
-    { progress: 0.0, pose: { pan_deg: 0.0, tilt_deg: 0.0 }, outgoing_mode: "smooth", tangent_scale: 1.0 },
-    { progress: 1.0, pose: { pan_deg: 45.0, tilt_deg: 15.0 }, outgoing_mode: "smooth", tangent_scale: 1.0 }
+let currentPanKeyframes = [
+    { progress: 0.0, value: 0.0, outgoing_mode: "smooth", tangent_scale: 1.0 },
+    { progress: 1.0, value: 45.0, outgoing_mode: "smooth", tangent_scale: 1.0 }
 ];
+let currentTiltKeyframes = [
+    { progress: 0.0, value: 0.0, outgoing_mode: "smooth", tangent_scale: 1.0 },
+    { progress: 1.0, value: 15.0, outgoing_mode: "smooth", tangent_scale: 1.0 }
+];
+let activeTrackTab = "pan"; // "pan" | "tilt"
+let selectedTrack = "pan";
+let selectedKeyframeIndex = 0;
+let curveFilter = "all";
+let curveDragState = null;
+let dryRunProgressPct = 0;
 
 // Live View & Post-Processing State
 let isLiveViewActive = false;
@@ -79,6 +89,7 @@ function goToStep(stepNum) {
         syncPlanInputs();
     } else if (stepNum === 3) {
         // Step 3: Key Poses
+        setupCurveEventListeners();
         renderKeyframeTable();
         updateTrajectoryPreview();
         updateKeyframeRigBadges();
@@ -783,7 +794,8 @@ async function onPlanSelected(planId) {
         const res = await fetch(`${API_BASE}/api/plans/${planId}`);
         if (res.ok) {
             activePlan = await res.json();
-            currentKeyframes = JSON.parse(JSON.stringify(activePlan.trajectory.keyframes));
+            currentPanKeyframes = JSON.parse(JSON.stringify(activePlan.trajectory.pan_keyframes || []));
+            currentTiltKeyframes = JSON.parse(JSON.stringify(activePlan.trajectory.tilt_keyframes || []));
             syncPlanInputs();
             renderKeyframeTable();
             updateTrajectoryPreview();
@@ -800,16 +812,21 @@ function createNewPlan() {
         name: "New Time-lapse Sequence",
         description: "",
         trajectory: {
-            keyframes: [
-                { progress: 0.0, pose: { pan_deg: 0.0, tilt_deg: 0.0 }, outgoing_mode: "smooth", tangent_scale: 1.0 },
-                { progress: 1.0, pose: { pan_deg: 30.0, tilt_deg: 10.0 }, outgoing_mode: "smooth", tangent_scale: 1.0 }
+            pan_keyframes: [
+                { progress: 0.0, value: 0.0, outgoing_mode: "smooth", tangent_scale: 1.0 },
+                { progress: 1.0, value: 45.0, outgoing_mode: "smooth", tangent_scale: 1.0 }
+            ],
+            tilt_keyframes: [
+                { progress: 0.0, value: 0.0, outgoing_mode: "smooth", tangent_scale: 1.0 },
+                { progress: 1.0, value: 15.0, outgoing_mode: "smooth", tangent_scale: 1.0 }
             ]
         },
         schedule: { total_shots: 24, interval_s: 5.0, settle_time_s: 0.5 },
         acquisition: { iso: "400", shutter_speed: "1/125", aperture: "5.6", camera_format: "JPEG" },
         preview: { iso: "3200", shutter_speed: "1/4", aperture: "2.8" }
     };
-    currentKeyframes = JSON.parse(JSON.stringify(activePlan.trajectory.keyframes));
+    currentPanKeyframes = JSON.parse(JSON.stringify(activePlan.trajectory.pan_keyframes));
+    currentTiltKeyframes = JSON.parse(JSON.stringify(activePlan.trajectory.tilt_keyframes));
     syncPlanInputs();
     renderKeyframeTable();
     updateTrajectoryPreview();
@@ -825,7 +842,7 @@ function syncPlanInputs() {
 
     document.getElementById("lblPlanId").textContent = activePlan.id ? activePlan.id.substring(0, 8) + "..." : "New";
     document.getElementById("lblPlanRevision").textContent = activePlan.revision || 1;
-    document.getElementById("lblPlanKeyframeCount").textContent = currentKeyframes.length;
+    document.getElementById("lblPlanKeyframeCount").textContent = `${currentPanKeyframes.length} Pan / ${currentTiltKeyframes.length} Tilt`;
     document.getElementById("lblPlanTotalShots").textContent = activePlan.schedule?.total_shots || 20;
 
     // Acquisition Settings Sync
@@ -852,7 +869,10 @@ async function saveCurrentPlan() {
     activePlan.schedule.interval_s = parseFloat(document.getElementById("planInterval").value) || 5.0;
     activePlan.schedule.settle_time_s = parseFloat(document.getElementById("planSettle").value) || 0.5;
 
-    activePlan.trajectory.keyframes = currentKeyframes;
+    activePlan.trajectory = {
+        pan_keyframes: currentPanKeyframes,
+        tilt_keyframes: currentTiltKeyframes
+    };
 
     activePlan.acquisition = {
         iso: document.getElementById("acqIso").value,
@@ -907,82 +927,264 @@ async function deleteCurrentPlan() {
 // 6. Step 3: Key Poses & Interactive Trajectory Visualizer
 // ==========================================================================
 
+function switchTrackTab(track) {
+    activeTrackTab = track;
+    document.getElementById("tabTrackPan")?.classList.toggle("active", track === "pan");
+    document.getElementById("tabTrackTilt")?.classList.toggle("active", track === "tilt");
+
+    const lblCap = document.getElementById("lblActiveTrackCap");
+    const lblAdd = document.getElementById("lblActiveTrackAdd");
+    if (lblCap) lblCap.textContent = track === "pan" ? "Pan" : "Tilt";
+    if (lblAdd) lblAdd.textContent = track === "pan" ? "Pan Track" : "Tilt Track";
+
+    // Auto-select first keyframe on this track if switching
+    if (selectedTrack !== track) {
+        selectedTrack = track;
+        selectedKeyframeIndex = 0;
+    }
+
+    renderKeyframeTable();
+    updateTrajectoryPreview();
+}
+
+function setCurveFilter(filter) {
+    curveFilter = filter;
+    document.getElementById("btnFilterAll")?.classList.toggle("active", filter === "all");
+    document.getElementById("btnFilterPan")?.classList.toggle("active", filter === "pan");
+    document.getElementById("btnFilterTilt")?.classList.toggle("active", filter === "tilt");
+    updateTrajectoryPreview();
+}
+
+function selectKeyframe(track, idx) {
+    const list = track === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    if (idx < 0 || idx >= list.length) return;
+    selectedTrack = track;
+    selectedKeyframeIndex = idx;
+
+    // If active track tab differs, switch to show the table
+    if (activeTrackTab !== track) {
+        activeTrackTab = track;
+        document.getElementById("tabTrackPan")?.classList.toggle("active", track === "pan");
+        document.getElementById("tabTrackTilt")?.classList.toggle("active", track === "tilt");
+        const lblCap = document.getElementById("lblActiveTrackCap");
+        const lblAdd = document.getElementById("lblActiveTrackAdd");
+        if (lblCap) lblCap.textContent = track === "pan" ? "Pan" : "Tilt";
+        if (lblAdd) lblAdd.textContent = track === "pan" ? "Pan Track" : "Tilt Track";
+    }
+
+    renderKeyframeTable();
+    updateInspectorUI();
+    updateTrajectoryPreview();
+}
+
+function updateInspectorUI() {
+    const list = selectedTrack === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    const kf = list[selectedKeyframeIndex];
+    if (!kf) return;
+
+    const isStart = selectedKeyframeIndex === 0;
+    const isEnd = selectedKeyframeIndex === list.length - 1;
+    const trackColor = selectedTrack === "pan" ? "#38bdf8" : "#34d399";
+    const trackName = selectedTrack === "pan" ? "PAN" : "TILT";
+
+    const labelEl = document.getElementById("inspLabel");
+    const timeEl = document.getElementById("inspTime");
+    const panEl = document.getElementById("inspPan");
+    const tiltEl = document.getElementById("inspTilt");
+    const progEl = document.getElementById("inspProgress");
+    const modeEl = document.getElementById("inspMode");
+    const delBtn = document.getElementById("btnInspDelete");
+
+    if (labelEl) {
+        labelEl.innerHTML = `<span style="color:${trackColor}; font-weight:bold;">[${trackName}]</span> ` + 
+            (isStart ? `Waypoint #1 (Start)` : (isEnd ? `Waypoint #${list.length} (End)` : `Waypoint #${selectedKeyframeIndex + 1}`));
+    }
+    if (timeEl) {
+        timeEl.textContent = `Progress: t = ${kf.progress.toFixed(2)} (${(kf.progress * 100).toFixed(0)}%)`;
+    }
+    if (panEl) panEl.value = (selectedTrack === "pan" ? kf.value : (currentPanKeyframes[0]?.value || 0)).toFixed(1);
+    if (tiltEl) tiltEl.value = (selectedTrack === "tilt" ? kf.value : (currentTiltKeyframes[0]?.value || 0)).toFixed(1);
+    if (progEl) {
+        progEl.value = kf.progress.toFixed(2);
+        progEl.disabled = isStart || isEnd;
+    }
+    if (modeEl) modeEl.value = kf.outgoing_mode || "smooth";
+    if (delBtn) delBtn.style.display = (isStart || isEnd) ? "none" : "inline-flex";
+}
+
+function onInspectorChange(param, val) {
+    const list = selectedTrack === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    const kf = list[selectedKeyframeIndex];
+    if (!kf) return;
+
+    if (param === "pan" && selectedTrack === "pan") {
+        kf.value = parseFloat(val) || 0.0;
+    } else if (param === "tilt" && selectedTrack === "tilt") {
+        kf.value = Math.max(0, Math.min(80, parseFloat(val) || 0.0));
+    } else if (param === "progress") {
+        if (selectedKeyframeIndex > 0 && selectedKeyframeIndex < list.length - 1) {
+            const prevP = list[selectedKeyframeIndex - 1].progress;
+            const nextP = list[selectedKeyframeIndex + 1].progress;
+            kf.progress = Math.max(prevP + 0.01, Math.min(nextP - 0.01, parseFloat(val) || 0.5));
+        }
+    } else if (param === "mode") {
+        kf.outgoing_mode = val;
+    }
+
+    renderKeyframeTable();
+    updateTrajectoryPreview();
+}
+
+function visitSelectedKeyframePose() {
+    const list = selectedTrack === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    const kf = list[selectedKeyframeIndex];
+    if (!kf) return;
+    if (selectedTrack === "pan") {
+        moveAbsolute(kf.value, latestTilt);
+    } else {
+        moveAbsolute(latestPan, kf.value);
+    }
+}
+
+function overwriteSelectedKeyframePose() {
+    const list = selectedTrack === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    const kf = list[selectedKeyframeIndex];
+    if (!kf) return;
+    kf.value = selectedTrack === "pan" ? latestPan : Math.max(0, Math.min(80, latestTilt));
+    renderKeyframeTable();
+    updateTrajectoryPreview();
+}
+
+function deleteSelectedKeyframe() {
+    deleteKeyframe(selectedTrack, selectedKeyframeIndex);
+}
+
 function renderKeyframeTable() {
     const tbody = document.getElementById("keyframeTableBody");
     if (!tbody) return;
     tbody.innerHTML = "";
 
-    // Sort by progress
-    currentKeyframes.sort((a, b) => a.progress - b.progress);
+    // Sort both tracks by progress
+    currentPanKeyframes.sort((a, b) => a.progress - b.progress);
+    if (currentPanKeyframes.length > 0) currentPanKeyframes[0].progress = 0.0;
+    if (currentPanKeyframes.length > 1) currentPanKeyframes[currentPanKeyframes.length - 1].progress = 1.0;
 
-    currentKeyframes.forEach((kf, idx) => {
+    currentTiltKeyframes.sort((a, b) => a.progress - b.progress);
+    if (currentTiltKeyframes.length > 0) currentTiltKeyframes[0].progress = 0.0;
+    if (currentTiltKeyframes.length > 1) currentTiltKeyframes[currentTiltKeyframes.length - 1].progress = 1.0;
+
+    // Update count badges
+    const panCountEl = document.getElementById("panCount");
+    const tiltCountEl = document.getElementById("tiltCount");
+    if (panCountEl) panCountEl.textContent = currentPanKeyframes.length;
+    if (tiltCountEl) tiltCountEl.textContent = currentTiltKeyframes.length;
+
+    const list = activeTrackTab === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    if (selectedTrack === activeTrackTab && selectedKeyframeIndex >= list.length) {
+        selectedKeyframeIndex = Math.max(0, list.length - 1);
+    }
+
+    list.forEach((kf, idx) => {
         const tr = document.createElement("tr");
-
         const isStart = idx === 0;
-        const isEnd = idx === currentKeyframes.length - 1;
+        const isEnd = idx === list.length - 1;
+        const isSelected = selectedTrack === activeTrackTab && idx === selectedKeyframeIndex;
+
+        if (isSelected) {
+            tr.classList.add("selected");
+        }
+
+        const badgeClass = isStart ? "start" : (isEnd ? "end" : "intermediate");
+        const trackPrefix = activeTrackTab === "pan" ? "P" : "T";
+        const badgeLabel = isStart ? `#${trackPrefix}1 START` : (isEnd ? `#${trackPrefix}${idx + 1} END` : `#${trackPrefix}${idx + 1} WAYPT`);
 
         tr.innerHTML = `
             <td>
-                <input type="number" step="0.05" min="0" max="1" value="${kf.progress.toFixed(2)}"
-                    ${isStart || isEnd ? "disabled" : ""} onchange="onKeyframeProgressChange(${idx}, this.value)">
+                <span class="keyframe-badge ${badgeClass}">${badgeLabel}</span>
             </td>
             <td>
-                <input type="number" step="0.5" value="${kf.pose.pan_deg.toFixed(1)}"
-                    onchange="onKeyframePoseChange(${idx}, 'pan', this.value)">
+                <input type="number" step="0.02" min="0" max="1" value="${kf.progress.toFixed(2)}"
+                    ${isStart || isEnd ? "disabled" : ""} 
+                    onfocus="selectKeyframe('${activeTrackTab}', ${idx})"
+                    onchange="onKeyframeProgressChange(${idx}, this.value)">
             </td>
             <td>
-                <input type="number" step="0.5" value="${kf.pose.tilt_deg.toFixed(1)}"
-                    onchange="onKeyframePoseChange(${idx}, 'tilt', this.value)">
+                <input type="number" step="0.5" value="${kf.value.toFixed(1)}"
+                    onfocus="selectKeyframe('${activeTrackTab}', ${idx})"
+                    onchange="onKeyframeValueChange(${idx}, this.value)">
             </td>
             <td>
-                <select onchange="onKeyframeModeChange(${idx}, this.value)" style="width:75px;">
+                <select onchange="onKeyframeModeChange(${idx}, this.value)" onfocus="selectKeyframe('${activeTrackTab}', ${idx})" style="width:90px;">
                     <option value="smooth" ${kf.outgoing_mode === "smooth" ? "selected" : ""}>Smooth</option>
                     <option value="linear" ${kf.outgoing_mode === "linear" ? "selected" : ""}>Linear</option>
                 </select>
             </td>
             <td>
-                <button class="btn btn-secondary btn-sm" onclick="visitKeyframePose(${idx})" title="Move Rig to this pose">🎯 Go</button>
-                <button class="btn btn-accent btn-sm" onclick="overwriteKeyframePoseWithCurrent(${idx})" title="Update with current rig angles">📍 Set</button>
-                ${!isStart && !isEnd ? `<button class="btn btn-danger btn-sm" onclick="deleteKeyframe(${idx})">✕</button>` : ""}
+                <button class="btn btn-secondary btn-xs" onclick="event.stopPropagation(); visitKeyframeAxis('${activeTrackTab}', ${idx})" title="Move ${activeTrackTab} axis to angle">🎯 Go</button>
+                <button class="btn btn-accent btn-xs" onclick="event.stopPropagation(); overwriteKeyframeWithCurrent('${activeTrackTab}', ${idx})" title="Update with current rig angle">📍 Set</button>
+                ${!isStart && !isEnd ? `<button class="btn btn-danger btn-xs" onclick="event.stopPropagation(); deleteKeyframe('${activeTrackTab}', ${idx})" title="Remove keyframe">✕</button>` : ""}
             </td>
         `;
+
+        tr.addEventListener("click", (e) => {
+            if (e.target.tagName !== "INPUT" && e.target.tagName !== "SELECT" && e.target.tagName !== "BUTTON") {
+                selectKeyframe(activeTrackTab, idx);
+            }
+        });
+
         tbody.appendChild(tr);
     });
+
+    updateInspectorUI();
 }
 
 function onKeyframeProgressChange(idx, val) {
-    currentKeyframes[idx].progress = Math.max(0.01, Math.min(0.99, parseFloat(val)));
+    const list = activeTrackTab === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    if (idx === 0 || idx === list.length - 1) return;
+    const prevP = list[idx - 1].progress;
+    const nextP = list[idx + 1].progress;
+    list[idx].progress = Math.max(prevP + 0.01, Math.min(nextP - 0.01, parseFloat(val) || 0.5));
     renderKeyframeTable();
     updateTrajectoryPreview();
 }
 
-function onKeyframePoseChange(idx, axis, val) {
-    if (axis === "pan") currentKeyframes[idx].pose.pan_deg = parseFloat(val);
-    if (axis === "tilt") currentKeyframes[idx].pose.tilt_deg = parseFloat(val);
+function onKeyframeValueChange(idx, val) {
+    const list = activeTrackTab === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    if (activeTrackTab === "pan") {
+        list[idx].value = parseFloat(val) || 0.0;
+    } else {
+        list[idx].value = Math.max(0, Math.min(80, parseFloat(val) || 0.0));
+    }
     updateTrajectoryPreview();
+    updateInspectorUI();
 }
 
 function onKeyframeModeChange(idx, mode) {
-    currentKeyframes[idx].outgoing_mode = mode;
+    const list = activeTrackTab === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    list[idx].outgoing_mode = mode;
     updateTrajectoryPreview();
+    updateInspectorUI();
 }
 
-function addCurrentPoseKeyframe() {
-    // If only 2 keyframes and start is 0, update closest or append
-    const pan = latestPan;
-    const tilt = latestTilt;
+function addCurrentAngleToActiveTrack() {
+    const isPan = activeTrackTab === "pan";
+    const currentAngle = isPan ? latestPan : Math.max(0, Math.min(80, latestTilt));
+    const list = isPan ? currentPanKeyframes : currentTiltKeyframes;
 
-    if (currentKeyframes.length === 2 && currentKeyframes[0].pose.pan_deg === 0 && currentKeyframes[0].pose.tilt_deg === 0) {
-        currentKeyframes[0].pose.pan_deg = pan;
-        currentKeyframes[0].pose.tilt_deg = tilt;
+    if (list.length === 2 && list[0].value === 0 && list[1].value === 0) {
+        list[0].value = currentAngle;
+        selectedKeyframeIndex = 0;
     } else {
-        // Add at middle
-        currentKeyframes.push({
+        const newKf = {
             progress: 0.5,
-            pose: { pan_deg: pan, tilt_deg: tilt },
+            value: currentAngle,
             outgoing_mode: "smooth",
             tangent_scale: 1.0
-        });
+        };
+        list.push(newKf);
+        list.sort((a, b) => a.progress - b.progress);
+        selectedTrack = activeTrackTab;
+        selectedKeyframeIndex = list.indexOf(newKf);
     }
 
     renderKeyframeTable();
@@ -990,126 +1192,648 @@ function addCurrentPoseKeyframe() {
 }
 
 function addNewIntermediateKeyframe() {
-    currentKeyframes.push({
-        progress: 0.5,
-        pose: { pan_deg: latestPan, tilt_deg: latestTilt },
-        outgoing_mode: "smooth",
-        tangent_scale: 1.0
-    });
-    renderKeyframeTable();
-    updateTrajectoryPreview();
-}
+    const isPan = activeTrackTab === "pan";
+    const list = isPan ? currentPanKeyframes : currentTiltKeyframes;
 
-function overwriteKeyframePoseWithCurrent(idx) {
-    currentKeyframes[idx].pose.pan_deg = latestPan;
-    currentKeyframes[idx].pose.tilt_deg = latestTilt;
-    renderKeyframeTable();
-    updateTrajectoryPreview();
-}
-
-function visitKeyframePose(idx) {
-    const kf = currentKeyframes[idx];
-    moveAbsolute(kf.pose.pan_deg, kf.pose.tilt_deg);
-}
-
-function deleteKeyframe(idx) {
-    if (idx === 0 || idx === currentKeyframes.length - 1) return;
-    currentKeyframes.splice(idx, 1);
-    renderKeyframeTable();
-    updateTrajectoryPreview();
-}
-
-// Interactive SVG Trajectory Plot
-function updateTrajectoryPreview() {
-    if (!activePlan) return;
-    const totalShots = parseInt(document.getElementById("planTotalShots").value, 10) || 20;
-
-    // Sort keyframes
-    currentKeyframes.sort((a, b) => a.progress - b.progress);
-    currentKeyframes[0].progress = 0.0;
-    currentKeyframes[currentKeyframes.length - 1].progress = 1.0;
-
-    // Sample cubic hermite trajectory locally
-    const sampled = sampleTrajectoryLocal(currentKeyframes, totalShots);
-
-    const svgW = 500;
-    const svgH = 120;
-
-    let minPan = Infinity, maxPan = -Infinity;
-    let minTilt = Infinity, maxTilt = -Infinity;
-
-    sampled.forEach(p => {
-        if (p.pan < minPan) minPan = p.pan;
-        if (p.pan > maxPan) maxPan = p.pan;
-        if (p.tilt < minTilt) minTilt = p.tilt;
-        if (p.tilt > maxTilt) maxTilt = p.tilt;
-    });
-
-    const panRange = Math.max(10, maxPan - minPan);
-    const tiltRange = Math.max(10, maxTilt - minTilt);
-
-    let panPathStr = "";
-    let tiltPathStr = "";
-
-    sampled.forEach((p, i) => {
-        const x = (i / (sampled.length - 1)) * svgW;
-        const yPan = svgH - ((p.pan - minPan) / panRange) * (svgH - 20) - 10;
-        const yTilt = svgH - ((p.tilt - minTilt) / tiltRange) * (svgH - 20) - 10;
-
-        panPathStr += (i === 0 ? `M ${x.toFixed(1)} ${yPan.toFixed(1)}` : ` L ${x.toFixed(1)} ${yPan.toFixed(1)}`);
-        tiltPathStr += (i === 0 ? `M ${x.toFixed(1)} ${yTilt.toFixed(1)}` : ` L ${x.toFixed(1)} ${yTilt.toFixed(1)}`);
-    });
-
-    const pathPanEl = document.getElementById("pathPan");
-    const pathTiltEl = document.getElementById("pathTilt");
-    if (pathPanEl) pathPanEl.setAttribute("d", panPathStr);
-    if (pathTiltEl) pathTiltEl.setAttribute("d", tiltPathStr);
-
-    const diag = document.getElementById("plotDiagnostics");
-    if (diag) {
-        diag.textContent = `ΔPan: ${(maxPan - minPan).toFixed(1)}° | ΔTilt: ${(maxTilt - minTilt).toFixed(1)}°`;
+    let targetP = 0.5;
+    if (list.length >= 2) {
+        let maxGap = 0;
+        let bestP = 0.5;
+        for (let i = 0; i < list.length - 1; i++) {
+            const gap = list[i + 1].progress - list[i].progress;
+            if (gap > maxGap) {
+                maxGap = gap;
+                bestP = (list[i].progress + list[i + 1].progress) / 2;
+            }
+        }
+        targetP = Math.round(bestP * 100) / 100;
     }
 
-    updateTimingCalculations();
+    const sampled = sampleTrackSpline(list, 100);
+    let sampleVal = isPan ? latestPan : latestTilt;
+    if (sampled.length > 0) {
+        const sIdx = Math.min(sampled.length - 1, Math.floor(targetP * (sampled.length - 1)));
+        sampleVal = sampled[sIdx].val;
+    }
+
+    const newKf = {
+        progress: targetP,
+        value: Math.round(sampleVal * 10) / 10,
+        outgoing_mode: "smooth",
+        tangent_scale: 1.0
+    };
+    list.push(newKf);
+    list.sort((a, b) => a.progress - b.progress);
+    selectedTrack = activeTrackTab;
+    selectedKeyframeIndex = list.indexOf(newKf);
+
+    renderKeyframeTable();
+    updateTrajectoryPreview();
 }
 
-function sampleTrajectoryLocal(keyframes, count) {
+function overwriteKeyframeWithCurrent(track, idx) {
+    const list = track === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    if (idx < 0 || idx >= list.length) return;
+    list[idx].value = track === "pan" ? latestPan : Math.max(0, Math.min(80, latestTilt));
+    renderKeyframeTable();
+    updateTrajectoryPreview();
+}
+
+function visitKeyframeAxis(track, idx) {
+    const list = track === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    if (idx < 0 || idx >= list.length) return;
+    const kf = list[idx];
+    if (track === "pan") {
+        moveAbsolute(kf.value, latestTilt);
+    } else {
+        moveAbsolute(latestPan, kf.value);
+    }
+}
+
+function deleteKeyframe(track, idx) {
+    const list = track === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+    if (idx === 0 || idx === list.length - 1) return;
+    list.splice(idx, 1);
+    if (selectedTrack === track && selectedKeyframeIndex >= list.length) {
+        selectedKeyframeIndex = list.length - 1;
+    }
+    renderKeyframeTable();
+    updateTrajectoryPreview();
+}
+
+// --------------------------------------------------------------------------
+// Hermite Spline Sampling Algorithm for Independent Axis Tracks
+// --------------------------------------------------------------------------
+
+function calculateTrackTangents(keyframes) {
+    const num = keyframes.length;
+    return keyframes.map((kf, i) => {
+        const scale = kf.tangent_scale !== undefined ? kf.tangent_scale : 1.0;
+        if (scale === 0.0) return 0.0;
+        if (i === 0) {
+            const dt = keyframes[1].progress - keyframes[0].progress;
+            return dt > 0 ? ((keyframes[1].value - keyframes[0].value) / dt) * scale : 0.0;
+        }
+        if (i === num - 1) {
+            const dt = keyframes[num - 1].progress - keyframes[num - 2].progress;
+            return dt > 0 ? ((keyframes[num - 1].value - keyframes[num - 2].value) / dt) * scale : 0.0;
+        }
+        const dt = keyframes[i + 1].progress - keyframes[i - 1].progress;
+        return dt > 0 ? ((keyframes[i + 1].value - keyframes[i - 1].value) / dt) * scale : 0.0;
+    });
+}
+
+function sampleTrackSpline(keyframes, count) {
+    if (!keyframes || keyframes.length === 0) return [];
+    if (keyframes.length === 1) {
+        return Array(count).fill({ val: keyframes[0].value, t: 0 });
+    }
+
+    const tangents = calculateTrackTangents(keyframes);
     const points = [];
+
     for (let i = 0; i < count; i++) {
-        const t = i / (count - 1);
-        // Find segment
+        const t = count > 1 ? i / (count - 1) : 0.0;
+        
         let seg = 0;
-        while (seg < keyframes.length - 2 && keyframes[seg + 1].progress < t) seg++;
+        for (let s = 0; s < keyframes.length - 1; s++) {
+            if (keyframes[s].progress <= t) seg = s;
+            if (keyframes[s + 1].progress >= t) break;
+        }
+        if (seg >= keyframes.length - 1) seg = keyframes.length - 2;
 
-        const k0 = keyframes[seg];
-        const k1 = keyframes[seg + 1];
-        const localT = (t - k0.progress) / Math.max(1e-5, (k1.progress - k0.progress));
+        const kfA = keyframes[seg];
+        const kfB = keyframes[seg + 1];
+        const h = kfB.progress - kfA.progress;
+        const u = h > 0 ? Math.max(0, Math.min(1, (t - kfA.progress) / h)) : 0;
 
-        if (k0.outgoing_mode === "linear") {
+        if (kfA.outgoing_mode === "linear") {
             points.push({
-                pan: k0.pose.pan_deg + (k1.pose.pan_deg - k0.pose.pan_deg) * localT,
-                tilt: k0.pose.tilt_deg + (k1.pose.tilt_deg - k0.pose.tilt_deg) * localT
+                val: kfA.value + u * (kfB.value - kfA.value),
+                t: t
             });
         } else {
-            // Cubic Hermite smooth
-            const h00 = (1 + 2 * localT) * Math.pow(1 - localT, 2);
-            const h10 = localT * Math.pow(1 - localT, 2);
-            const h01 = Math.pow(localT, 2) * (3 - 2 * localT);
-            const h11 = Math.pow(localT, 2) * (localT - 1);
+            const h00 = 2 * Math.pow(u, 3) - 3 * Math.pow(u, 2) + 1;
+            const h10 = Math.pow(u, 3) - 2 * Math.pow(u, 2) + u;
+            const h01 = -2 * Math.pow(u, 3) + 3 * Math.pow(u, 2);
+            const h11 = Math.pow(u, 3) - Math.pow(u, 2);
 
-            const dPan = (k1.pose.pan_deg - k0.pose.pan_deg);
-            const dTilt = (k1.pose.tilt_deg - k0.pose.tilt_deg);
-
-            points.push({
-                pan: h00 * k0.pose.pan_deg + h10 * dPan + h01 * k1.pose.pan_deg + h11 * dPan,
-                tilt: h00 * k0.pose.tilt_deg + h10 * dTilt + h01 * k1.pose.tilt_deg + h11 * dTilt
-            });
+            const val = h00 * kfA.value + h10 * h * tangents[seg] + h01 * kfB.value + h11 * h * tangents[seg + 1];
+            points.push({ val, t });
         }
     }
     return points;
 }
 
-// Dry Run Rehearsal
+// --------------------------------------------------------------------------
+// Interactive SVG Trajectory Plot Drawing & View Update
+// --------------------------------------------------------------------------
+
+function updateTrajectoryPreview() {
+    if (!currentPanKeyframes || currentPanKeyframes.length < 2 || !currentTiltKeyframes || currentTiltKeyframes.length < 2) return;
+    const totalShots = parseInt(document.getElementById("planTotalShots")?.value, 10) || 20;
+
+    // Sample high-density curve points for each track independently
+    const sampledPan = sampleTrackSpline(currentPanKeyframes, 120);
+    const sampledTilt = sampleTrackSpline(currentTiltKeyframes, 120);
+
+    const svgW = 640;
+    const svgH = 250;
+    const padL = 55;
+    const padR = 25;
+    const padT = 25;
+    const padB = 40;
+    const plotW = svgW - padL - padR;
+    const plotH = svgH - padT - padB;
+
+    // Calculate dynamic degrees range across both tracks
+    let minPan = Infinity, maxPan = -Infinity;
+    let minTilt = Infinity, maxTilt = -Infinity;
+
+    sampledPan.forEach(p => {
+        if (p.val < minPan) minPan = p.val;
+        if (p.val > maxPan) maxPan = p.val;
+    });
+    currentPanKeyframes.forEach(kf => {
+        if (kf.value < minPan) minPan = kf.value;
+        if (kf.value > maxPan) maxPan = kf.value;
+    });
+
+    sampledTilt.forEach(p => {
+        if (p.val < minTilt) minTilt = p.val;
+        if (p.val > maxTilt) maxTilt = p.val;
+    });
+    currentTiltKeyframes.forEach(kf => {
+        if (kf.value < minTilt) minTilt = kf.value;
+        if (kf.value > maxTilt) maxTilt = kf.value;
+    });
+
+    let degMin = Math.min(minPan, minTilt, 0);
+    let degMax = Math.max(maxPan, maxTilt, 10);
+    let degSpan = Math.max(20, degMax - degMin);
+    let padDeg = degSpan * 0.12;
+    let yMin = degMin - padDeg;
+    let yMax = degMax + padDeg;
+    let yRange = yMax - yMin;
+
+    // Coordinate conversion closures
+    const pToX = (p) => padL + Math.max(0, Math.min(1, p)) * plotW;
+    const degToY = (d) => padT + plotH - ((d - yMin) / yRange) * plotH;
+
+    // 1. Draw Grid & Axes
+    const svgGrid = document.getElementById("svgGrid");
+    const svgZero = document.getElementById("svgZeroLine");
+    const svgAxes = document.getElementById("svgAxes");
+
+    if (svgGrid) {
+        let gridHtml = "";
+        const ticksCount = 4;
+        for (let i = 0; i <= ticksCount; i++) {
+            const frac = i / ticksCount;
+            const degVal = yMin + frac * yRange;
+            const y = degToY(degVal);
+            gridHtml += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${svgW - padR}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3 3"/>`;
+        }
+        const timeTicks = [0.0, 0.25, 0.5, 0.75, 1.0];
+        timeTicks.forEach(t => {
+            const x = pToX(t);
+            gridHtml += `<line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3 3"/>`;
+        });
+        svgGrid.innerHTML = gridHtml;
+    }
+
+    if (svgZero) {
+        if (0 >= yMin && 0 <= yMax) {
+            const y0 = degToY(0);
+            svgZero.innerHTML = `<line x1="${padL}" y1="${y0.toFixed(1)}" x2="${svgW - padR}" y2="${y0.toFixed(1)}" stroke="rgba(255,255,255,0.22)" stroke-dasharray="4 2"/>
+                                 <text x="${padL - 6}" y="${(y0 + 3).toFixed(1)}" text-anchor="end" class="svg-axis-text" fill="#94a3b8">0°</text>`;
+        } else {
+            svgZero.innerHTML = "";
+        }
+    }
+
+    if (svgAxes) {
+        let axesHtml = "";
+        const ticksCount = 4;
+        for (let i = 0; i <= ticksCount; i++) {
+            const frac = i / ticksCount;
+            const degVal = yMin + frac * yRange;
+            const y = degToY(degVal);
+            if (Math.abs(degVal) > 1.0 || !(0 >= yMin && 0 <= yMax)) {
+                axesHtml += `<text x="${padL - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end" class="svg-axis-text">${degVal.toFixed(0)}°</text>`;
+            }
+        }
+        const timeLabels = [
+            { t: 0.0, label: "0% [t=0.0]" },
+            { t: 0.25, label: "25%" },
+            { t: 0.50, label: "50%" },
+            { t: 0.75, label: "75%" },
+            { t: 1.0, label: "100% [t=1.0]" }
+        ];
+        timeLabels.forEach(tl => {
+            const x = pToX(tl.t);
+            const shotNum = Math.max(1, Math.round(tl.t * (totalShots - 1) + 1));
+            axesHtml += `<text x="${x.toFixed(1)}" y="${padT + plotH + 15}" text-anchor="middle" class="svg-axis-text">${tl.label}</text>`;
+            axesHtml += `<text x="${x.toFixed(1)}" y="${padT + plotH + 28}" text-anchor="middle" class="svg-axis-text" fill="#475569" font-size="8.5">S#${shotNum}</text>`;
+        });
+        svgAxes.innerHTML = axesHtml;
+    }
+
+    // 2. Generate Curve Paths
+    let panPathStr = "";
+    let tiltPathStr = "";
+
+    sampledPan.forEach((p, i) => {
+        const x = pToX(p.t);
+        const yPan = degToY(p.val);
+        panPathStr += (i === 0 ? `M ${x.toFixed(1)} ${yPan.toFixed(1)}` : ` L ${x.toFixed(1)} ${yPan.toFixed(1)}`);
+    });
+
+    sampledTilt.forEach((p, i) => {
+        const x = pToX(p.t);
+        const yTilt = degToY(p.val);
+        tiltPathStr += (i === 0 ? `M ${x.toFixed(1)} ${yTilt.toFixed(1)}` : ` L ${x.toFixed(1)} ${yTilt.toFixed(1)}`);
+    });
+
+    const pathPanEl = document.getElementById("pathPan");
+    const pathTiltEl = document.getElementById("pathTilt");
+
+    if (pathPanEl) {
+        pathPanEl.setAttribute("d", panPathStr);
+        pathPanEl.style.display = (curveFilter === "tilt") ? "none" : "block";
+    }
+    if (pathTiltEl) {
+        pathTiltEl.setAttribute("d", tiltPathStr);
+        pathTiltEl.style.display = (curveFilter === "pan") ? "none" : "block";
+    }
+
+    // 3. Generate Stems & Independent Waypoint Time Handles
+    const svgStems = document.getElementById("svgStems");
+    if (svgStems) {
+        let stemsHtml = "";
+
+        // Pan stems (Cyan)
+        if (curveFilter !== "tilt") {
+            currentPanKeyframes.forEach((kf, idx) => {
+                const x = pToX(kf.progress);
+                const isSel = selectedTrack === "pan" && idx === selectedKeyframeIndex;
+                const stemColor = isSel ? "rgba(56, 189, 248, 0.7)" : "rgba(56, 189, 248, 0.25)";
+                const tagBg = isSel ? "#0284c7" : "rgba(15, 23, 42, 0.9)";
+                const tagBorder = isSel ? "#38bdf8" : "#0284c7";
+                const isEndpoint = idx === 0 || idx === currentPanKeyframes.length - 1;
+
+                stemsHtml += `
+                    <g class="svg-stem-group" data-track="pan" data-kidx="${idx}">
+                        <line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${padT + plotH}" stroke="${stemColor}" stroke-dasharray="3 3" stroke-width="${isSel ? 1.5 : 1}"/>
+                        <g class="svg-time-handle" data-track="pan" data-type="time" data-kidx="${idx}" style="cursor: ${isEndpoint ? 'pointer' : 'ew-resize'};">
+                            <rect x="${(x - 22).toFixed(1)}" y="${padT + plotH + 4}" width="44" height="15" rx="3" fill="${tagBg}" stroke="${tagBorder}" stroke-width="1"/>
+                            <text x="${x.toFixed(1)}" y="${padT + plotH + 15}" text-anchor="middle" font-size="8.5" font-family="monospace" font-weight="bold" fill="#38bdf8">
+                                #P${idx + 1} ${(kf.progress * 100).toFixed(0)}%
+                            </text>
+                        </g>
+                    </g>
+                `;
+            });
+        }
+
+        // Tilt stems (Emerald)
+        if (curveFilter !== "pan") {
+            currentTiltKeyframes.forEach((kf, idx) => {
+                const x = pToX(kf.progress);
+                const isSel = selectedTrack === "tilt" && idx === selectedKeyframeIndex;
+                const stemColor = isSel ? "rgba(52, 211, 153, 0.7)" : "rgba(52, 211, 153, 0.25)";
+                const tagBg = isSel ? "#059669" : "rgba(15, 23, 42, 0.9)";
+                const tagBorder = isSel ? "#34d399" : "#059669";
+                const isEndpoint = idx === 0 || idx === currentTiltKeyframes.length - 1;
+
+                stemsHtml += `
+                    <g class="svg-stem-group" data-track="tilt" data-kidx="${idx}">
+                        <line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${padT + plotH}" stroke="${stemColor}" stroke-dasharray="3 3" stroke-width="${isSel ? 1.5 : 1}"/>
+                        <g class="svg-time-handle" data-track="tilt" data-type="time" data-kidx="${idx}" style="cursor: ${isEndpoint ? 'pointer' : 'ew-resize'};">
+                            <rect x="${(x - 22).toFixed(1)}" y="${padT + plotH + 20}" width="44" height="15" rx="3" fill="${tagBg}" stroke="${tagBorder}" stroke-width="1"/>
+                            <text x="${x.toFixed(1)}" y="${padT + plotH + 31}" text-anchor="middle" font-size="8.5" font-family="monospace" font-weight="bold" fill="#34d399">
+                                #T${idx + 1} ${(kf.progress * 100).toFixed(0)}%
+                            </text>
+                        </g>
+                    </g>
+                `;
+            });
+        }
+
+        svgStems.innerHTML = stemsHtml;
+    }
+
+    // 4. Generate Interactive Keyframe Nodes
+    const svgNodes = document.getElementById("svgNodes");
+    if (svgNodes) {
+        let nodesHtml = "";
+
+        // Pan Nodes (Cyan)
+        if (curveFilter !== "tilt") {
+            currentPanKeyframes.forEach((kf, idx) => {
+                const x = pToX(kf.progress);
+                const yPan = degToY(kf.value);
+                const isSel = selectedTrack === "pan" && idx === selectedKeyframeIndex;
+
+                nodesHtml += `
+                    <g class="svg-node-group" data-track="pan" data-type="pan" data-kidx="${idx}">
+                        ${isSel ? `<circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="11" fill="none" stroke="#38bdf8" stroke-width="2" stroke-dasharray="3 2" opacity="0.9"/>` : ""}
+                        <circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="15" fill="transparent" class="svg-curve-node" data-track="pan" data-type="pan" data-kidx="${idx}"/>
+                        <circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="${isSel ? 7 : 5.5}" fill="#38bdf8" stroke="#020617" stroke-width="2"/>
+                        <text x="${x.toFixed(1)}" y="${(yPan - 9).toFixed(1)}" text-anchor="middle" font-size="8.5" font-family="monospace" font-weight="bold" fill="#38bdf8">
+                            ${kf.value.toFixed(1)}°
+                        </text>
+                    </g>
+                `;
+            });
+        }
+
+        // Tilt Nodes (Emerald)
+        if (curveFilter !== "pan") {
+            currentTiltKeyframes.forEach((kf, idx) => {
+                const x = pToX(kf.progress);
+                const yTilt = degToY(kf.value);
+                const isSel = selectedTrack === "tilt" && idx === selectedKeyframeIndex;
+
+                nodesHtml += `
+                    <g class="svg-node-group" data-track="tilt" data-type="tilt" data-kidx="${idx}">
+                        ${isSel ? `<circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="11" fill="none" stroke="#34d399" stroke-width="2" stroke-dasharray="3 2" opacity="0.9"/>` : ""}
+                        <circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="15" fill="transparent" class="svg-curve-node" data-track="tilt" data-type="tilt" data-kidx="${idx}"/>
+                        <circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="${isSel ? 7 : 5.5}" fill="#34d399" stroke="#020617" stroke-width="2"/>
+                        <text x="${x.toFixed(1)}" y="${(yTilt - 9).toFixed(1)}" text-anchor="middle" font-size="8.5" font-family="monospace" font-weight="bold" fill="#34d399">
+                            ${kf.value.toFixed(1)}°
+                        </text>
+                    </g>
+                `;
+            });
+        }
+
+        svgNodes.innerHTML = nodesHtml;
+    }
+
+    // 5. Rehearsal Playhead Marker
+    const svgPlayhead = document.getElementById("svgPlayhead");
+    if (svgPlayhead) {
+        if (dryRunActive && dryRunProgressPct > 0) {
+            const playX = pToX(dryRunProgressPct / 100);
+            svgPlayhead.style.display = "block";
+            svgPlayhead.innerHTML = `
+                <line x1="${playX.toFixed(1)}" y1="${padT}" x2="${playX.toFixed(1)}" y2="${padT + plotH}" stroke="#f59e0b" stroke-width="2"/>
+                <polygon points="${(playX - 5).toFixed(1)},${padT} ${(playX + 5).toFixed(1)},${padT} ${playX.toFixed(1)},${padT + 8}" fill="#f59e0b"/>
+            `;
+        } else {
+            svgPlayhead.style.display = "none";
+        }
+    }
+
+    // 6. Diagnostics Text
+    const diag = document.getElementById("plotDiagnostics");
+    if (diag) {
+        diag.textContent = `ΔPan: ${(maxPan - minPan).toFixed(1)}° | ΔTilt: ${(maxTilt - minTilt).toFixed(1)}° | Shots: ${totalShots}`;
+    }
+
+    updateTimingCalculations();
+}
+
+// --------------------------------------------------------------------------
+// Direct Manipulation & Drag-and-Drop Controller (Adobe Premiere Style)
+// --------------------------------------------------------------------------
+
+function setupCurveEventListeners() {
+    const svg = document.getElementById("svgPlot");
+    const tooltip = document.getElementById("curveTooltip");
+    if (!svg || svg.dataset.listenerAttached) return;
+    svg.dataset.listenerAttached = "true";
+
+    const getSvgCoords = (e) => {
+        const pt = svg.createSVGPoint();
+        pt.x = e.clientX;
+        pt.y = e.clientY;
+        return pt.matrixTransform(svg.getScreenCTM().inverse());
+    };
+
+    const getBounds = () => {
+        const sampledPan = sampleTrackSpline(currentPanKeyframes, 100);
+        const sampledTilt = sampleTrackSpline(currentTiltKeyframes, 100);
+        let minPan = Infinity, maxPan = -Infinity;
+        let minTilt = Infinity, maxTilt = -Infinity;
+
+        sampledPan.forEach(p => {
+            if (p.val < minPan) minPan = p.val;
+            if (p.val > maxPan) maxPan = p.val;
+        });
+        currentPanKeyframes.forEach(kf => {
+            if (kf.value < minPan) minPan = kf.value;
+            if (kf.value > maxPan) maxPan = kf.value;
+        });
+
+        sampledTilt.forEach(p => {
+            if (p.val < minTilt) minTilt = p.val;
+            if (p.val > maxTilt) maxTilt = p.val;
+        });
+        currentTiltKeyframes.forEach(kf => {
+            if (kf.value < minTilt) minTilt = kf.value;
+            if (kf.value > maxTilt) maxTilt = kf.value;
+        });
+
+        let degMin = Math.min(minPan, minTilt, 0);
+        let degMax = Math.max(maxPan, maxTilt, 10);
+        let degSpan = Math.max(20, degMax - degMin);
+        let padDeg = degSpan * 0.12;
+        return {
+            yMin: degMin - padDeg,
+            yMax: degMax + padDeg,
+            yRange: (degMax + padDeg) - (degMin - padDeg),
+            padL: 55,
+            padR: 25,
+            padT: 25,
+            padB: 40,
+            plotW: 640 - 55 - 25,
+            plotH: 250 - 25 - 40
+        };
+    };
+
+    // Pointer Down (Start Drag / Select)
+    svg.addEventListener("pointerdown", (e) => {
+        const target = e.target.closest("[data-track]");
+        if (!target) return;
+
+        const track = target.getAttribute("data-track");
+        const type = target.getAttribute("data-type") || track;
+        const kidx = parseInt(target.getAttribute("data-kidx"), 10);
+        const list = track === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+        if (isNaN(kidx) || kidx < 0 || kidx >= list.length) return;
+
+        svg.setPointerCapture(e.pointerId);
+        const svgCoords = getSvgCoords(e);
+
+        curveDragState = {
+            pointerId: e.pointerId,
+            track: track, // 'pan' or 'tilt'
+            type: type,   // 'pan', 'tilt', or 'time'
+            kidx: kidx,
+            startX: svgCoords.x,
+            startY: svgCoords.y,
+            origProgress: list[kidx].progress,
+            origValue: list[kidx].value
+        };
+
+        selectKeyframe(track, kidx);
+    });
+
+    // Pointer Move (Live Drag & Tooltip)
+    svg.addEventListener("pointermove", (e) => {
+        const svgCoords = getSvgCoords(e);
+        const b = getBounds();
+
+        if (curveDragState && e.pointerId === curveDragState.pointerId) {
+            const track = curveDragState.track;
+            const list = track === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+            const kidx = curveDragState.kidx;
+            const kf = list[kidx];
+            const isStart = kidx === 0;
+            const isEnd = kidx === list.length - 1;
+            const isIntermediate = !isStart && !isEnd;
+
+            // 1. Horizontal Progress Dragging (Time axis)
+            if (isIntermediate) {
+                const prevP = list[kidx - 1].progress;
+                const nextP = list[kidx + 1].progress;
+                const rawP = (svgCoords.x - b.padL) / b.plotW;
+                kf.progress = Math.max(prevP + 0.015, Math.min(nextP - 0.015, Math.round(rawP * 1000) / 1000));
+            }
+
+            // 2. Vertical Value Dragging (Angle axis)
+            if (curveDragState.type === "pan" || curveDragState.type === "tilt") {
+                const rawDeg = b.yMin + ((b.padT + b.plotH - svgCoords.y) / b.plotH) * b.yRange;
+                if (track === "pan") {
+                    kf.value = Math.round(rawDeg * 2) / 2; // Snap to 0.5°
+                } else {
+                    kf.value = Math.max(0, Math.min(80, Math.round(rawDeg * 2) / 2)); // Clamped 0-80°
+                }
+            }
+
+            // Fast preview redraw
+            updateTrajectoryPreview();
+            updateInspectorUI();
+
+            // Floating Tooltip HUD
+            if (tooltip) {
+                const rect = svg.getBoundingClientRect();
+                const totalShots = parseInt(document.getElementById("planTotalShots")?.value, 10) || 20;
+                const shotNum = Math.max(1, Math.round(kf.progress * (totalShots - 1) + 1));
+                const trackColor = track === "pan" ? "#38bdf8" : "#34d399";
+                const trackName = track === "pan" ? "PAN" : "TILT";
+                
+                tooltip.style.display = "block";
+                tooltip.style.left = `${e.clientX - rect.left}px`;
+                tooltip.style.top = `${e.clientY - rect.top - 12}px`;
+                tooltip.innerHTML = `
+                    <div style="font-weight:bold; color:${trackColor};">${trackName} WAYPOINT #${kidx + 1} (${kf.outgoing_mode.toUpperCase()})</div>
+                    <div>Time: <strong>${(kf.progress * 100).toFixed(0)}%</strong> (t = ${kf.progress.toFixed(2)}, Shot ${shotNum}/${totalShots})</div>
+                    <div>Angle: <strong style="color:${trackColor};">${kf.value.toFixed(1)}°</strong></div>
+                `;
+            }
+        } else {
+            // Hover Tooltip on Nodes
+            const target = e.target.closest("[data-track]");
+            if (target && tooltip) {
+                const track = target.getAttribute("data-track");
+                const kidx = parseInt(target.getAttribute("data-kidx"), 10);
+                const list = track === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+                const kf = list && list[kidx];
+                if (kf) {
+                    const rect = svg.getBoundingClientRect();
+                    const totalShots = parseInt(document.getElementById("planTotalShots")?.value, 10) || 20;
+                    const shotNum = Math.max(1, Math.round(kf.progress * (totalShots - 1) + 1));
+                    const trackColor = track === "pan" ? "#38bdf8" : "#34d399";
+                    const trackName = track === "pan" ? "PAN" : "TILT";
+                    
+                    tooltip.style.display = "block";
+                    tooltip.style.left = `${e.clientX - rect.left}px`;
+                    tooltip.style.top = `${e.clientY - rect.top - 12}px`;
+                    tooltip.innerHTML = `
+                        <div style="font-weight:bold; color:${trackColor};">${trackName} WAYPOINT #${kidx + 1}</div>
+                        <div>Time: <strong>${(kf.progress * 100).toFixed(0)}%</strong> (t = ${kf.progress.toFixed(2)}, Shot ${shotNum})</div>
+                        <div>Angle: <strong style="color:${trackColor};">${kf.value.toFixed(1)}°</strong></div>
+                    `;
+                }
+            } else if (tooltip && !curveDragState) {
+                tooltip.style.display = "none";
+            }
+        }
+    });
+
+    // Pointer Up (Finalize Drag)
+    const endDrag = (e) => {
+        if (curveDragState && e.pointerId === curveDragState.pointerId) {
+            try { svg.releasePointerCapture(e.pointerId); } catch (err) {}
+            curveDragState = null;
+            renderKeyframeTable();
+            updateTrajectoryPreview();
+            if (tooltip) tooltip.style.display = "none";
+        }
+    };
+
+    svg.addEventListener("pointerup", endDrag);
+    svg.addEventListener("pointercancel", endDrag);
+    svg.addEventListener("pointerleave", () => {
+        if (!curveDragState && tooltip) tooltip.style.display = "none";
+    });
+
+    // Double-Click to Add Waypoint on Curve
+    svg.addEventListener("dblclick", (e) => {
+        const svgCoords = getSvgCoords(e);
+        const b = getBounds();
+        const rawP = (svgCoords.x - b.padL) / b.plotW;
+        const clickT = Math.max(0.05, Math.min(0.95, Math.round(rawP * 100) / 100));
+
+        let chosenTrack = "pan";
+        if (curveFilter === "pan") {
+            chosenTrack = "pan";
+        } else if (curveFilter === "tilt") {
+            chosenTrack = "tilt";
+        } else {
+            // Find which curve is closer to click Y
+            const sampledPan = sampleTrackSpline(currentPanKeyframes, 100);
+            const sampledTilt = sampleTrackSpline(currentTiltKeyframes, 100);
+            const pIdx = Math.min(sampledPan.length - 1, Math.floor(clickT * (sampledPan.length - 1)));
+            const tIdx = Math.min(sampledTilt.length - 1, Math.floor(clickT * (sampledTilt.length - 1)));
+            const yPan = b.padT + b.plotH - ((sampledPan[pIdx].val - b.yMin) / b.yRange) * b.plotH;
+            const yTilt = b.padT + b.plotH - ((sampledTilt[tIdx].val - b.yMin) / b.yRange) * b.plotH;
+
+            chosenTrack = Math.abs(svgCoords.y - yPan) <= Math.abs(svgCoords.y - yTilt) ? "pan" : "tilt";
+        }
+
+        const list = chosenTrack === "pan" ? currentPanKeyframes : currentTiltKeyframes;
+        const sampled = sampleTrackSpline(list, 100);
+        let sampleVal = chosenTrack === "pan" ? latestPan : latestTilt;
+        if (sampled.length > 0) {
+            const sIdx = Math.min(sampled.length - 1, Math.floor(clickT * (sampled.length - 1)));
+            sampleVal = sampled[sIdx].val;
+        }
+
+        const newKf = {
+            progress: clickT,
+            value: Math.round(sampleVal * 10) / 10,
+            outgoing_mode: "smooth",
+            tangent_scale: 1.0
+        };
+
+        list.push(newKf);
+        list.sort((a, b) => a.progress - b.progress);
+        selectedTrack = chosenTrack;
+        selectedKeyframeIndex = list.indexOf(newKf);
+
+        renderKeyframeTable();
+        updateTrajectoryPreview();
+    });
+}
+
+// --------------------------------------------------------------------------
+// Dry Run Rehearsal Controls
+// --------------------------------------------------------------------------
+
 async function startDryRun() {
     if (!activePlan) {
         alert("Please save your sequence plan first.");
@@ -1135,12 +1859,15 @@ async function cancelDryRun() {
     try {
         await fetch(`${API_BASE}/api/plans/${activePlan.id}/dry-run/cancel`, { method: "POST" });
         dryRunActive = false;
+        dryRunProgressPct = 0;
+        updateTrajectoryPreview();
     } catch (e) {}
 }
 
 function updateDryRunTelemetry(dr) {
     if (!dr) return;
-    const pct = (dr.progress_pct ?? 0).toFixed(0);
+    dryRunProgressPct = dr.progress_pct ?? 0;
+    const pct = dryRunProgressPct.toFixed(0);
     const pBar = document.getElementById("dryRunProgressBar");
     const pText = document.getElementById("dryRunValPct");
     const shotText = document.getElementById("dryRunValShot");
@@ -1154,14 +1881,19 @@ function updateDryRunTelemetry(dr) {
         if (dr.state === "COMPLETED") {
             badge.textContent = "Clearance: VERIFIED OK";
             badge.className = "badge success";
+            dryRunActive = false;
         } else if (dr.state === "RUNNING") {
             badge.textContent = "Clearance: REHEARSING...";
             badge.className = "badge";
+            dryRunActive = true;
         } else if (dr.state === "ERROR") {
             badge.textContent = "Clearance: ERROR";
             badge.className = "badge danger";
+            dryRunActive = false;
         }
     }
+
+    updateTrajectoryPreview();
 }
 
 // ==========================================================================
@@ -1310,11 +2042,11 @@ function updatePreFlightChecklist() {
     // 4. Trajectory
     const chkTraj = document.getElementById("chkTrajectory");
     if (chkTraj) {
-        const ok = currentKeyframes && currentKeyframes.length >= 2;
+        const ok = currentPanKeyframes && currentPanKeyframes.length >= 2 && currentTiltKeyframes && currentTiltKeyframes.length >= 2;
         chkTraj.className = ok ? "passed" : "failed";
         chkTraj.innerHTML = ok
-            ? '<span class="chk-icon">✅</span> Trajectory Verified (2+ Keyframes)'
-            : '<span class="chk-icon">❌</span> Trajectory Requires At Least 2 Keyframes';
+            ? '<span class="chk-icon">✅</span> Trajectory Verified (2+ Keyframes on Pan & Tilt)'
+            : '<span class="chk-icon">❌</span> Trajectory Requires At Least 2 Keyframes per Track';
     }
 }
 
@@ -1335,6 +2067,11 @@ async function startSequenceExecution() {
     const interval = activePlan?.schedule?.interval_s || 5.0;
     const settle = activePlan?.schedule?.settle_time_s || 0.5;
 
+    const startPan = currentPanKeyframes[0]?.value || 0;
+    const endPan = currentPanKeyframes[currentPanKeyframes.length - 1]?.value || 0;
+    const startTilt = currentTiltKeyframes[0]?.value || 0;
+    const endTilt = currentTiltKeyframes[currentTiltKeyframes.length - 1]?.value || 0;
+
     try {
         const res = await fetch(`${API_BASE}/api/timelapse/start`, {
             method: "POST",
@@ -1343,8 +2080,8 @@ async function startSequenceExecution() {
                 total_shots: total,
                 interval_s: interval,
                 pause_s: settle,
-                pan_step: (currentKeyframes[currentKeyframes.length - 1].pose.pan_deg - currentKeyframes[0].pose.pan_deg) / Math.max(1, total - 1),
-                tilt_step: (currentKeyframes[currentKeyframes.length - 1].pose.tilt_deg - currentKeyframes[0].pose.tilt_deg) / Math.max(1, total - 1),
+                pan_step: (endPan - startPan) / Math.max(1, total - 1),
+                tilt_step: (endTilt - startTilt) / Math.max(1, total - 1),
                 capture: true
             })
         });
@@ -1489,6 +2226,7 @@ function closeImageZoomModal() {
 
 window.addEventListener("DOMContentLoaded", async () => {
     initSSE();
+    setupCurveEventListeners();
     await loadPlansList();
     goToStep(1);
 

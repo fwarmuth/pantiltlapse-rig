@@ -3,14 +3,20 @@ from uuid import uuid4
 
 import pytest
 
-from domain.models import Keyframe, Pose, Schedule, SequencePlan, Trajectory, TransitionMode
+from domain.models import AxisKeyframe, Schedule, SequencePlan, Trajectory, TransitionMode
 from storage import JsonlWriter, PlanStore
 
 
 def create_sample_plan(name: str = "Test Plan") -> SequencePlan:
-    kf1 = Keyframe(progress=0.0, pose=Pose(pan_deg=0.0, tilt_deg=0.0), outgoing_mode=TransitionMode.LINEAR)
-    kf2 = Keyframe(progress=1.0, pose=Pose(pan_deg=90.0, tilt_deg=45.0), outgoing_mode=TransitionMode.SMOOTH)
-    traj = Trajectory(keyframes=[kf1, kf2])
+    pan_kfs = [
+        AxisKeyframe(progress=0.0, value=0.0, outgoing_mode=TransitionMode.LINEAR),
+        AxisKeyframe(progress=1.0, value=90.0, outgoing_mode=TransitionMode.SMOOTH),
+    ]
+    tilt_kfs = [
+        AxisKeyframe(progress=0.0, value=0.0, outgoing_mode=TransitionMode.LINEAR),
+        AxisKeyframe(progress=1.0, value=45.0, outgoing_mode=TransitionMode.SMOOTH),
+    ]
+    traj = Trajectory(pan_keyframes=pan_kfs, tilt_keyframes=tilt_kfs)
     sched = Schedule(total_shots=10, interval_s=5.0)
     return SequencePlan(name=name, trajectory=traj, schedule=sched)
 

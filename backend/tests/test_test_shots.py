@@ -1,22 +1,19 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from domain.models import Keyframe, Pose, Schedule, SequencePlan, Trajectory, TransitionMode
+from domain.models import AxisKeyframe, Schedule, SequencePlan, Trajectory, TransitionMode
 from fake_camera_manager import FakeCameraManager
 from main import app, plan_store
 
 
 @pytest.fixture(autouse=True)
-def setup_test_environment(tmp_path):
+def setup_test_env(tmp_path):
     original_base_dir = plan_store.base_dir
     plan_store.base_dir = tmp_path / "plans"
     plan_store.base_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use FakeCameraManager for predictable test environment
     fake_cam = FakeCameraManager(capture_dir=str(tmp_path / "captures"))
     fake_cam.is_connected = True
-
-    # Patch global camera_mgr in main
     import main
     original_cam = main.camera_mgr
     main.camera_mgr = fake_cam
@@ -28,9 +25,15 @@ def setup_test_environment(tmp_path):
 
 
 def create_sample_plan() -> SequencePlan:
-    kf1 = Keyframe(progress=0.0, pose=Pose(pan_deg=0.0, tilt_deg=0.0), outgoing_mode=TransitionMode.LINEAR)
-    kf2 = Keyframe(progress=1.0, pose=Pose(pan_deg=90.0, tilt_deg=45.0), outgoing_mode=TransitionMode.SMOOTH)
-    traj = Trajectory(keyframes=[kf1, kf2])
+    pan_kfs = [
+        AxisKeyframe(progress=0.0, value=0.0, outgoing_mode=TransitionMode.LINEAR),
+        AxisKeyframe(progress=1.0, value=90.0, outgoing_mode=TransitionMode.SMOOTH),
+    ]
+    tilt_kfs = [
+        AxisKeyframe(progress=0.0, value=0.0, outgoing_mode=TransitionMode.LINEAR),
+        AxisKeyframe(progress=1.0, value=45.0, outgoing_mode=TransitionMode.SMOOTH),
+    ]
+    traj = Trajectory(pan_keyframes=pan_kfs, tilt_keyframes=tilt_kfs)
     sched = Schedule(total_shots=10, interval_s=5.0)
     plan = SequencePlan(name="Test Shot Plan", trajectory=traj, schedule=sched)
     return plan_store.save_plan(plan)
