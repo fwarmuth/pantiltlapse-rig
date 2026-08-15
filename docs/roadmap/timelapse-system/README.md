@@ -122,7 +122,7 @@ cd backend
 uv run pytest
 uv run ruff check .
 uv run python -m py_compile main.py serial_manager.py
-uv sync
+uv sync --extra dev
 
 cd ../firmware
 pio run

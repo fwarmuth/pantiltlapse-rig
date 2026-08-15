@@ -28,9 +28,11 @@ class TimelapseEngine:
     controls motors, handles settle pauses, triggers Canon DSLR, and streams live progress.
     """
 
-    def __init__(self, serial_mgr: Any, camera_mgr: Any):
+    def __init__(self, serial_mgr: Any, camera_mgr: Any, rig_mgr: Any, coordinator: Any):
         self.serial_mgr = serial_mgr
         self.camera_mgr = camera_mgr
+        self.rig_mgr = rig_mgr
+        self.coordinator = coordinator
 
         self.state: str = "IDLE"  # IDLE, RUNNING, PAUSED, COMPLETED, CANCELLED, ERROR
         self.config: TimelapseConfig | None = None
@@ -50,6 +52,16 @@ class TimelapseEngine:
         """Start a new automated time-lapse sequence."""
         if self.state in ("RUNNING", "PAUSED"):
             return {"status": "ERROR", "message": "Time-lapse already active"}
+
+        # This legacy endpoint uses absolute coordinates, so apply the same
+        # reference and tilt-bound checks as the plan-based motion paths.
+        self.rig_mgr.validate_move(pan=config.start_pan, tilt=config.start_tilt)
+        self.rig_mgr.validate_move(pan=config.end_pan, tilt=config.end_tilt)
+
+        acquired = await self.coordinator.acquire("RECORDING")
+        if not acquired:
+            active = self.coordinator.active_mode
+            return {"status": "ERROR", "message": f"Operation lock busy: '{active}' active"}
 
         self.config = config
         self.state = "RUNNING"
@@ -141,7 +153,10 @@ class TimelapseEngine:
                 )
 
                 # Step 1: Move Motors
-                await self.serial_mgr.move_absolute(target_pan, target_tilt)
+                move_res = await self.serial_mgr.move_absolute(target_pan, target_tilt)
+                if move_res.get("status") != "OK":
+                    message = move_res.get("message", f"Motor returned non-OK status: {move_res}")
+                    raise RuntimeError(f"Shot {k + 1} move failed: {message}")
 
                 if self._cancel_flag:
                     break
@@ -191,6 +206,8 @@ class TimelapseEngine:
             self.state = "ERROR"
             self.last_error = str(e)
             logger.error(f"Time-lapse engine exception: {e}")
+        finally:
+            await self.coordinator.release("RECORDING")
 
     def get_status(self) -> dict[str, Any]:
         """Return current status dictionary for REST API."""

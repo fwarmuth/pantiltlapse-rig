@@ -48,11 +48,16 @@ else:
     logger.info("Initializing application with real CameraManager (gphoto2)")
     camera_mgr = CameraManager(capture_dir=capture_dir)
 
-timelapse_engine = TimelapseEngine(serial_mgr=serial_mgr, camera_mgr=camera_mgr)
 plan_store = PlanStore()
 rig_mgr = RigManager(tilt_min_deg=0.0, tilt_max_deg=80.0)
 
 coordinator = OperationCoordinator()
+timelapse_engine = TimelapseEngine(
+    serial_mgr=serial_mgr,
+    camera_mgr=camera_mgr,
+    rig_mgr=rig_mgr,
+    coordinator=coordinator,
+)
 dry_run_engine = DryRunEngine(
     serial_mgr=serial_mgr,
     rig_mgr=rig_mgr,
@@ -75,7 +80,10 @@ async def lifespan(app: FastAPI):
         await camera_mgr.apply_startup_defaults()
     yield
     logger.info("CameraCommander Backend shutting down...")
+    await dry_run_engine.cancel()
     await timelapse_engine.cancel()
+    await preview_controller.stop()
+    await serial_mgr.disconnect()
     camera_mgr.close()
 
 
@@ -535,6 +543,12 @@ async def execute_sequence_step(req: SequenceStepRequest):
         move_res = await serial_mgr.move_relative(req.pan, req.tilt)
     else:
         move_res = await serial_mgr.move_absolute(req.pan, req.tilt)
+
+    if move_res.get("status") != "OK":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "ERROR", "message": move_res.get("message", "Motor move failed")},
+        )
 
     if req.pause_s > 0:
         await asyncio.sleep(req.pause_s)

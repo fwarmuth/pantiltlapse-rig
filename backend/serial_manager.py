@@ -113,6 +113,8 @@ class SerialManager:
 
                 response = response_bytes.decode("ascii", errors="replace").strip()
                 self._parse_response(response)
+                if not response or response.startswith("ERR"):
+                    return {"status": "ERROR", "message": response or "Empty response from motor controller"}
                 return {"status": "OK", "response": response}
             except asyncio.TimeoutError:
                 logger.warning(f"Serial command '{cmd_clean}' timed out waiting for response ({timeout}s)")
@@ -142,12 +144,17 @@ class SerialManager:
 
         self.state = "MOVING"
         res = await self.send_command(f"M {pan:.2f} {tilt:.2f}", timeout=60.0)
-        if res.get("status") == "OK":
+        if res.get("status") == "OK" and res.get("response") == "DONE":
             self.current_pan = pan
             self.current_tilt = tilt
             self.state = "IDLE"
             await self.send_command("S")
         else:
+            if res.get("status") == "OK":
+                res = {
+                    "status": "ERROR",
+                    "message": f"Unexpected motor move response: {res.get('response', '')}",
+                }
             self.state = "ERROR"
         return res
 
