@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
     camera_mgr.close()
 
 
-app = FastAPI(title="CameraCommander REST API", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="pantiltlapse-rig REST API", version="0.4.0", lifespan=lifespan)
 
 # Allow CORS for mobile apps & web UI clients
 app.add_middleware(

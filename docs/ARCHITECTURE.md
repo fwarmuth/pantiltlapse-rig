@@ -1,4 +1,4 @@
-# CameraCommander Architecture
+# pantiltlapse-rig Architecture
 
 ```
 Browser (5-Step Wizard UI) ── REST + SSE ──> FastAPI backend ── Async Serial (9600 baud) ──> ESP32/NodeMCU ──> Pan/Tilt Stepper Drivers

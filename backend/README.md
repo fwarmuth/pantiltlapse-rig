@@ -1,4 +1,4 @@
-# CameraCommander Backend
+# pantiltlapse-rig Backend
 
 FastAPI service for the two-axis head, Canon DSLR, and time-lapse sequences. It serves `../frontend` at `/` and the REST/SSE API at `/api`.
 

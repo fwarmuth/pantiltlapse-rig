@@ -1,4 +1,4 @@
-# CameraCommander Hardware Reference
+# pantiltlapse-rig Hardware Reference
 
 Default PlatformIO target: NodeMCU v3 / ESP8266 (`nodemcuv2`), USB serial 9600 baud.
 
