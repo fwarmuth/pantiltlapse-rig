@@ -43,8 +43,8 @@ class SerialManager:
             await self._flush_input_buffer()
 
             # Query version and initial status
-            await self.send_command("V")
-            await self.send_command("S")
+            await self.send_command("V", timeout=1.5)
+            await self.send_command("S", timeout=1.5)
             return True
         except Exception as e:
             logger.warning(f"Failed to open serial port {self.port}: {e}. Motors remain disconnected.")
@@ -86,7 +86,7 @@ class SerialManager:
             except asyncio.TimeoutError:
                 break
 
-    async def send_command(self, cmd_str: str) -> dict[str, Any]:
+    async def send_command(self, cmd_str: str, timeout: float | None = 2.0) -> dict[str, Any]:
         """Send ASCII command string to motor controller (e.g. 'M 10.0 5.0' or 'S'). Strictly serialized via Lock."""
         if not self.is_connected:
             return {"status": "ERROR", "message": "Serial motor controller disconnected"}
@@ -105,11 +105,18 @@ class SerialManager:
                 self._writer.write(msg.encode("ascii"))
                 await self._writer.drain()
 
-                # Read response line from hardware
-                response_bytes = await self._reader.readline()
+                # Read response line from hardware with optional timeout
+                if timeout is not None:
+                    response_bytes = await asyncio.wait_for(self._reader.readline(), timeout=timeout)
+                else:
+                    response_bytes = await self._reader.readline()
+
                 response = response_bytes.decode("ascii", errors="replace").strip()
                 self._parse_response(response)
                 return {"status": "OK", "response": response}
+            except asyncio.TimeoutError:
+                logger.warning(f"Serial command '{cmd_clean}' timed out waiting for response ({timeout}s)")
+                return {"status": "TIMEOUT", "message": f"Serial command '{cmd_clean}' timed out"}
             except Exception as e:
                 logger.error(f"Serial communication error: {e}")
                 self.is_connected = False
@@ -134,7 +141,7 @@ class SerialManager:
             return {"status": "ERROR", "message": "Serial motor controller disconnected"}
 
         self.state = "MOVING"
-        res = await self.send_command(f"M {pan:.2f} {tilt:.2f}")
+        res = await self.send_command(f"M {pan:.2f} {tilt:.2f}", timeout=60.0)
         if res.get("status") == "OK":
             self.current_pan = pan
             self.current_tilt = tilt

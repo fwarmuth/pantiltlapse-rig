@@ -2,45 +2,58 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Debug Backend (Live Hardware)",
+            "name": "Backend Server (Simulation / Fake Camera)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/backend/main.py",
             "cwd": "${workspaceFolder}/backend",
-            "python": "${workspaceFolder}/backend/.venv/bin/python",
             "env": {
-                "MOCK_MODE": "false",
+                "FAKE_CAMERA": "true",
                 "SERIAL_PORT": "/dev/ttyUSB0",
-                "SERIAL_BAUD": "9600"
+                "SERIAL_BAUD": "9600",
+                "PYTHONPATH": "${workspaceFolder}/backend"
             },
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": false,
+            "serverReadyAction": {
+                "action": "openExternally",
+                "pattern": "Uvicorn running on http://(?:[0-9.]+|localhost):([0-9]+)",
+                "uriFormat": "http://localhost:%s"
+            }
         },
         {
-            "name": "Firefox: Debug Frontend (Web UI)",
-            "type": "firefox",
+            "name": "Backend Server (Live Hardware)",
+            "type": "debugpy",
             "request": "launch",
-            "reAttach": true,
-            "url": "http://localhost:8000",
-            "webRoot": "${workspaceFolder}/frontend"
-        }
-    ],
-    "compounds": [
-        {
-            "name": "Full Stack - Live Hardware (Backend + Firefox)",
-            "configurations": [
-                "Python: Debug Backend (Live Hardware)",
-                "Firefox: Debug Frontend (Web UI)"
-            ],
-            "stopAll": true
+            "program": "${workspaceFolder}/backend/main.py",
+            "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "FAKE_CAMERA": "false",
+                "SERIAL_PORT": "/dev/ttyUSB0",
+                "SERIAL_BAUD": "9600",
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "serverReadyAction": {
+                "action": "openExternally",
+                "pattern": "Uvicorn running on http://(?:[0-9.]+|localhost):([0-9]+)",
+                "uriFormat": "http://localhost:%s"
+            }
         },
         {
-            "name": "Full Stack - Mock Mode (Backend + Firefox)",
-            "configurations": [
-                "Python: Debug Backend (Mock Mode)",
-                "Firefox: Debug Frontend (Web UI)"
-            ],
-            "stopAll": true
+            "name": "Motor Serial CLI",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/backend/cli.py",
+            "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "SERIAL_PORT": "/dev/ttyUSB0",
+                "SERIAL_BAUD": "9600",
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false
         }
     ]
 }
