@@ -69,6 +69,8 @@ async def lifespan(app: FastAPI):
     rig_mgr.invalidate_reference("Backend startup")
     await serial_mgr.connect()
     await camera_mgr.initialize()
+    if camera_mgr.is_connected:
+        await camera_mgr.apply_startup_defaults()
     yield
     logger.info("CameraCommander Backend shutting down...")
     await timelapse_engine.cancel()
@@ -297,6 +299,31 @@ async def set_camera_config(req: CameraConfigRequest):
         logger.warning(f"Could not validate choice against camera choices: {e}")
 
     return await camera_mgr.set_config(req.param, req.value)
+
+
+@app.post("/api/camera/reconnect")
+async def reconnect_camera():
+    """Attempt to re-establish a persistent gphoto2 session with the camera."""
+    camera_mgr.close()
+    await asyncio.sleep(0.5)
+    connected = await camera_mgr.initialize()
+    if connected:
+        await camera_mgr.apply_startup_defaults()
+        return {
+            "status": "OK",
+            "message": f"Connected to camera '{camera_mgr.model}'",
+            "model": camera_mgr.model,
+            "iso": camera_mgr.iso,
+            "shutter_speed": camera_mgr.shutter_speed,
+            "aperture": camera_mgr.aperture,
+        }
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "status": "ERROR",
+            "message": "Failed to connect to camera. Ensure camera is powered on and awake, then retry.",
+        },
+    )
 
 
 @app.post("/api/camera/trigger")

@@ -113,6 +113,44 @@ class CameraManager:
 
         return {"iso": self.iso, "shutter_speed": self.shutter_speed, "aperture": self.aperture}
 
+    async def apply_startup_defaults(self):
+        """Set startup camera acquisition defaults (Auto ISO, auto/sensible shutter, and aperture ~4.5)."""
+        if not self.is_connected or not self._camera:
+            return
+
+        try:
+            choices = await self.get_config_choices()
+
+            # 1. ISO: Prefer 'Auto' if supported
+            iso_choices = choices.get("iso", [])
+            for candidate in ["Auto", "auto", "AUTO"]:
+                if candidate in iso_choices:
+                    await self.set_config("iso", candidate)
+                    break
+
+            # 2. Aperture: Set ~4.5 (or closest available aperture)
+            ap_choices = choices.get("aperture", [])
+            for candidate in ["4.5", "4.0", "5.0", "5.6", "4", "5", "f/4.5", "f/4.0", "f/5.6"]:
+                clean = candidate.replace("f/", "").replace("F/", "")
+                if clean in ap_choices or candidate in ap_choices:
+                    await self.set_config("aperture", clean)
+                    break
+
+            # 3. Shutter speed: Prefer 'Auto' if supported
+            shutter_choices = choices.get("shutter_speed", [])
+            for candidate in ["Auto", "auto", "AUTO"]:
+                if candidate in shutter_choices:
+                    await self.set_config("shutter_speed", candidate)
+                    break
+
+            await self.refresh_config()
+            logger.info(
+                f"Startup camera defaults applied: ISO={self.iso}, Shutter={self.shutter_speed}, "
+                f"Aperture={self.aperture}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not apply all startup camera defaults: {e}")
+
     async def get_config_choices(self) -> dict[str, list[str]]:
         """
         Query native gPhoto2 camera widget choices for iso, shutterspeed, and aperture.

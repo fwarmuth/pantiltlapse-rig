@@ -99,7 +99,7 @@ class AcquisitionProfile(BaseModel):
 
     iso: str = Field(default="400", description="ISO setting string")
     shutter_speed: str = Field(default="1/125", description="Shutter speed string")
-    aperture: str = Field(default="5.6", description="Aperture string")
+    aperture: str = Field(default="4.5", description="Aperture string")
     camera_format: str = Field(default="JPEG", description="Camera format")
     extra_settings: dict[str, Any] = Field(default_factory=dict, description="Custom camera options")
 

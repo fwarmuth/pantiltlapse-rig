@@ -34,6 +34,16 @@ class FakeCameraManager:
     async def refresh_config(self) -> dict[str, str]:
         return {"iso": self.iso, "shutter_speed": self.shutter_speed, "aperture": self.aperture}
 
+    async def apply_startup_defaults(self):
+        """Set startup camera defaults on simulation camera."""
+        self.iso = "400"
+        self.shutter_speed = "1/125"
+        self.aperture = "4.5"
+        logger.info(
+            f"Startup fake camera defaults configured: ISO={self.iso}, Shutter={self.shutter_speed}, "
+            f"Aperture={self.aperture}"
+        )
+
     async def get_config_choices(self) -> dict[str, list[str]]:
         """Return explicit simulation camera choice lists."""
         if not self.is_connected:
