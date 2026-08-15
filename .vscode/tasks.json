@@ -48,6 +48,15 @@
                 "kind": "build",
                 "isDefault": true
             }
+        },
+        {
+            "label": "Firmware: Upload to ESP (pio run -t upload)",
+            "type": "shell",
+            "command": "pio run -t upload",
+            "options": {
+                "cwd": "${workspaceFolder}/firmware"
+            },
+            "problemMatcher": []
         }
     ]
 }

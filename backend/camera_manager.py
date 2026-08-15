@@ -45,37 +45,42 @@ class CameraManager:
         return await self.connect_camera()
 
     async def connect_camera(self) -> bool:
-        """Initialize persistent gphoto2 camera session."""
+        """Initialize persistent gphoto2 camera session asynchronously off main event loop."""
         async with self._lock:
             if not HAS_GPHOTO2:
                 self.is_connected = False
                 return False
 
-            try:
-                logger.info("Initializing persistent python-gphoto2 session...")
-                self._camera = gp.Camera()
-                self._camera.init()
-                self.is_connected = True
+            def _init_gphoto():
+                try:
+                    logger.info("Initializing persistent python-gphoto2 session...")
+                    cam = gp.Camera()
+                    cam.init()
+                    model_name = "Canon EOS DSLR"
+                    summary = cam.get_summary()
+                    summary_str = str(summary)
+                    for line in summary_str.splitlines():
+                        if "Manufacturer:" in line or "Model:" in line:
+                            model_name = line.strip()
+                            break
+                    return cam, model_name
+                except Exception as e:
+                    logger.error(f"Failed to open native gphoto2 camera session: {e}")
+                    return None, "Disconnected"
 
-                # Extract model from summary
-                summary = self._camera.get_summary()
-                summary_str = str(summary)
-                for line in summary_str.splitlines():
-                    if "Manufacturer:" in line or "Model:" in line:
-                        self.model = line.strip()
-                        break
-                if not self.model or self.model == "Unknown":
-                    self.model = "Canon EOS DSLR"
-
-                logger.info(f"Connected to persistent camera session: '{self.model}'")
-                self._read_configs_nolock()
-                return True
-            except Exception as e:
-                logger.error(f"Failed to open native gphoto2 camera session: {e}")
+            cam, model_name = await asyncio.to_thread(_init_gphoto)
+            if not cam:
                 self.is_connected = False
                 self.model = "Disconnected"
                 self._camera = None
                 return False
+
+            self._camera = cam
+            self.is_connected = True
+            self.model = model_name
+            logger.info(f"Connected to persistent camera session: '{self.model}'")
+            await asyncio.to_thread(self._read_configs_nolock)
+            return True
 
     def _read_configs_nolock(self):
         """Read ISO, shutter speed, and aperture directly from native C config tree."""
