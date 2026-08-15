@@ -55,10 +55,15 @@ def test_dry_run_unconfirmed_reference_rejected():
 def test_dry_run_full_execution_and_stale_detection(monkeypatch):
     plan = create_test_plan()
 
-    # Stub move_absolute to simulate instant successful motor movement
+    # Stub move_absolute and send_command to simulate successful hardware
     async def mock_move_absolute(pan: float, tilt: float):
         return {"status": "OK", "response": "DONE"}
+
+    async def mock_send_command(cmd: str):
+        return "R:0.00,0.00,0,0,0,0,0,0,0,0"
+
     monkeypatch.setattr(serial_mgr, "move_absolute", mock_move_absolute)
+    monkeypatch.setattr(serial_mgr, "send_command", mock_send_command)
 
     with TestClient(app) as client:
         serial_mgr.is_connected = True

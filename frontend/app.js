@@ -30,7 +30,7 @@ let liveViewFps = 0.0;
 let lastFrameTime = performance.now();
 let streamPollingTimer = null;
 let enhancementEnabled = true;
-let enhanceMode = "clahe";
+let enhanceMode = "none";
 let filterGain = 1.5;
 let filterContrast = 1.3;
 let filterClipLimit = 3.0;
@@ -394,6 +394,21 @@ async function reconnectMotors() {
     }
 }
 
+async function reconnectCamera() {
+    try {
+        const res = await fetch(`${API_BASE}/api/camera/reconnect`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+            alert(data.message || "Camera connected successfully!");
+            await pollStatus();
+        } else {
+            alert(data.detail?.message || "Failed to reconnect camera. Ensure camera is powered on and awake.");
+        }
+    } catch (err) {
+        alert("Camera reconnection failed: " + err.message);
+    }
+}
+
 async function stopMotors() {
     try {
         await fetch(`${API_BASE}/api/motors/stop`, { method: "POST" });
@@ -484,7 +499,7 @@ async function runFrameFetchLoop() {
                     ctx.drawImage(bitmap, 0, 0);
                     bitmap.close();
 
-                    if (enhancementEnabled) {
+                    if (enhanceMode !== "none") {
                         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                         applyImageEnhancement(imgData, enhanceMode, filterGain, filterContrast, filterClipLimit);
                         ctx.putImageData(imgData, 0, 0);
@@ -513,10 +528,6 @@ async function runFrameFetchLoop() {
     }
 }
 
-function toggleEnhancementFilter(enabled) {
-    enhancementEnabled = enabled;
-}
-
 function updateEnhancementSettings() {
     const selMode = document.getElementById("selEnhanceMode");
     const sGain = document.getElementById("sliderGain");
@@ -539,9 +550,10 @@ function updateEnhancementSettings() {
 
 /**
  * High-performance client-side image processing for low-light camera framing.
- * Includes CLAHE (Contrast Limited Adaptive Histogram Equalization), Gain/Gamma boost, Edge detect.
+ * Includes CLAHE (Contrast Limited Adaptive Histogram Equalization), Gain/Gamma boost, Edge detect, and Passthrough.
  */
 function applyImageEnhancement(imageData, mode, gain, contrast, clipLimit) {
+    if (mode === "none") return;
     const data = imageData.data;
     const len = data.length;
     const w = imageData.width;
