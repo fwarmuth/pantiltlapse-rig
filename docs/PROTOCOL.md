@@ -1,4 +1,4 @@
-# CameraCommander Protocol Reference
+# pantiltlapse-rig Protocol Reference
 
 Firmware v1.0.4 uses newline-terminated ASCII at 9600 baud. `M` targets are absolute degrees; pan `+` is right. All positions use the current zero reference.
 

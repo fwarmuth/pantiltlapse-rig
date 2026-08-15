@@ -1,7 +1,7 @@
 [project]
-name = "cameracommander-backend"
+name = "pantiltlapse-backend"
 version = "0.1.0"
-description = "CameraCommander Raspberry Pi Zero 2 W Backend Service"
+description = "pantiltlapse-rig Backend Service"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

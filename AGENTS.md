@@ -1,6 +1,6 @@
 # AGENTS.md - Project Guidelines for AI Agents
 
-> **Scope**: Root workspace guidelines for `CameraCommander3`  
+> **Scope**: Root workspace guidelines for `pantiltlapse-rig`  
 > **Tools Supported**: Antigravity CLI (`agy`), Codex CLI
 
 ---

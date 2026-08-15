@@ -1,4 +1,4 @@
-# CameraCommander 5-Step Workflow Specification
+# pantiltlapse-rig 5-Step Workflow Specification
 
 The web frontend implements a streamlined, step-by-step workflow designed to prevent screen clutter, guide the operator logically, and ensure hardware safety.
 
