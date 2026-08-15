@@ -78,15 +78,19 @@ class PreviewController:
             self.restoration_profile = acquisition_profile
 
         try:
-            # Apply and verify preview profile settings
+            # Apply and verify preview profile settings (best-effort framing optimization)
             for param, val in [
                 ("iso", self.preview_profile.iso),
                 ("shutter_speed", self.preview_profile.shutter_speed),
                 ("aperture", self.preview_profile.aperture),
             ]:
-                res = await self.camera_mgr.set_config(param, val)
-                if isinstance(res, dict) and res.get("status") != "OK":
-                    raise Exception(f"Failed to apply camera setting '{param}={val}': {res.get('message')}")
+                if val:
+                    clean_val = str(val).replace("f/", "").replace("F/", "").strip()
+                    res = await self.camera_mgr.set_config(param, clean_val)
+                    if isinstance(res, dict) and res.get("status") != "OK":
+                        logger.warning(
+                            f"Could not apply camera preview setting '{param}={clean_val}': {res.get('message')}"
+                        )
 
             await self.camera_mgr.refresh_config()
 
@@ -130,7 +134,7 @@ class PreviewController:
         return {"status": "OK", "state": self.state}
 
     async def generate_mjpeg_stream(self):
-        """Async generator yielding MJPEG multipart frame bytes with telemetry."""
+        """Async generator yielding standard MJPEG multipart frame bytes with telemetry."""
         while self.state == "STREAMING" and self.camera_mgr.is_connected:
             try:
                 frame_bytes = await self._fetch_frame_bytes()
@@ -140,12 +144,13 @@ class PreviewController:
                 if elapsed > 0:
                     self.measured_fps = round(self._frame_count / elapsed, 1)
 
-                gain_header = f"X-Digital-Gain: {self.digital_gain}\r\n\r\n".encode("ascii")
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n" + gain_header + frame_bytes + b"\r\n"
-                )
-                await asyncio.sleep(0.1)  # ~10 FPS stream pacing
+                header = (
+                    f"Content-Type: image/jpeg\r\n"
+                    f"Content-Length: {len(frame_bytes)}\r\n"
+                    f"X-Digital-Gain: {self.digital_gain}\r\n\r\n"
+                ).encode("ascii")
+                yield b"--frame\r\n" + header + frame_bytes + b"\r\n"
+                await asyncio.sleep(0.08)  # ~12 FPS stream pacing
             except asyncio.CancelledError:
                 break
             except Exception as e:

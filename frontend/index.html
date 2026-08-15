@@ -3,310 +3,663 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>CameraCommander - Timelapse Trajectory Planner</title>
-    <link rel="stylesheet" href="style.css?v=20260808_1306">
+    <title>CameraCommander - Timelapse Trajectory Studio</title>
+    <link rel="stylesheet" href="style.css?v=20260815_01">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="app-container">
-        <!-- Header -->
+        <!-- Top Navigation & System Status Bar -->
         <header class="app-header">
-            <div class="logo">
-                <span class="icon">📷</span>
-                <h1>CameraCommander</h1>
+            <div class="header-left">
+                <div class="logo">
+                    <span class="icon">📷</span>
+                    <div class="brand">
+                        <span class="brand-title">CameraCommander</span>
+                        <span class="brand-sub">Trajectory Studio</span>
+                    </div>
+                </div>
             </div>
-            <div class="status-badges">
-                <div class="status-badge" id="zeroRefBadge">
-                    <span class="dot"></span>
-                    <span id="zeroRefText">ZERO UNCONFIRMED</span>
+
+            <div class="header-center">
+                <!-- Status Badges -->
+                <div class="status-badges">
+                    <div class="status-badge" id="zeroRefBadge" title="Coordinate reference status">
+                        <span class="dot"></span>
+                        <span id="zeroRefText">ZERO UNCONFIRMED</span>
+                    </div>
+                    <div class="status-badge" id="statusBadge" title="Motor controller connection">
+                        <span class="dot"></span>
+                        <span id="statusText">MOTORS...</span>
+                    </div>
+                    <div class="status-badge" id="cameraStatusBadge" title="Camera connection">
+                        <span class="dot"></span>
+                        <span id="cameraStatusText">CAMERA...</span>
+                    </div>
+                    <div class="status-badge mode-badge" id="modeBadge" title="Active operation lock">
+                        <span id="modeText">IDLE</span>
+                    </div>
                 </div>
-                <div class="status-badge" id="statusBadge">
-                    <span class="dot"></span>
-                    <span id="statusText">MOTORS...</span>
-                </div>
-                <div class="status-badge" id="cameraStatusBadge">
-                    <span class="dot"></span>
-                    <span id="cameraStatusText">CAMERA...</span>
-                </div>
+            </div>
+
+            <div class="header-right">
+                <button class="btn btn-danger btn-sm" id="btnHeaderStop" onclick="stopMotors()" title="Emergency stop motor movement">
+                    🛑 STOP
+                </button>
             </div>
         </header>
 
-        <!-- Rig Safety Bar -->
-        <section class="rig-bar card">
-            <div class="rig-bar-content">
-                <button class="btn btn-secondary btn-small" id="btnReconnectMotors" onclick="reconnectMotors()">
-                    🔌 Reconnect Motors
-                </button>
-                <button class="btn btn-accent btn-small" id="btnConfirmZero" onclick="confirmZeroReference()">
-                    🎯 Confirm Zero Reference (0° Tilt)
-                </button>
-                <button class="btn btn-secondary btn-small" id="btnDriverToggle" onclick="toggleDrivers()">
-                    Disable Drivers
-                </button>
-                <button class="btn btn-danger btn-small" onclick="stopMotors()">
-                    🛑 EMERGENCY STOP
-                </button>
-            </div>
-        </section>
+        <!-- 5-Step Workflow Stepper Navigation -->
+        <nav class="stepper-nav" aria-label="Workflow Steps">
+            <button class="step-btn active" id="stepBtn1" onclick="goToStep(1)">
+                <span class="step-num">1</span>
+                <span class="step-label">Setup & Framing</span>
+            </button>
+            <button class="step-btn" id="stepBtn2" onclick="goToStep(2)">
+                <span class="step-num">2</span>
+                <span class="step-label">Sequence Plan</span>
+            </button>
+            <button class="step-btn" id="stepBtn3" onclick="goToStep(3)">
+                <span class="step-num">3</span>
+                <span class="step-label">Key Poses</span>
+            </button>
+            <button class="step-btn" id="stepBtn4" onclick="goToStep(4)">
+                <span class="step-num">4</span>
+                <span class="step-label">Acquisition</span>
+            </button>
+            <button class="step-btn" id="stepBtn5" onclick="goToStep(5)">
+                <span class="step-num">5</span>
+                <span class="step-label">Review & Run</span>
+            </button>
+        </nav>
 
-        <!-- Main Dashboard Layout -->
-        <main class="dashboard">
-            <!-- Telemetry & Jog Card -->
-            <section class="card telemetry-card">
-                <h2>Live Telemetry & Manual Jog</h2>
-                <div class="metric" style="margin-bottom:6px;">
-                    <span class="label">PAN (Turntable)</span>
-                    <span class="value" id="valPan">0.00°</span>
-                </div>
-                <div class="metric">
-                    <span class="label">TILT (Vertical)</span>
-                    <span class="value" id="valTilt">0.00°</span>
+        <!-- Main Step Workspace Container -->
+        <main class="wizard-workspace">
+
+            <!-- ======================================================== -->
+            <!-- STEP 1: RAW MOVEMENT & RIG SETUP                         -->
+            <!-- ======================================================== -->
+            <section class="step-panel active" id="stepPanel1">
+                <div class="panel-header">
+                    <div>
+                        <h2>Step 1: Rig Setup & Live Framing</h2>
+                        <p class="panel-desc">Position the camera rig, calibrate the zero reference, and frame your shot with real-time night enhancement.</p>
+                    </div>
+                    <div class="step-nav-actions">
+                        <button class="btn btn-primary" onclick="goToStep(2)">Next: Sequence Plan →</button>
+                    </div>
                 </div>
 
-                <!-- D-Pad Directional Controls -->
-                <div class="dpad-container">
-                    <button class="btn dpad-up" onclick="moveRelative(0, getStepSize())" title="Tilt Up">▲</button>
-                    <button class="btn dpad-left" onclick="moveRelative(-getStepSize(), 0)" title="Pan Left">◄</button>
-                    <button class="btn dpad-center" onclick="moveAbsolute(0, 0)" title="Return to Zero (0°, 0°)">🏠</button>
-                    <button class="btn dpad-right" onclick="moveRelative(getStepSize(), 0)" title="Pan Right">►</button>
-                    <button class="btn dpad-down" onclick="moveRelative(0, -getStepSize())" title="Tilt Down">▼</button>
-                </div>
+                <div class="step-grid two-column">
+                    <!-- Left Column: Motor Jog & Calibration -->
+                    <div class="card">
+                        <div class="card-title-row">
+                            <h3>🕹️ Manual Movement & Origin</h3>
+                            <span class="badge" id="jogStatusBadge">Drivers Active</span>
+                        </div>
 
-                <!-- Step Size Selector -->
-                <div class="control-group">
-                    <label>Step Increment (°)</label>
-                    <div class="segmented-control">
-                        <button class="segment" data-step="0.5" onclick="setStepSize(0.5)">0.5°</button>
-                        <button class="segment active" data-step="1.0" onclick="setStepSize(1.0)">1°</button>
-                        <button class="segment" data-step="5.0" onclick="setStepSize(5.0)">5°</button>
-                        <button class="segment" data-step="15.0" onclick="setStepSize(15.0)">15°</button>
+                        <!-- Readout Values -->
+                        <div class="metric-row">
+                            <div class="metric-box">
+                                <span class="metric-label">Pan (Azimuth)</span>
+                                <span class="metric-val" id="valPan">0.00°</span>
+                            </div>
+                            <div class="metric-box">
+                                <span class="metric-label">Tilt (Elevation)</span>
+                                <span class="metric-val" id="valTilt">0.00°</span>
+                            </div>
+                        </div>
+
+                        <!-- Directional D-Pad -->
+                        <div class="dpad-wrapper">
+                            <div class="dpad-grid">
+                                <button class="btn dpad-btn dpad-up" onclick="moveRelative(0, getStepSize())" title="Tilt Up">▲</button>
+                                <button class="btn dpad-btn dpad-left" onclick="moveRelative(-getStepSize(), 0)" title="Pan Left">◄</button>
+                                <button class="btn dpad-btn dpad-center" onclick="moveAbsolute(0, 0)" title="Return to Origin (0°, 0°)">🏠</button>
+                                <button class="btn dpad-btn dpad-right" onclick="moveRelative(getStepSize(), 0)" title="Pan Right">►</button>
+                                <button class="btn dpad-btn dpad-down" onclick="moveRelative(0, -getStepSize())" title="Tilt Down">▼</button>
+                            </div>
+                        </div>
+
+                        <!-- Step Increment Selection -->
+                        <div class="control-group">
+                            <label>Jog Step Size</label>
+                            <div class="segmented-control" id="jogStepSegments">
+                                <button class="segment" data-step="0.5" onclick="setStepSize(0.5)">0.5°</button>
+                                <button class="segment active" data-step="1.0" onclick="setStepSize(1.0)">1.0°</button>
+                                <button class="segment" data-step="5.0" onclick="setStepSize(5.0)">5.0°</button>
+                                <button class="segment" data-step="15.0" onclick="setStepSize(15.0)">15.0°</button>
+                            </div>
+                        </div>
+
+                        <!-- Rig Origin & Driver Management -->
+                        <div class="action-btn-group">
+                            <button class="btn btn-accent btn-block" id="btnConfirmZero" onclick="confirmZeroReference()">
+                                🎯 Confirm Zero Origin (0° Tilt)
+                            </button>
+                            <div class="btn-row">
+                                <button class="btn btn-secondary flex-1" id="btnDriverToggle" onclick="toggleDrivers()">
+                                    Disable Drivers
+                                </button>
+                                <button class="btn btn-secondary flex-1" id="btnReconnectMotors" onclick="reconnectMotors()">
+                                    🔌 Reconnect
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Live Framing Preview & Low-Light Enhancement -->
+                    <div class="card">
+                        <div class="card-title-row">
+                            <h3>👁️ Live Framing Preview</h3>
+                            <div class="btn-group-sm">
+                                <button class="btn btn-sm btn-primary" id="btnToggleLiveView" onclick="toggleLiveView()">▶ Start Stream</button>
+                            </div>
+                        </div>
+
+                        <!-- Stream Viewport with Canvas Processing -->
+                        <div class="preview-viewport-box" id="previewContainer">
+                            <img id="liveStreamImg" class="stream-img hidden" alt="Live View Stream" crossorigin="anonymous" />
+                            <canvas id="canvasEnhancedPreview" class="enhanced-canvas"></canvas>
+                            <div id="streamPlaceholder" class="placeholder-box">
+                                <span class="placeholder-icon">📷</span>
+                                <span>Live View Stream Inactive</span>
+                                <button class="btn btn-primary btn-sm" onclick="startLiveView()">Start Preview Stream</button>
+                            </div>
+                        </div>
+
+                        <!-- Live RGB Exposure Histogram -->
+                        <div class="histogram-card">
+                            <div class="histogram-header">
+                                <span>RGB Exposure Histogram</span>
+                                <span id="histogramPeakText" class="mono-sub">RGB: Normal</span>
+                            </div>
+                            <canvas id="canvasHistogram" width="360" height="48"></canvas>
+                        </div>
+
+                        <!-- Low-Light / Night Enhancement Controls (CLAHE & Gain) -->
+                        <div class="enhancement-controls">
+                            <div class="enhancement-header">
+                                <h4>✨ Night Framing Post-Processing (Client-Side)</h4>
+                                <label class="switch-label">
+                                    <input type="checkbox" id="chkEnhancement" onchange="toggleEnhancementFilter(this.checked)" checked>
+                                    <span>Enable Filter</span>
+                                </label>
+                            </div>
+
+                            <div class="enhancement-grid">
+                                <div class="control-group-sm">
+                                    <label>Filter Mode</label>
+                                    <select id="selEnhanceMode" class="dropdown dropdown-sm" onchange="updateEnhancementSettings()">
+                                        <option value="clahe">CLAHE (Adaptive Local Contrast)</option>
+                                        <option value="gain_gamma">Gain & Gamma Boost</option>
+                                        <option value="night_vision">Extreme Low-Light Green</option>
+                                        <option value="edges">Edge / Focus Assist</option>
+                                    </select>
+                                </div>
+                                <div class="control-group-sm">
+                                    <label>Gain / Brightness: <strong id="lblValGain">1.5x</strong></label>
+                                    <input type="range" id="sliderGain" min="1.0" max="5.0" step="0.2" value="1.5" oninput="updateEnhancementSettings()">
+                                </div>
+                                <div class="control-group-sm">
+                                    <label>Contrast: <strong id="lblValContrast">1.3x</strong></label>
+                                    <input type="range" id="sliderContrast" min="0.5" max="3.0" step="0.1" value="1.3" oninput="updateEnhancementSettings()">
+                                </div>
+                                <div class="control-group-sm">
+                                    <label>CLAHE Clip Limit: <strong id="lblValClip">3.0</strong></label>
+                                    <input type="range" id="sliderClipLimit" min="1.0" max="6.0" step="0.5" value="3.0" oninput="updateEnhancementSettings()">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Stream Telemetry -->
+                        <div class="telemetry-footer">
+                            <span>Status: <strong id="streamState">IDLE</strong></span>
+                            <span>FPS: <strong id="streamFps">0.0</strong></span>
+                            <span>Res: <strong id="streamRes">640×480</strong></span>
+                        </div>
                     </div>
                 </div>
             </section>
 
-            <!-- Sequence Plan Manager & Editor -->
-            <section class="card plan-card">
-                <div class="card-header">
-                    <h2>Sequence Plan Manager</h2>
-                    <div class="plan-actions">
-                        <button class="btn btn-secondary btn-small" onclick="createNewPlan()">+ New Plan</button>
-                        <button class="btn btn-accent btn-small" onclick="saveCurrentPlan()">💾 Save Plan</button>
-                        <button class="btn btn-danger btn-small" onclick="deleteCurrentPlan()">Delete</button>
+            <!-- ======================================================== -->
+            <!-- STEP 2: SEQUENCE DEFINITION                              -->
+            <!-- ======================================================== -->
+            <section class="step-panel" id="stepPanel2">
+                <div class="panel-header">
+                    <div>
+                        <h2>Step 2: Sequence Definition</h2>
+                        <p class="panel-desc">Create a new time-lapse sequence or load an existing plan from the library.</p>
+                    </div>
+                    <div class="step-nav-actions">
+                        <button class="btn btn-secondary" onclick="goToStep(1)">← Back to Setup</button>
+                        <button class="btn btn-primary" onclick="goToStep(3)">Next: Key Poses →</button>
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <label>Select Saved Plan</label>
-                    <select id="selectPlan" class="dropdown" onchange="onPlanSelected(this.value)">
-                        <option value="">-- Create or Select Plan --</option>
-                    </select>
-                </div>
+                <div class="step-grid two-column">
+                    <!-- Left: Plan Selection & Creation -->
+                    <div class="card">
+                        <div class="card-title-row">
+                            <h3>📁 Plan Library</h3>
+                            <button class="btn btn-primary btn-sm" onclick="createNewPlan()">+ New Sequence Plan</button>
+                        </div>
 
-                <div class="control-group">
-                    <label>Plan Name</label>
-                    <input type="text" id="planName" class="input-field" value="Sunset Panorama 360">
-                </div>
-                <div class="control-group">
-                    <label>Description</label>
-                    <input type="text" id="planDesc" class="input-field" value="Multi-keyframe smooth panning sweep">
-                </div>
+                        <div class="control-group">
+                            <label>Saved Sequence Plans</label>
+                            <select id="selectPlan" class="dropdown" onchange="onPlanSelected(this.value)">
+                                <option value="">-- Select or Create Sequence Plan --</option>
+                            </select>
+                        </div>
 
-                <div class="control-group">
-                    <label>Total Shots</label>
-                    <input type="number" id="planTotalShots" class="input-field" value="20" min="2" onchange="updateTrajectoryPreview()">
-                </div>
-                <div class="control-group">
-                    <label>Interval (Sec)</label>
-                    <input type="number" id="planInterval" class="input-field" value="5.0" min="1" step="0.5" onchange="updateTrajectoryPreview()">
-                </div>
-                <div class="control-group">
-                    <label>Settle Pause (Sec)</label>
-                    <input type="number" id="planSettle" class="input-field" value="0.5" min="0" step="0.1">
-                </div>
+                        <div class="plan-summary-box" id="planMetaSummary">
+                            <div class="metric-row">
+                                <div class="metric-box">
+                                    <span class="metric-label">Plan ID</span>
+                                    <span class="metric-val mono-sub" id="lblPlanId">None</span>
+                                </div>
+                                <div class="metric-box">
+                                    <span class="metric-label">Revision</span>
+                                    <span class="metric-val" id="lblPlanRevision">1</span>
+                                </div>
+                            </div>
+                            <div class="metric-row" style="margin-top:8px;">
+                                <div class="metric-box">
+                                    <span class="metric-label">Keyframes</span>
+                                    <span class="metric-val" id="lblPlanKeyframeCount">2</span>
+                                </div>
+                                <div class="metric-box">
+                                    <span class="metric-label">Total Shots</span>
+                                    <span class="metric-val" id="lblPlanTotalShots">20</span>
+                                </div>
+                            </div>
+                        </div>
 
+                        <div class="action-btn-group" style="margin-top:16px;">
+                            <div class="btn-row">
+                                <button class="btn btn-accent flex-1" onclick="saveCurrentPlan()">💾 Save Plan</button>
+                                <button class="btn btn-danger" onclick="deleteCurrentPlan()">🗑️ Delete</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Sequence Metadata Editor -->
+                    <div class="card">
+                        <h3>📝 Sequence Details</h3>
+
+                        <div class="control-group">
+                            <label for="planName">Sequence Name <span class="required">*</span></label>
+                            <input type="text" id="planName" class="input-field" placeholder="e.g. Sunset Pan 360" value="Sunset Panorama">
+                        </div>
+
+                        <div class="control-group">
+                            <label for="planDesc">Description & Notes (Optional)</label>
+                            <textarea id="planDesc" class="input-field textarea-field" rows="4" placeholder="Describe the scene, lighting conditions, or location notes...">Smooth horizontal panning sequence across horizon.</textarea>
+                        </div>
+
+                        <div class="tip-box">
+                            <span class="tip-icon">💡</span>
+                            <div class="tip-text">
+                                Sequence plans store your keyframe waypoints, schedule intervals, and camera capture profiles so you can reuse and modify them anytime.
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
 
-            <!-- Trajectory Path Visualizer & Keyframes -->
-            <section class="card trajectory-card">
-                <div class="card-header">
-                    <h2>Trajectory Visualizer & Keyframes</h2>
-                    <button class="btn btn-primary btn-small" onclick="addCurrentPoseKeyframe()">
-                        📍 Save Current Pose as Keyframe
-                    </button>
-                </div>
-
-                <!-- Interactive SVG Curve Plot -->
-                <div class="plot-container">
-                    <div class="plot-legend">
-                        <span class="legend-item pan-legend"><span class="legend-color"></span> Pan Curve (°)</span>
-                        <span class="legend-item tilt-legend"><span class="legend-color"></span> Tilt Curve (°)</span>
-                        <span id="plotDiagnostics" class="diag-text">--</span>
+            <!-- ======================================================== -->
+            <!-- STEP 3: KEY POSES & TRAJECTORY                           -->
+            <!-- ======================================================== -->
+            <section class="step-panel" id="stepPanel3">
+                <div class="panel-header">
+                    <div>
+                        <h2>Step 3: Key Poses & Trajectory Motion</h2>
+                        <p class="panel-desc">Define waypoints (Start, End, and intermediate poses), visualize the smooth curve, and test movement.</p>
                     </div>
-                    <svg id="svgPlot" class="svg-plot" viewBox="0 0 500 200" preserveAspectRatio="none">
-                        <!-- Background Grid Lines -->
-                        <line x1="0" y1="100" x2="500" y2="100" stroke="rgba(255,255,255,0.1)" stroke-dasharray="4"/>
-                        <path id="pathPan" d="M 0 100 L 500 100" fill="none" stroke="#38bdf8" stroke-width="2.5"/>
-                        <path id="pathTilt" d="M 0 100 L 500 100" fill="none" stroke="#34d399" stroke-width="2.5"/>
-                    </svg>
+                    <div class="step-nav-actions">
+                        <button class="btn btn-secondary" onclick="goToStep(2)">← Back to Sequence</button>
+                        <button class="btn btn-primary" onclick="goToStep(4)">Next: Acquisition →</button>
+                    </div>
                 </div>
 
-                <!-- Keyframe Editor Table -->
-                <div class="table-wrapper">
-                    <table class="keyframe-table">
-                        <thead>
-                            <tr>
-                                <th>t</th>
-                                <th>Pan (°)</th>
-                                <th>Tilt (°)</th>
-                                <th>Mode</th>
-                                <th>Tangent</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="keyframeTableBody">
-                            <!-- Populated dynamically by app.js -->
-                        </tbody>
-                    </table>
+                <div class="step-grid two-column">
+                    <!-- Left: Keyframe Pose List & Current Rig Capture -->
+                    <div class="card">
+                        <div class="card-title-row">
+                            <h3>📍 Keyframe Waypoints</h3>
+                            <button class="btn btn-primary btn-sm" onclick="addCurrentPoseKeyframe()">
+                                ➕ Capture Current Rig Pose
+                            </button>
+                        </div>
+
+                        <div class="current-rig-badge">
+                            <span>Current Rig Position: </span>
+                            <strong class="mono-sub">Pan: <span id="keyframeCurrPan">0.00°</span> | Tilt: <span id="keyframeCurrTilt">0.00°</span></strong>
+                        </div>
+
+                        <!-- Keyframe Table -->
+                        <div class="table-wrapper">
+                            <table class="keyframe-table">
+                                <thead>
+                                    <tr>
+                                        <th>Progress (t)</th>
+                                        <th>Pan (°)</th>
+                                        <th>Tilt (°)</th>
+                                        <th>Curve</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="keyframeTableBody">
+                                    <!-- Populated dynamically by app.js -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="btn-row" style="margin-top:12px;">
+                            <button class="btn btn-secondary btn-sm flex-1" onclick="addNewIntermediateKeyframe()">
+                                + Add Waypoint at t=0.5
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right: Interactive Curve Visualizer & Motion Dry-Run Rehearsal -->
+                    <div class="card">
+                        <div class="card-title-row">
+                            <h3>📈 Trajectory Curve & Motion Rehearsal</h3>
+                            <span class="badge" id="badgeReportStatus">Clearance: UNTESTED</span>
+                        </div>
+
+                        <!-- SVG Curve Plot -->
+                        <div class="plot-container">
+                            <div class="plot-legend">
+                                <span class="legend-item pan-legend"><span class="legend-color"></span> Pan (°)</span>
+                                <span class="legend-item tilt-legend"><span class="legend-color"></span> Tilt (°)</span>
+                                <span id="plotDiagnostics" class="diag-text">--</span>
+                            </div>
+                            <svg id="svgPlot" class="svg-plot" viewBox="0 0 500 200" preserveAspectRatio="none">
+                                <line x1="0" y1="100" x2="500" y2="100" stroke="rgba(255,255,255,0.1)" stroke-dasharray="4"/>
+                                <path id="pathPan" d="M 0 100 L 500 100" fill="none" stroke="#38bdf8" stroke-width="2.5"/>
+                                <path id="pathTilt" d="M 0 100 L 500 100" fill="none" stroke="#34d399" stroke-width="2.5"/>
+                            </svg>
+                        </div>
+
+                        <!-- Motion Dry-Run Controls -->
+                        <div class="dry-run-box">
+                            <div class="dry-run-header">
+                                <h4>🚀 Motion Clearance Test (Dry Run)</h4>
+                                <span id="dryRunValPct" class="mono-sub">0%</span>
+                            </div>
+
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="dryRunProgressBar" style="width: 0%;"></div>
+                            </div>
+
+                            <div class="metric-row" style="margin: 8px 0;">
+                                <span class="mono-sub">Rehearsal Waypoint: <strong id="dryRunValShot">0 / 0</strong></span>
+                            </div>
+
+                            <div class="btn-row">
+                                <button class="btn btn-accent flex-1" id="btnStartDryRun" onclick="startDryRun()">
+                                    ▶️ Play / Test Movement
+                                </button>
+                                <button class="btn btn-danger flex-1" id="btnCancelDryRun" onclick="cancelDryRun()">
+                                    ⏹️ Stop Movement
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
 
-            <!-- Night-Oriented Live View Panel -->
-            <section class="card liveview-card">
-                <div class="card-header">
-                    <h2>Night Live View & Framing</h2>
-                    <div class="gain-control">
-                        <label>Gain Boost: <strong id="valGain">1.0x</strong></label>
-                        <input type="range" id="sliderGain" min="1.0" max="4.0" step="0.5" value="1.0" oninput="updateLiveGain(this.value)">
+            <!-- ======================================================== -->
+            <!-- STEP 4: ACQUISITION SETTINGS                             -->
+            <!-- ======================================================== -->
+            <section class="step-panel" id="stepPanel4">
+                <div class="panel-header">
+                    <div>
+                        <h2>Step 4: Camera Capture & Schedule Settings</h2>
+                        <p class="panel-desc">Configure exposure parameters, timing intervals, and verify exposure quality with test shots.</p>
+                    </div>
+                    <div class="step-nav-actions">
+                        <button class="btn btn-secondary" onclick="goToStep(3)">← Back to Key Poses</button>
+                        <button class="btn btn-primary" onclick="goToStep(5)">Next: Review & Run →</button>
                     </div>
                 </div>
 
-                <!-- Preview / Live View Exposure Settings -->
-                <div class="control-group" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 10px; margin-bottom: 10px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                        <span style="font-weight:600; font-size:0.85rem; color:#38bdf8;">👁️ Preview Exposure Settings</span>
-                        <button class="btn btn-secondary btn-small" onclick="copyAcquisitionToPreview()" title="Copy Acquisition exposure values into Preview profile">
-                            📋 Copy Acquisition
-                        </button>
-                    </div>
-                    <div class="control-group" style="margin-bottom:6px;">
-                        <label>Preview ISO</label>
-                        <select id="prevIso" class="dropdown" onchange="onPreviewSettingChanged('iso', this.value)">
-                            <option value="3200">3200</option>
-                        </select>
-                    </div>
-                    <div class="control-group" style="margin-bottom:6px;">
-                        <label>Preview Shutter Speed</label>
-                        <select id="prevShutter" class="dropdown" onchange="onPreviewSettingChanged('shutter_speed', this.value)">
-                            <option value="1/4">1/4</option>
-                        </select>
-                    </div>
-                    <div class="control-group">
-                        <label>Preview Aperture</label>
-                        <select id="prevAperture" class="dropdown" onchange="onPreviewSettingChanged('aperture', this.value)">
-                            <option value="f/2.8">f/2.8</option>
-                        </select>
-                    </div>
-                </div>
+                <div class="step-grid two-column">
+                    <!-- Left: Camera Exposure & Schedule -->
+                    <div class="card">
+                        <h3>📸 Camera Capture Settings</h3>
 
-                <div class="live-stream-box" style="position:relative;">
-                    <img id="liveStreamImg" class="stream-img hidden" alt="Live View Stream" onload="drawLiveHistogram(this)" />
-                    <div id="streamPlaceholder" class="placeholder-box">
-                        <span>Live View Stream Inactive</span>
-                        <button class="btn btn-primary btn-small" onclick="startLiveView()">▶ Start Live View Stream</button>
-                    </div>
-                </div>
+                        <div class="control-grid-2">
+                            <div class="control-group">
+                                <label for="acqIso">ISO Sensitivity</label>
+                                <select id="acqIso" class="dropdown" onchange="onAcquisitionSettingChanged('iso', this.value)">
+                                    <option value="100">100</option>
+                                    <option value="200">200</option>
+                                    <option value="400" selected>400</option>
+                                    <option value="800">800</option>
+                                    <option value="1600">1600</option>
+                                    <option value="3200">3200</option>
+                                    <option value="6400">6400</option>
+                                </select>
+                            </div>
 
-                <!-- Live RGB Histogram Display -->
-                <div class="histogram-box" style="margin-top:10px; background:rgba(15,23,42,0.6); padding:8px; border-radius:6px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                        <span style="font-size:0.75rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.05em; font-weight:600;">Live RGB Exposure Histogram</span>
-                    </div>
-                    <canvas id="canvasHistogram" width="480" height="60" style="width:100%; height:60px; display:block; background:#020617; border-radius:4px;"></canvas>
-                </div>
+                            <div class="control-group">
+                                <label for="acqShutter">Shutter Speed / Exposure</label>
+                                <select id="acqShutter" class="dropdown" onchange="onAcquisitionSettingChanged('shutter_speed', this.value)">
+                                    <option value="1/1000">1/1000</option>
+                                    <option value="1/500">1/500</option>
+                                    <option value="1/250">1/250</option>
+                                    <option value="1/125" selected>1/125</option>
+                                    <option value="1/60">1/60</option>
+                                    <option value="1/30">1/30</option>
+                                    <option value="1/4">1/4</option>
+                                    <option value="1s">1s</option>
+                                    <option value="2s">2s</option>
+                                    <option value="5s">5s</option>
+                                </select>
+                            </div>
 
-                <div class="stream-telemetry">
-                    <span>Status: <strong id="streamState">IDLE</strong></span>
-                    <span>FPS: <strong id="streamFps">0.0</strong></span>
-                    <span>Res: <strong id="streamRes">640x480</strong></span>
-                    <button class="btn btn-secondary btn-small" onclick="stopLiveView()">Stop Stream</button>
+                            <div class="control-group">
+                                <label for="acqAperture">Aperture (f-stop)</label>
+                                <select id="acqAperture" class="dropdown" onchange="onAcquisitionSettingChanged('aperture', this.value)">
+                                    <option value="1.4">f/1.4</option>
+                                    <option value="2.8">f/2.8</option>
+                                    <option value="4.0">f/4.0</option>
+                                    <option value="5.6" selected>f/5.6</option>
+                                    <option value="8.0">f/8.0</option>
+                                    <option value="11.0">f/11.0</option>
+                                    <option value="16.0">f/16.0</option>
+                                </select>
+                            </div>
+
+                            <div class="control-group">
+                                <label for="acqFormat">Image Format</label>
+                                <select id="acqFormat" class="dropdown" onchange="onAcquisitionSettingChanged('camera_format', this.value)">
+                                    <option value="JPEG" selected>JPEG</option>
+                                    <option value="RAW">RAW</option>
+                                    <option value="RAW+JPEG">RAW + JPEG</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <h3 style="margin-top:16px;">⏱️ Timing Schedule</h3>
+
+                        <div class="control-grid-3">
+                            <div class="control-group">
+                                <label for="planTotalShots">Total Shots</label>
+                                <input type="number" id="planTotalShots" class="input-field" value="20" min="2" onchange="updateTrajectoryPreview()">
+                            </div>
+                            <div class="control-group">
+                                <label for="planInterval">Interval (s)</label>
+                                <input type="number" id="planInterval" class="input-field" value="5.0" min="1" step="0.5" onchange="updateTrajectoryPreview()">
+                            </div>
+                            <div class="control-group">
+                                <label for="planSettle">Settle Pause (s)</label>
+                                <input type="number" id="planSettle" class="input-field" value="0.5" min="0" step="0.1">
+                            </div>
+                        </div>
+
+                        <div class="timing-summary-card">
+                            <span id="timingEstimateText">Total Runtime: 1m 35s | 24 fps clip: 0.8s</span>
+                        </div>
+                    </div>
+
+                    <!-- Right: Test Shot Capture & Inspector -->
+                    <div class="card">
+                        <div class="card-title-row">
+                            <h3>📸 Test Shot Verification</h3>
+                            <button class="btn btn-primary btn-sm" id="btnTakeTestShot" onclick="triggerPlanTestShot()">
+                                ⚡ Take Test Shot
+                            </button>
+                        </div>
+
+                        <p class="panel-desc">Captures a test exposure using your acquisition profile and inspects histogram and EXIF metadata.</p>
+
+                        <!-- Test Shot Gallery Grid -->
+                        <div class="gallery-grid" id="testShotGallery">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
                 </div>
             </section>
 
-            <!-- Test Shot Gallery & Acquisition Profile Panel -->
-            <section class="card gallery-card">
-                <div class="card-header">
-                    <h2>Test Shots & Acquisition Settings</h2>
-                    <button class="btn btn-primary btn-small" onclick="triggerPlanTestShot()">📸 Take Test Shot</button>
-                </div>
-
-                <!-- Acquisition Exposure Settings -->
-                <div class="control-group" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 10px; margin-bottom: 10px;">
-                    <span style="font-weight:600; font-size:0.85rem; color:#34d399; display:block; margin-bottom:8px;">📸 Acquisition Exposure Settings (Recording & Test Shots)</span>
-                    <div class="control-group" style="margin-bottom:6px;">
-                        <label>Acquisition ISO</label>
-                        <select id="acqIso" class="dropdown" onchange="onAcquisitionSettingChanged('iso', this.value)">
-                            <option value="400">400</option>
-                        </select>
+            <!-- ======================================================== -->
+            <!-- STEP 5: FINAL REVIEW & LIVE PROGRESS                     -->
+            <!-- ======================================================== -->
+            <section class="step-panel" id="stepPanel5">
+                <div class="panel-header">
+                    <div>
+                        <h2>Step 5: Pre-Flight Review & Live Execution</h2>
+                        <p class="panel-desc">Verify pre-flight checklist, trigger the sequence, and monitor live progress and captured photos.</p>
                     </div>
-                    <div class="control-group" style="margin-bottom:6px;">
-                        <label>Acquisition Shutter Speed</label>
-                        <select id="acqShutter" class="dropdown" onchange="onAcquisitionSettingChanged('shutter_speed', this.value)">
-                            <option value="1/125">1/125</option>
-                        </select>
-                    </div>
-                    <div class="control-group">
-                        <label>Acquisition Aperture</label>
-                        <select id="acqAperture" class="dropdown" onchange="onAcquisitionSettingChanged('aperture', this.value)">
-                            <option value="f/8">f/8</option>
-                        </select>
+                    <div class="step-nav-actions">
+                        <button class="btn btn-secondary" onclick="goToStep(4)">← Back to Acquisition</button>
                     </div>
                 </div>
 
-                <div class="gallery-grid" id="testShotGallery">
-                    <!-- Populated dynamically -->
+                <div class="step-grid two-column">
+                    <!-- Left: Pre-Flight Checklist & Execution Controls -->
+                    <div class="card">
+                        <div class="card-title-row">
+                            <h3>🚀 Sequence Execution</h3>
+                            <span class="badge" id="liveRunStateBadge">IDLE</span>
+                        </div>
+
+                        <!-- Pre-Flight Checklist -->
+                        <div class="checklist-box">
+                            <h4>Pre-Flight Safety Checklist</h4>
+                            <ul class="checklist-items">
+                                <li id="chkZeroRef"><span class="chk-icon">⏳</span> Coordinate Zero Origin Confirmed</li>
+                                <li id="chkMotors"><span class="chk-icon">⏳</span> Motors Connected & Drivers Active</li>
+                                <li id="chkCamera"><span class="chk-icon">⏳</span> Camera Connected & Ready</li>
+                                <li id="chkTrajectory"><span class="chk-icon">⏳</span> Trajectory Verified</li>
+                            </ul>
+                        </div>
+
+                        <!-- Sequence Overview Metrics -->
+                        <div class="metric-row" style="margin-top:12px;">
+                            <div class="metric-box">
+                                <span class="metric-label">Sequence</span>
+                                <span class="metric-val mono-sub" id="execPlanName">Sunset Panorama</span>
+                            </div>
+                            <div class="metric-box">
+                                <span class="metric-label">Target Shots</span>
+                                <span class="metric-val" id="execTotalShots">20</span>
+                            </div>
+                        </div>
+
+                        <!-- Execution Progress Bar -->
+                        <div class="execution-progress-box" style="margin-top:16px;">
+                            <div class="progress-header">
+                                <span class="progress-title">Capture Progress</span>
+                                <span id="execProgressPct" class="progress-pct">0%</span>
+                            </div>
+                            <div class="progress-bar-container large">
+                                <div class="progress-bar" id="execProgressBar" style="width: 0%;"></div>
+                            </div>
+                        </div>
+
+                        <!-- Live Execution Telemetry -->
+                        <div class="telemetry-grid-4">
+                            <div class="telem-item">
+                                <span class="telem-label">Shot</span>
+                                <span class="telem-val" id="execCurrentShot">0 / 20</span>
+                            </div>
+                            <div class="telem-item">
+                                <span class="telem-label">Elapsed</span>
+                                <span class="telem-val" id="execElapsed">00:00</span>
+                            </div>
+                            <div class="telem-item">
+                                <span class="telem-label">Remaining</span>
+                                <span class="telem-val" id="execRemaining">--:--</span>
+                            </div>
+                            <div class="telem-item">
+                                <span class="telem-label">Next Shot</span>
+                                <span class="telem-val" id="execNextCountdown">--</span>
+                            </div>
+                        </div>
+
+                        <!-- Primary Execution Action Buttons -->
+                        <div class="action-btn-group" style="margin-top:16px;">
+                            <button class="btn btn-accent btn-lg btn-block" id="btnStartExecution" onclick="startSequenceExecution()">
+                                🚀 Start Sequence Capture
+                            </button>
+                            <div class="btn-row">
+                                <button class="btn btn-secondary flex-1" id="btnPauseExecution" onclick="togglePauseExecution()" disabled>
+                                    ⏸️ Pause
+                                </button>
+                                <button class="btn btn-danger flex-1" id="btnCancelExecution" onclick="cancelSequenceExecution()" disabled>
+                                    ⏹️ Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Live Captured Photos Review Gallery -->
+                    <div class="card">
+                        <div class="card-title-row">
+                            <h3>🖼️ Live Captured Frame Review</h3>
+                            <span class="mono-sub" id="execPhotoCount">0 photos captured</span>
+                        </div>
+
+                        <div class="live-gallery-container" id="execLiveGallery">
+                            <div class="placeholder-box" id="galleryEmptyPlaceholder">
+                                <span class="placeholder-icon">🎞️</span>
+                                <span>No frames captured yet</span>
+                                <span class="mono-sub">Frames will appear here as they are taken</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
 
-            <!-- Dry Run Rehearsal & Clearance Panel -->
-            <section class="card dryrun-card">
-                <div class="card-header">
-                    <h2>Motion Dry-Run Rehearsal</h2>
-                    <span class="badge" id="badgeReportStatus">Clearance: UNTESTED</span>
-                </div>
-
-                <div class="progress-bar-container">
-                    <div class="progress-bar" id="dryRunProgressBar" style="width: 0%;"></div>
-                </div>
-
-                <div class="metric" style="margin-bottom:6px;">
-                    <span class="label">REHEARSAL SHOT</span>
-                    <span class="value" id="dryRunValShot">0 / 0</span>
-                </div>
-                <div class="metric" style="margin-bottom:10px;">
-                    <span class="label">PROGRESS</span>
-                    <span class="value" id="dryRunValPct">0%</span>
-                </div>
-
-                <div style="display:flex; flex-direction:column; gap:8px;">
-                    <button class="btn btn-accent btn-block" onclick="startDryRun()">🚀 Start Motion Dry Run</button>
-                    <button class="btn btn-danger btn-block" onclick="cancelDryRun()">Cancel Dry Run</button>
-                </div>
-            </section>
         </main>
     </div>
 
-    <!-- Modal for Test Shot Metadata Detail -->
+    <!-- Modal for Metadata Inspector -->
     <div id="metaModal" class="modal hidden">
         <div class="modal-content card">
             <span class="modal-close" onclick="closeMetaModal()">&times;</span>
-            <h2>Test Shot Metadata Inspector</h2>
+            <h2>Shot Metadata & Artifacts Inspector</h2>
             <pre id="metaJsonDisplay" class="json-display"></pre>
         </div>
     </div>
 
-    <script src="app.js?v=20260808_1318"></script>
+    <!-- Image Zoom Modal -->
+    <div id="imageZoomModal" class="modal hidden">
+        <div class="modal-content card image-zoom-card">
+            <span class="modal-close" onclick="closeImageZoomModal()">&times;</span>
+            <h3 id="zoomImageTitle">Captured Frame</h3>
+            <div class="zoom-img-wrapper">
+                <img id="zoomImage" src="" alt="Captured Frame" />
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=20260815_01"></script>
 </body>
 </html>
