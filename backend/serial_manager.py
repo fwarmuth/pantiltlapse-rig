@@ -12,9 +12,19 @@ class SerialManager:
     Thread/Task safe with an internal asyncio.Lock.
     """
 
-    def __init__(self, port: str = "/dev/ttyUSB0", baudrate: int = 9600):
+    def __init__(
+        self,
+        port: str = "/dev/ttyUSB0",
+        baudrate: int = 9600,
+        fallback_ports: list[str] | None = None,
+    ):
         self.port = port
         self.baudrate = baudrate
+        self.fallback_ports = (
+            ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"]
+            if fallback_ports is None
+            else list(fallback_ports)
+        )
         self.is_connected = False
 
         # Telemetry state
@@ -27,32 +37,54 @@ class SerialManager:
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
 
+    async def _open_port(self, port_path: str) -> bool:
+        """Internal helper to open a specific serial port and establish initial handshakes."""
+        import serial_asyncio
+
+        self._reader, self._writer = await serial_asyncio.open_serial_connection(
+            url=port_path, baudrate=self.baudrate
+        )
+        self.is_connected = True
+        self.state = "IDLE"
+        self.port = port_path
+        logger.info(f"Connected to motor controller on {port_path} at {self.baudrate} baud.")
+
+        # Flush any boot banner text lines from serial buffer
+        await self._flush_input_buffer()
+
+        # Query version and initial status
+        await self.send_command("V", timeout=1.5)
+        await self.send_command("S", timeout=1.5)
+        return True
+
     async def connect(self) -> bool:
-        """Attempt connection to physical or emulated serial endpoint. No silent fallback to mock mode."""
-        try:
-            import serial_asyncio
+        """Attempt connection to configured serial endpoint or fallback priority ports."""
+        candidate_ports = [self.port]
+        for fallback in self.fallback_ports:
+            if fallback not in candidate_ports:
+                candidate_ports.append(fallback)
 
-            self._reader, self._writer = await serial_asyncio.open_serial_connection(
-                url=self.port, baudrate=self.baudrate
-            )
-            self.is_connected = True
-            self.state = "IDLE"
-            logger.info(f"Connected to motor controller on {self.port} at {self.baudrate} baud.")
+        for idx, port_path in enumerate(candidate_ports):
+            try:
+                if await self._open_port(port_path):
+                    return True
+            except Exception as e:
+                if idx == 0:
+                    logger.warning(
+                        f"Failed to open primary serial port '{port_path}': {e}. "
+                        f"Attempting fallback ports {candidate_ports[1:]}..."
+                    )
+                else:
+                    logger.debug(f"Fallback port '{port_path}' failed: {e}")
 
-            # Flush any boot banner text lines from serial buffer
-            await self._flush_input_buffer()
-
-            # Query version and initial status
-            await self.send_command("V", timeout=1.5)
-            await self.send_command("S", timeout=1.5)
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to open serial port {self.port}: {e}. Motors remain disconnected.")
-            self.is_connected = False
-            self.state = "DISCONNECTED"
-            self._reader = None
-            self._writer = None
-            return False
+        logger.warning(
+            f"Failed to open serial port across all candidate paths {candidate_ports}. Motors remain disconnected."
+        )
+        self.is_connected = False
+        self.state = "DISCONNECTED"
+        self._reader = None
+        self._writer = None
+        return False
 
     async def disconnect(self):
         """Close serial connection if open."""

@@ -9,7 +9,7 @@
             "cwd": "${workspaceFolder}/backend",
             "env": {
                 "FAKE_CAMERA": "true",
-                "SERIAL_PORT": "/dev/ttyUSB0",
+                "SERIAL_PORT": "/dev/ttyUSB1",
                 "SERIAL_BAUD": "9600",
                 "PYTHONPATH": "${workspaceFolder}/backend"
             },
