@@ -11,7 +11,7 @@ from serial_manager import SerialManager
 
 @pytest.mark.asyncio
 async def test_disconnected_serial_manager():
-    sm = SerialManager(port="/dev/nonexistent_tty_device_12345")
+    sm = SerialManager(port="/dev/nonexistent_tty_device_12345", fallback_ports=[])
     connected = await sm.connect()
     assert connected is False
     assert sm.is_connected is False
