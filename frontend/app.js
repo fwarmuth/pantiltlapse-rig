@@ -1112,9 +1112,25 @@ async function onPlanSelected(planId) {
     }
 }
 
+function generateUUID() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+        return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+            (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+        );
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(c) {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
+
 function createNewPlan() {
     activePlan = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         revision: 1,
         name: "New Time-lapse Sequence",
         description: "",
@@ -1206,10 +1222,21 @@ async function saveCurrentPlan() {
             document.getElementById("selectPlan").value = saved.id;
             syncPlanInputs();
         } else {
-            alert(saved.detail?.message || "Failed to save plan");
+            let errorMsg = "Failed to save plan";
+            if (saved && saved.detail) {
+                if (typeof saved.detail === "string") {
+                    errorMsg = saved.detail;
+                } else if (saved.detail.message) {
+                    errorMsg = saved.detail.message;
+                } else if (Array.isArray(saved.detail)) {
+                    errorMsg = saved.detail.map(d => (d.loc ? d.loc.join(".") + ": " : "") + d.msg).join("\n");
+                }
+            }
+            alert(`❌ Save Failed: ${errorMsg}`);
         }
     } catch (e) {
         console.error("Save plan error:", e);
+        alert(`❌ Network or server error while saving plan: ${e.message}`);
     }
 }
 
