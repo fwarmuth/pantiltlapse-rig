@@ -1619,28 +1619,54 @@ function deleteKeyframe(track, idx) {
     updateTrajectoryPreview();
 }
 
-// --------------------------------------------------------------------------
-// Hermite Spline Sampling Algorithm for Independent Axis Tracks
-// --------------------------------------------------------------------------
+// ==========================================================================
+// 5. Hermite Spline Sampling Algorithm & Trajectory Evaluation
+// ==========================================================================
 
+/**
+ * Calculates numerical tangents (slopes) at each keyframe along a single axis track.
+ * Uses central differences for interior keyframes:
+ *   tangent[i] = ((value[i+1] - value[i-1]) / (progress[i+1] - progress[i-1])) * scale
+ * And one-sided forward/backward differences for endpoints.
+ *
+ * @param {Array<Object>} keyframes - List of keyframe objects {progress, value, tangent_scale, outgoing_mode}
+ * @returns {Array<number>} Tangent slope for each keyframe in degrees-per-unit-progress
+ */
 function calculateTrackTangents(keyframes) {
     const num = keyframes.length;
     return keyframes.map((kf, i) => {
         const scale = kf.tangent_scale !== undefined ? kf.tangent_scale : 1.0;
-        if (scale === 0.0) return 0.0;
+        if (scale === 0.0) return 0.0; // Flat tangent
+
         if (i === 0) {
+            // First keyframe: Forward difference
             const dt = keyframes[1].progress - keyframes[0].progress;
             return dt > 0 ? ((keyframes[1].value - keyframes[0].value) / dt) * scale : 0.0;
         }
         if (i === num - 1) {
+            // Last keyframe: Backward difference
             const dt = keyframes[num - 1].progress - keyframes[num - 2].progress;
             return dt > 0 ? ((keyframes[num - 1].value - keyframes[num - 2].value) / dt) * scale : 0.0;
         }
+        // Interior keyframes: Central difference (Catmull-Rom style)
         const dt = keyframes[i + 1].progress - keyframes[i - 1].progress;
         return dt > 0 ? ((keyframes[i + 1].value - keyframes[i - 1].value) / dt) * scale : 0.0;
     });
 }
 
+/**
+ * Samples a piecewise cubic Hermite or linear track across `count` uniformly spaced points.
+ *
+ * Evaluates standard Hermite cubic basis polynomials:
+ *   h00(u) =  2u^3 - 3u^2 + 1  (weights starting value)
+ *   h10(u) =   u^3 - 2u^2 + u  (weights starting tangent * segment_length)
+ *   h01(u) = -2u^3 + 3u^2      (weights ending value)
+ *   h11(u) =   u^3 -  u^2      (weights ending tangent * segment_length)
+ *
+ * @param {Array<Object>} keyframes - Axis keyframes
+ * @param {number} count - Total number of sampled points to return
+ * @returns {Array<{val: number, t: number}>} Sampled curve points with value (degrees) and timeline t [0..1]
+ */
 function sampleTrackSpline(keyframes, count) {
     if (!keyframes || keyframes.length === 0) return [];
     if (keyframes.length === 1) {
@@ -1653,6 +1679,7 @@ function sampleTrackSpline(keyframes, count) {
     for (let i = 0; i < count; i++) {
         const t = count > 1 ? i / (count - 1) : 0.0;
         
+        // Locate active segment [kfA, kfB] enclosing progress t
         let seg = 0;
         for (let s = 0; s < keyframes.length - 1; s++) {
             if (keyframes[s].progress <= t) seg = s;
@@ -1666,11 +1693,13 @@ function sampleTrackSpline(keyframes, count) {
         const u = h > 0 ? Math.max(0, Math.min(1, (t - kfA.progress) / h)) : 0;
 
         if (kfA.outgoing_mode === "linear") {
+            // Linear interpolation segment
             points.push({
                 val: kfA.value + u * (kfB.value - kfA.value),
                 t: t
             });
         } else {
+            // Cubic Hermite Spline evaluation
             const h00 = 2 * Math.pow(u, 3) - 3 * Math.pow(u, 2) + 1;
             const h10 = Math.pow(u, 3) - 2 * Math.pow(u, 2) + u;
             const h01 = -2 * Math.pow(u, 3) + 3 * Math.pow(u, 2);
@@ -1683,6 +1712,13 @@ function sampleTrackSpline(keyframes, count) {
     return points;
 }
 
+/**
+ * Calculates the exact interpolated axis angle (degrees) for a single arbitrary timeline progress t.
+ *
+ * @param {Array<Object>} keyframes - Axis keyframes
+ * @param {number} t - Normalized progress value in [0.0, 1.0]
+ * @returns {number} Interpolated angle in degrees
+ */
 function sampleSplineValueAt(keyframes, t) {
     if (!keyframes || keyframes.length === 0) return 0.0;
     if (keyframes.length === 1) return keyframes[0].value;
@@ -1713,9 +1749,13 @@ function sampleSplineValueAt(keyframes, t) {
 }
 
 // --------------------------------------------------------------------------
-// Interactive SVG Trajectory Plot Drawing & View Update
+// Interactive SVG Trajectory Plot Drawing & View Update (Step 3)
 // --------------------------------------------------------------------------
 
+/**
+ * Re-renders the interactive SVG curve editor in Step 3.
+ * Transforms normalized trajectory data into Cartesian SVG paths, grid lines, and interactive node handles.
+ */
 function updateTrajectoryPreview() {
     if (!currentPanKeyframes || currentPanKeyframes.length < 2 || !currentTiltKeyframes || currentTiltKeyframes.length < 2) return;
     const totalShots = parseInt(document.getElementById("planTotalShots")?.value, 10) || 20;
@@ -1983,10 +2023,18 @@ function updateTrajectoryPreview() {
     updateMiniTrajectoryProgress();
 }
 
-// --------------------------------------------------------------------------
-// Mini Motion Trajectory & Step Progress Monitor (Studio Right Pane)
-// --------------------------------------------------------------------------
+// ==========================================================================
+// 6. Interactive Motion Trajectory & Step Timeline (Step 5 Monitoring)
+// ==========================================================================
 
+/**
+ * Renders the mini trajectory curve plot and discrete step markers in Step 5's main monitoring card.
+ * Plots:
+ *   - Continuous Hermite spline tracks for Pan (cyan) and Tilt (emerald).
+ *   - Discrete, interactive step markers for every planned shot (Taken = solid dot, Active = crosshair, Pending = hollow ring).
+ *   - Live physical rig position cursor updated via SSE telemetry.
+ *   - Highlight ring and vertical guide for user-selected timeline step.
+ */
 function updateMiniTrajectoryProgress() {
     const svgPlot = document.getElementById("svgMiniPlot");
     if (!svgPlot) return;
@@ -2026,7 +2074,7 @@ function updateMiniTrajectoryProgress() {
         statusLabel = "Completed";
     }
 
-    // Sample high-density points for smooth curves
+    // Sample high-density points for smooth continuous curves
     const sampledPan = sampleTrackSpline(currentPanKeyframes, 90);
     const sampledTilt = sampleTrackSpline(currentTiltKeyframes, 90);
 
@@ -2062,7 +2110,7 @@ function updateMiniTrajectoryProgress() {
     const pToX = (p) => padL + Math.max(0, Math.min(1, p)) * plotW;
     const degToY = (d) => padT + plotH - ((d - yMin) / yRange) * plotH;
 
-    // 1. Grid & Y Axis
+    // 1. Grid & Y Axis Scale Ticks
     const gridEl = document.getElementById("svgMiniGrid");
     if (gridEl) {
         let gHtml = "";
@@ -2080,7 +2128,7 @@ function updateMiniTrajectoryProgress() {
         gridEl.innerHTML = gHtml;
     }
 
-    // 2. Zero Reference Line
+    // 2. Zero Reference Coordinate Line
     const zeroEl = document.getElementById("svgMiniZeroLine");
     if (zeroEl) {
         if (0 >= yMin && 0 <= yMax) {
@@ -2091,7 +2139,7 @@ function updateMiniTrajectoryProgress() {
         }
     }
 
-    // 3. Continuous Curves
+    // 3. Continuous Motion Curves
     let panPath = "";
     let tiltPath = "";
     sampledPan.forEach((p, i) => {
@@ -2110,7 +2158,7 @@ function updateMiniTrajectoryProgress() {
     if (pathPanEl) pathPanEl.setAttribute("d", panPath);
     if (pathTiltEl) pathTiltEl.setAttribute("d", tiltPath);
 
-    // 4. Interactive Step Points for every planned shot
+    // 4. Interactive Step Points for each planned shot
     const stepsGroup = document.getElementById("svgMiniSteps");
     if (stepsGroup) {
         let sHtml = "";
@@ -2127,16 +2175,16 @@ function updateMiniTrajectoryProgress() {
             const isCurrent = currentShotNum > 0 && shotIndex === currentShotNum;
 
             if (isTaken) {
-                // Completed steps: solid cyan / emerald dots
+                // Completed shots: Solid cyan / emerald dots
                 sHtml += `<circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="3" fill="#38bdf8" stroke="#0284c7" stroke-width="1.2" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
                 sHtml += `<circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="3" fill="#34d399" stroke="#059669" stroke-width="1.2" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
             } else if (isCurrent) {
-                // Active step: vertical guide + highlighted pulsing markers
+                // Active executing shot: Crosshair guide + highlighted pulsing markers
                 sHtml += `<line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${padT + plotH}" stroke="#facc15" stroke-width="1.5" stroke-dasharray="2 2"/>`;
                 sHtml += `<circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="4.5" fill="#facc15" stroke="#ffffff" stroke-width="1.5" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
                 sHtml += `<circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="4.5" fill="#facc15" stroke="#ffffff" stroke-width="1.5" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
             } else {
-                // Pending steps: hollow subtle markers
+                // Pending upcoming shots: Outlined subtle target markers
                 sHtml += `<circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="2.5" fill="#0f172a" stroke="rgba(56, 189, 248, 0.6)" stroke-width="1.2" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
                 sHtml += `<circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="2.5" fill="#0f172a" stroke="rgba(52, 211, 153, 0.6)" stroke-width="1.2" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
             }
@@ -2144,7 +2192,7 @@ function updateMiniTrajectoryProgress() {
         stepsGroup.innerHTML = sHtml;
     }
 
-    // 5. Timeline Selected Step Highlight
+    // 5. Timeline User-Selected Step Highlight
     const selGroup = document.getElementById("svgTimelineSelected");
     if (selGroup) {
         if (selectedTimelineStep !== null && selectedTimelineStep >= 1 && selectedTimelineStep <= totalShots) {
@@ -2165,7 +2213,7 @@ function updateMiniTrajectoryProgress() {
         }
     }
 
-    // 6. Live Rig Position Marker
+    // 6. Live Physical Motor Position Indicator
     const cursorGroup = document.getElementById("svgMiniCursor");
     if (cursorGroup) {
         let curHtml = "";
@@ -2184,7 +2232,7 @@ function updateMiniTrajectoryProgress() {
         cursorGroup.innerHTML = curHtml;
     }
 
-    // 7. Badges & Progress Text
+    // 7. Badges & Execution Status Text
     if (shotBadge) {
         shotBadge.textContent = `Shot ${currentShotNum} / ${totalShots}`;
     }
@@ -2194,6 +2242,12 @@ function updateMiniTrajectoryProgress() {
     }
 }
 
+/**
+ * Synchronizes user selection of a timeline step between the SVG curve plot,
+ * the active frame inspector, and the horizontal filmstrip carousel.
+ *
+ * @param {number} shotIndex - 1-based shot number
+ */
 function selectTimelineStep(shotIndex) {
     selectedTimelineStep = shotIndex;
     const totalShots = parseInt(document.getElementById("planTotalShots")?.value, 10) || activePlan?.schedule?.total_shots || 20;
@@ -2207,7 +2261,7 @@ function selectTimelineStep(shotIndex) {
     const targetPan = sampleSplineValueAt(currentPanKeyframes, t);
     const targetTilt = sampleSplineValueAt(currentTiltKeyframes, t);
 
-    // Look for captured photo
+    // Look for captured photo in memory cache
     const photo = capturedPhotos.find(p => p.shotIndex === shotIndex);
     const imgEl = document.getElementById("execSelectedFrameImg");
     const placeholder = document.getElementById("galleryEmptyPlaceholder");
@@ -2217,6 +2271,7 @@ function selectTimelineStep(shotIndex) {
     const timeEl = document.getElementById("execFrameTime");
 
     if (photo && imgEl) {
+        // Frame is captured: Display photo and physical telemetry
         imgEl.src = photo.imgUrl;
         imgEl.classList.remove("hidden");
         if (placeholder) placeholder.style.display = "none";
@@ -2225,6 +2280,7 @@ function selectTimelineStep(shotIndex) {
         if (timeEl) timeEl.textContent = photo.time;
         if (infoEl) infoEl.classList.remove("hidden");
     } else {
+        // Frame is pending: Show placeholder with planned target angles
         if (imgEl) imgEl.classList.add("hidden");
         if (placeholder) {
             placeholder.style.display = "flex";
@@ -2240,7 +2296,7 @@ function selectTimelineStep(shotIndex) {
         if (infoEl) infoEl.classList.remove("hidden");
     }
 
-    // Sync active filmstrip item
+    // Synchronize active filmstrip thumbnail item & center scroll
     const filmstripItems = document.querySelectorAll(".filmstrip-item");
     filmstripItems.forEach(item => {
         const itemShot = parseInt(item.dataset.shot, 10);
@@ -2253,6 +2309,9 @@ function selectTimelineStep(shotIndex) {
     updateMiniTrajectoryProgress();
 }
 
+/**
+ * Opens a full-screen zoomable inspection modal for the currently selected captured frame.
+ */
 function openEnlargedSelectedFrame() {
     if (!selectedTimelineStep) {
         if (capturedPhotos.length > 0) {
@@ -2275,6 +2334,12 @@ function openEnlargedSelectedFrame() {
 // Archived & Reached Poses Capture Logger (Studio Right Pane)
 // --------------------------------------------------------------------------
 
+/**
+ * Records an achieved physical pose into the persistent session log table.
+ * Calculates spatial error delta: sqrt(deltaPan^2 + deltaTilt^2) and assigns color thresholding.
+ *
+ * @param {Object} entry - Log entry parameters {type, shotNum, targetPan, targetTilt, actualPan, actualTilt}
+ */
 function recordReachedPose({ type = "SHOT", shotNum = null, targetPan = null, targetTilt = null, actualPan = 0, actualTilt = 0 }) {
     const timeStr = new Date().toTimeString().split(" ")[0];
     let deltaStr = "--";
