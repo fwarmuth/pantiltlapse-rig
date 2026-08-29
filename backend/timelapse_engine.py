@@ -19,12 +19,14 @@ class TimelapseConfig(BaseModel):
     settle_time_s: float = Field(default=0.5, ge=0.0, description="Settle delay pause after move (seconds)")
     capture_photo: bool = Field(default=True, description="Trigger photo capture on each step")
     easing: str = Field(default="ease_in_out", description="Motion profile: 'linear', 'ease_in_out', or 's_curve'")
+    plan_id: str | None = Field(default=None, description="Optional associated plan UUID")
+    poses: list[dict[str, float]] | None = Field(default=None, description="Explicit sampled trajectory poses")
 
 
 class TimelapseEngine:
     """
     Event-driven background state machine for 2-axis automated motion time-lapses.
-    Calculates step interpolation with configurable motion easing (Linear, Ease-In-Out, S-Curve),
+    Calculates step interpolation with configurable motion easing or explicit multi-keyframe trajectory poses,
     controls motors, handles settle pauses, triggers Canon DSLR, and streams live progress.
     """
 
@@ -53,10 +55,13 @@ class TimelapseEngine:
         if self.state in ("RUNNING", "PAUSED"):
             return {"status": "ERROR", "message": "Time-lapse already active"}
 
-        # This legacy endpoint uses absolute coordinates, so apply the same
-        # reference and tilt-bound checks as the plan-based motion paths.
-        self.rig_mgr.validate_move(pan=config.start_pan, tilt=config.start_tilt)
-        self.rig_mgr.validate_move(pan=config.end_pan, tilt=config.end_tilt)
+        # Validate movement boundaries
+        if config.poses:
+            for p in config.poses:
+                self.rig_mgr.validate_move(pan=p.get("pan", 0.0), tilt=p.get("tilt", 0.0))
+        else:
+            self.rig_mgr.validate_move(pan=config.start_pan, tilt=config.start_tilt)
+            self.rig_mgr.validate_move(pan=config.end_pan, tilt=config.end_tilt)
 
         acquired = await self.coordinator.acquire("RECORDING")
         if not acquired:
@@ -141,15 +146,20 @@ class TimelapseEngine:
 
                 step_start_time = time.time()
 
-                # Calculate step ratio with easing profile
-                raw_ratio = k / (total - 1) if total > 1 else 0.0
-                eased_ratio = self._calculate_easing(raw_ratio, config.easing)
-
-                target_pan = config.start_pan + eased_ratio * (config.end_pan - config.start_pan)
-                target_tilt = config.start_tilt + eased_ratio * (config.end_tilt - config.start_tilt)
+                # Calculate target pose from explicit trajectory poses or fallback to easing profile
+                if config.poses and len(config.poses) == total:
+                    target_pan = float(config.poses[k].get("pan", 0.0))
+                    target_tilt = float(config.poses[k].get("tilt", 0.0))
+                    profile_label = "trajectory"
+                else:
+                    raw_ratio = k / (total - 1) if total > 1 else 0.0
+                    eased_ratio = self._calculate_easing(raw_ratio, config.easing)
+                    target_pan = config.start_pan + eased_ratio * (config.end_pan - config.start_pan)
+                    target_tilt = config.start_tilt + eased_ratio * (config.end_tilt - config.start_tilt)
+                    profile_label = config.easing
 
                 logger.info(
-                    f"Shot {k + 1}/{total} [{config.easing}]: Moving to ({target_pan:.2f}°, {target_tilt:.2f}°)..."
+                    f"Shot {k + 1}/{total} [{profile_label}]: Moving to ({target_pan:.2f}°, {target_tilt:.2f}°)..."
                 )
 
                 # Step 1: Move Motors

@@ -1397,35 +1397,411 @@ body {
    Step 5: Pre-Flight Checklist & Live Telemetry
    ========================================================================== */
 
-.checklist-box {
-    background: rgba(2, 6, 23, 0.5);
+.checklist-compact {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    background: rgba(2, 6, 23, 0.45);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
+    padding: 8px;
+}
+
+.chk-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.76rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    padding: 5px 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.2s ease;
+}
+
+.chk-pill.passed {
+    color: #4ade80;
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.3);
+}
+
+.chk-pill.failed {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+.chk-icon {
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+/* Studio Right Pane: Mini Motion Trajectory & Step Progress Monitor */
+.studio-progress-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     padding: 12px;
 }
 
-.checklist-items {
-    list-style: none;
+.mini-progress-badges {
     display: flex;
-    flex-direction: column;
+    align-items: center;
     gap: 6px;
-    margin-top: 6px;
-    font-size: 0.8rem;
 }
 
-.checklist-items li {
+.mini-plot-container {
+    width: 100%;
+    height: 110px;
+    background: rgba(2, 6, 23, 0.65);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    position: relative;
+}
+
+.mini-plot-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.mini-plot-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    padding-top: 2px;
+}
+
+.mini-legend {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7rem;
+}
+
+.legend-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.legend-step-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.legend-step-dot.done {
+    background: #38bdf8;
+    box-shadow: 0 0 3px rgba(56, 189, 248, 0.6);
+}
+
+.legend-step-dot.current {
+    background: #facc15;
+    box-shadow: 0 0 5px #facc15;
+}
+
+.legend-step-dot.next {
+    border: 1px dashed rgba(255, 255, 255, 0.45);
+    background: transparent;
+}
+
+.mini-step-text {
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+}
+
+/* ==========================================================================
+   Step 5: Interactive Trajectory Timeline & Horizontal Filmstrip Gallery
+   ========================================================================== */
+
+.exec-timeline-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.timeline-plot-container {
+    height: 125px;
+    background: rgba(2, 6, 23, 0.7);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    position: relative;
+}
+
+.timeline-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+}
+
+.timeline-step-circle {
+    cursor: pointer;
+    transition: r 0.15s ease, stroke 0.15s ease, stroke-width 0.15s ease;
+}
+
+.timeline-step-circle:hover {
+    r: 6px !important;
+    stroke: #ffffff !important;
+    stroke-width: 2px !important;
+}
+
+.exec-gallery-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.exec-frame-inspector {
+    display: flex;
+    flex-direction: column;
+    background: rgba(2, 6, 23, 0.85);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.frame-preview-wrap {
+    width: 100%;
+    min-height: 180px;
+    max-height: 240px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    position: relative;
+    overflow: hidden;
+}
+
+.exec-selected-img {
+    width: 100%;
+    height: 100%;
+    max-height: 240px;
+    object-fit: contain;
+    display: block;
+    cursor: pointer;
+}
+
+.frame-preview-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: rgba(15, 23, 42, 0.95);
+    border-top: 1px solid var(--border-color);
+    font-size: 0.78rem;
+}
+
+.frame-info-title {
+    font-weight: 700;
+    color: var(--accent-cyan);
+    font-family: var(--font-mono);
+}
+
+.filmstrip-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 4px;
+}
+
+.filmstrip-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.live-gallery-filmstrip {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 2px 8px 2px;
+    scrollbar-width: thin;
+    min-height: 90px;
+    align-items: center;
+}
+
+.filmstrip-item {
+    min-width: 96px;
+    max-width: 96px;
+    height: 84px;
+    flex-shrink: 0;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1.5px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.filmstrip-item:hover {
+    border-color: rgba(56, 189, 248, 0.6);
+    transform: translateY(-2px);
+}
+
+.filmstrip-item.active {
+    border-color: #38bdf8;
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.45);
+    transform: scale(1.04);
+}
+
+.filmstrip-thumb {
+    width: 100%;
+    height: 54px;
+    object-fit: cover;
+    background: #020617;
+    display: block;
+}
+
+.filmstrip-info {
+    padding: 3px 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    background: rgba(15, 23, 42, 0.95);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.filmstrip-info .shot-num {
+    font-weight: 700;
+    color: #fff;
+}
+
+/* Studio Right Pane: Archived / Reached Poses History Card */
+.studio-poses-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+}
+
+.poses-table-container {
+    width: 100%;
+    max-height: 140px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: rgba(2, 6, 23, 0.65);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.poses-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+    text-align: left;
+}
+
+.poses-table th {
+    position: sticky;
+    top: 0;
+    background: rgba(15, 23, 42, 0.95);
+    padding: 5px 6px;
+    font-size: 0.68rem;
+    font-weight: 600;
     color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+    white-space: nowrap;
+    z-index: 1;
 }
 
-.checklist-items li.passed {
-    color: var(--accent-emerald);
+.poses-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    white-space: nowrap;
 }
 
-.checklist-items li.failed {
-    color: var(--accent-rose);
+.poses-table tr:hover td {
+    background: rgba(56, 189, 248, 0.06);
+}
+
+.table-empty-cell {
+    text-align: center !important;
+    padding: 18px 8px !important;
+    color: var(--text-muted);
+    font-family: var(--font-sans) !important;
+    font-size: 0.74rem;
+}
+
+.delta-ok {
+    color: #4ade80;
+    font-weight: 600;
+}
+
+.delta-warn {
+    color: #fbbf24;
+    font-weight: 600;
+}
+
+.delta-err {
+    color: #f87171;
+    font-weight: 600;
+}
+
+.badge-type {
+    display: inline-block;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.badge-type.shot {
+    background: rgba(56, 189, 248, 0.18);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.badge-type.test {
+    background: rgba(168, 85, 247, 0.18);
+    color: #c084fc;
+    border: 1px solid rgba(168, 85, 247, 0.35);
+}
+
+.badge-type.dry {
+    background: rgba(251, 191, 36, 0.18);
+    color: #facc15;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+}
+
+.badge-type.zero {
+    background: rgba(34, 197, 94, 0.18);
+    color: #4ade80;
+    border: 1px solid rgba(34, 197, 94, 0.35);
 }
 
 .telemetry-grid-4 {

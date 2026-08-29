@@ -501,15 +501,12 @@
                             <span class="badge" id="liveRunStateBadge">IDLE</span>
                         </div>
 
-                        <!-- Pre-Flight Checklist -->
-                        <div class="checklist-box">
-                            <h4>Pre-Flight Safety Checklist</h4>
-                            <ul class="checklist-items">
-                                <li id="chkZeroRef"><span class="chk-icon">⏳</span> Coordinate Zero Origin Confirmed</li>
-                                <li id="chkMotors"><span class="chk-icon">⏳</span> Motors Connected & Drivers Active</li>
-                                <li id="chkCamera"><span class="chk-icon">⏳</span> Camera Connected & Ready</li>
-                                <li id="chkTrajectory"><span class="chk-icon">⏳</span> Trajectory Verified</li>
-                            </ul>
+                        <!-- Compact Pre-Flight Checklist -->
+                        <div class="checklist-compact">
+                            <div class="chk-pill" id="chkZeroRef" title="Coordinate Zero Origin"><span class="chk-icon">⏳</span> Zero Origin</div>
+                            <div class="chk-pill" id="chkMotors" title="Motors Connected & Drivers Active"><span class="chk-icon">⏳</span> Motors & Drivers</div>
+                            <div class="chk-pill" id="chkCamera" title="Camera Connected & Ready"><span class="chk-icon">⏳</span> Camera Ready</div>
+                            <div class="chk-pill" id="chkTrajectory" title="Trajectory (2+ Keyframes)"><span class="chk-icon">⏳</span> Trajectory</div>
                         </div>
 
                         <!-- Sequence Overview Metrics -->
@@ -571,19 +568,89 @@
                         </div>
                     </div>
 
-                    <!-- Live Captured Photo Feed -->
-                    <div class="card">
+                    <!-- Motion Trajectory & Interactive Step Timeline Card -->
+                    <div class="card exec-timeline-card" id="execTimelineCard">
                         <div class="card-title-row">
-                            <h3>🖼️ Live Captured Frame Review</h3>
-                            <span class="mono-sub" id="execPhotoCount">0 photos captured</span>
+                            <div class="title-with-badge">
+                                <h3>📈 Motion Trajectory & Step Timeline</h3>
+                            </div>
+                            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                <span class="badge" id="timelineSelectedStepBadge">Selected: None</span>
+                                <span class="badge" id="miniTelemShotBadge">Shot 0 / 20</span>
+                                <span class="badge" id="miniTelemAnglesBadge" style="font-family:var(--font-mono); font-size:0.75rem;">P: 0.0° T: 0.0°</span>
+                            </div>
                         </div>
 
-                        <div class="live-gallery-container" id="execLiveGallery">
-                            <div class="placeholder-box" id="galleryEmptyPlaceholder">
-                                <span class="placeholder-icon">🎞️</span>
-                                <span>No frames captured yet</span>
-                                <span class="mono-sub">Frames will appear here as they are taken</span>
+                        <!-- Full Width Interactive SVG Timeline -->
+                        <div class="mini-plot-container timeline-plot-container">
+                            <svg id="svgMiniPlot" viewBox="0 0 540 120" preserveAspectRatio="none" class="mini-plot-svg timeline-svg">
+                                <!-- Background Grid -->
+                                <g id="svgMiniGrid"></g>
+                                <!-- Zero Reference Line -->
+                                <g id="svgMiniZeroLine"></g>
+                                <!-- Curves -->
+                                <path id="svgMiniPathPan" class="curve-pan" d="" fill="none" stroke="#38bdf8" stroke-width="2.5"></path>
+                                <path id="svgMiniPathTilt" class="curve-tilt" d="" fill="none" stroke="#34d399" stroke-width="2.5"></path>
+                                <!-- Step Markers for each shot (Clickable timeline steps) -->
+                                <g id="svgMiniSteps"></g>
+                                <!-- Timeline Selected Step Highlight Marker -->
+                                <g id="svgTimelineSelected"></g>
+                                <!-- Live Motor Position Indicator -->
+                                <g id="svgMiniCursor"></g>
+                            </svg>
+                        </div>
+
+                        <!-- Timeline Legend & Status -->
+                        <div class="mini-plot-footer">
+                            <div class="mini-legend">
+                                <span class="legend-item"><span class="legend-dot" style="background:#38bdf8;"></span> Pan</span>
+                                <span class="legend-item"><span class="legend-dot" style="background:#34d399;"></span> Tilt</span>
+                                <span class="legend-item"><span class="legend-step-dot done"></span> Taken</span>
+                                <span class="legend-item"><span class="legend-step-dot current"></span> Active</span>
+                                <span class="legend-item"><span class="legend-step-dot next"></span> Pending</span>
                             </div>
+                            <div class="mini-step-text" id="miniStepProgressText">
+                                Ready — Click any step marker on the curve to inspect its frame
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Live Captured Photo Feed & Horizontal Filmstrip -->
+                    <div class="card exec-gallery-card">
+                        <div class="card-title-row">
+                            <div class="title-with-badge">
+                                <h3>🖼️ Live Captured Frame Review</h3>
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <span class="mono-sub" id="execPhotoCount">0 photos captured</span>
+                                <button class="btn btn-xs btn-secondary" onclick="openEnlargedSelectedFrame()" id="btnInspectActiveFrame" title="Inspect selected frame in full size">⛶ Full Size</button>
+                            </div>
+                        </div>
+
+                        <!-- Active Selected Frame Display -->
+                        <div class="exec-frame-inspector" id="execFrameInspector">
+                            <div class="frame-preview-wrap" id="execFramePreviewWrap">
+                                <div class="placeholder-box" id="galleryEmptyPlaceholder">
+                                    <span class="placeholder-icon">🎞️</span>
+                                    <span>No frames captured yet</span>
+                                    <span class="mono-sub">Click any step on the timeline above or run capture to view photos</span>
+                                </div>
+                                <img id="execSelectedFrameImg" class="exec-selected-img hidden" src="" alt="Selected Frame Preview" />
+                            </div>
+                            <div class="frame-preview-info hidden" id="execSelectedFrameInfo">
+                                <span id="execFrameShotTitle" class="frame-info-title">Shot #1</span>
+                                <span id="execFrameAngles" class="mono-sub">Pan: 0.0° | Tilt: 0.0°</span>
+                                <span id="execFrameTime" class="mono-sub">--:--:--</span>
+                            </div>
+                        </div>
+
+                        <!-- Horizontal Filmstrip Gallery -->
+                        <div class="filmstrip-header-row">
+                            <span class="filmstrip-label">🎞️ Timeline Filmstrip (Horizontal):</span>
+                            <span class="mono-sub" style="font-size:0.7rem;">Click any frame to sync timeline</span>
+                        </div>
+                        <div class="live-gallery-filmstrip" id="execLiveGallery">
+                            <!-- Filmstrip thumbnails dynamically inserted here -->
                         </div>
                     </div>
                 </section>
@@ -700,6 +767,42 @@
                                 </button>
                             </div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Archived & Reached Poses History Card (Review & Run step only) -->
+                <div class="card studio-poses-card hidden" id="studioPosesCard">
+                    <div class="card-title-row">
+                        <div class="title-with-badge">
+                            <h3 style="font-size:0.92rem;">🎯 Reached Poses & Waypoints</h3>
+                        </div>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <span class="badge" id="lblPoseCountBadge">0 poses</span>
+                            <button class="btn btn-xs btn-secondary" onclick="clearPoseHistory()" title="Clear recorded pose log">Clear</button>
+                        </div>
+                    </div>
+
+                    <!-- Scrollable Reached Poses Table -->
+                    <div class="poses-table-container" id="posesTableContainer">
+                        <table class="poses-table" id="posesTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Time</th>
+                                    <th>Target (P/T)</th>
+                                    <th>Actual (P/T)</th>
+                                    <th>Δ Error</th>
+                                    <th>Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="posesTableBody">
+                                <tr id="emptyPosesRow">
+                                    <td colspan="6" class="table-empty-cell">
+                                        No poses recorded yet. Reached angles during moves, dry-runs, and shots will log here.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 

@@ -51,7 +51,13 @@ let executionActive = false;
 let executionPaused = false;
 let executionStartTime = null;
 let executionIntervalTimer = null;
+let currentExecutionShot = 0;
+let timelapseState = "IDLE";
 let capturedPhotos = [];
+let recordedPoses = [];
+let lastRecordedTimelapseShot = -1;
+let lastRecordedDryRunShot = -1;
+let selectedTimelineStep = null;
 
 // SSE / Polling
 let sseEventSource = null;
@@ -101,7 +107,14 @@ function goToStep(stepNum) {
         // Step 5: Review & Execution
         updatePreFlightChecklist();
         updateExecutionSummary();
+        updateMiniTrajectoryProgress();
+        renderPosesTable();
     }
+
+    // Show Reached Poses monitoring panel in right pane ONLY on Step 5 (Review & Run)
+    const isReviewStep = (stepNum === 5);
+    const posesCard = document.getElementById("studioPosesCard");
+    if (posesCard) posesCard.classList.toggle("hidden", !isReviewStep);
 }
 
 // ==========================================================================
@@ -205,6 +218,9 @@ function updateTelemetryData(data) {
     if (currentStep === 5) {
         updatePreFlightChecklist();
     }
+
+    // Update persistent studio mini trajectory progress monitor
+    updateMiniTrajectoryProgress();
 }
 
 function initSSE() {
@@ -358,6 +374,14 @@ async function confirmZeroReference() {
             if (tiltEl) tiltEl.textContent = "0.00°";
             updateTelemetryData({ reference: data.reference, motors: data.motors });
             updateKeyframeRigBadges();
+            recordReachedPose({
+                type: "ZERO",
+                shotNum: "Origin",
+                targetPan: 0.0,
+                targetTilt: 0.0,
+                actualPan: 0.0,
+                actualTilt: 0.0
+            });
             alert("🎯 Origin reset to current position (0.00°, 0.00°) & Zero Reference Confirmed!");
         }
     } catch (err) {
@@ -1659,6 +1683,35 @@ function sampleTrackSpline(keyframes, count) {
     return points;
 }
 
+function sampleSplineValueAt(keyframes, t) {
+    if (!keyframes || keyframes.length === 0) return 0.0;
+    if (keyframes.length === 1) return keyframes[0].value;
+
+    const tangents = calculateTrackTangents(keyframes);
+    let seg = 0;
+    for (let s = 0; s < keyframes.length - 1; s++) {
+        if (keyframes[s].progress <= t) seg = s;
+        if (keyframes[s + 1].progress >= t) break;
+    }
+    if (seg >= keyframes.length - 1) seg = keyframes.length - 2;
+
+    const kfA = keyframes[seg];
+    const kfB = keyframes[seg + 1];
+    const h = kfB.progress - kfA.progress;
+    const u = h > 0 ? Math.max(0, Math.min(1, (t - kfA.progress) / h)) : 0;
+
+    if (kfA.outgoing_mode === "linear") {
+        return kfA.value + u * (kfB.value - kfA.value);
+    } else {
+        const h00 = 2 * Math.pow(u, 3) - 3 * Math.pow(u, 2) + 1;
+        const h10 = Math.pow(u, 3) - 2 * Math.pow(u, 2) + u;
+        const h01 = -2 * Math.pow(u, 3) + 3 * Math.pow(u, 2);
+        const h11 = Math.pow(u, 3) - Math.pow(u, 2);
+
+        return h00 * kfA.value + h10 * h * tangents[seg] + h01 * kfB.value + h11 * h * tangents[seg + 1];
+    }
+}
+
 // --------------------------------------------------------------------------
 // Interactive SVG Trajectory Plot Drawing & View Update
 // --------------------------------------------------------------------------
@@ -1927,6 +1980,383 @@ function updateTrajectoryPreview() {
     }
 
     updateTimingCalculations();
+    updateMiniTrajectoryProgress();
+}
+
+// --------------------------------------------------------------------------
+// Mini Motion Trajectory & Step Progress Monitor (Studio Right Pane)
+// --------------------------------------------------------------------------
+
+function updateMiniTrajectoryProgress() {
+    const svgPlot = document.getElementById("svgMiniPlot");
+    if (!svgPlot) return;
+
+    const shotBadge = document.getElementById("miniTelemShotBadge");
+    const anglesBadge = document.getElementById("miniTelemAnglesBadge");
+    const stepText = document.getElementById("miniStepProgressText");
+
+    if (anglesBadge) {
+        anglesBadge.textContent = `P: ${latestPan.toFixed(1)}° T: ${latestTilt.toFixed(1)}°`;
+    }
+
+    if (!currentPanKeyframes || currentPanKeyframes.length < 2 || !currentTiltKeyframes || currentTiltKeyframes.length < 2) {
+        const stepsGroup = document.getElementById("svgMiniSteps");
+        if (stepsGroup) {
+            stepsGroup.innerHTML = '<text x="270" y="65" text-anchor="middle" fill="#64748b" font-size="10">No Trajectory Keyframes</text>';
+        }
+        if (shotBadge) shotBadge.textContent = "No Plan";
+        if (stepText) stepText.textContent = "Configure 2+ keyframes on Step 3";
+        return;
+    }
+
+    const totalShots = parseInt(document.getElementById("planTotalShots")?.value, 10) || activePlan?.schedule?.total_shots || 20;
+
+    let currentShotNum = 0;
+    let statusLabel = "Ready";
+
+    if (timelapseState === "RUNNING" || timelapseState === "PAUSED") {
+        currentShotNum = currentExecutionShot || 0;
+        statusLabel = timelapseState === "PAUSED" ? "Paused" : "Executing";
+    } else if (dryRunActive) {
+        const drShot = parseInt(document.getElementById("dryRunValShot")?.textContent?.split("/")[0] || "0", 10);
+        currentShotNum = drShot || (dryRunProgressPct > 0 ? Math.max(1, Math.round((dryRunProgressPct / 100) * totalShots)) : 0);
+        statusLabel = "Rehearsing";
+    } else if (timelapseState === "COMPLETED") {
+        currentShotNum = totalShots;
+        statusLabel = "Completed";
+    }
+
+    // Sample high-density points for smooth curves
+    const sampledPan = sampleTrackSpline(currentPanKeyframes, 90);
+    const sampledTilt = sampleTrackSpline(currentTiltKeyframes, 90);
+
+    const svgW = 540;
+    const svgH = 120;
+    const padL = 36;
+    const padR = 16;
+    const padT = 14;
+    const padB = 22;
+    const plotW = svgW - padL - padR;
+    const plotH = svgH - padT - padB;
+
+    let minPan = Infinity, maxPan = -Infinity;
+    let minTilt = Infinity, maxTilt = -Infinity;
+
+    sampledPan.forEach(p => {
+        if (p.val < minPan) minPan = p.val;
+        if (p.val > maxPan) maxPan = p.val;
+    });
+    sampledTilt.forEach(p => {
+        if (p.val < minTilt) minTilt = p.val;
+        if (p.val > maxTilt) maxTilt = p.val;
+    });
+
+    let degMin = Math.min(minPan, minTilt, 0);
+    let degMax = Math.max(maxPan, maxTilt, 10);
+    let degSpan = Math.max(15, degMax - degMin);
+    let padDeg = degSpan * 0.12;
+    let yMin = degMin - padDeg;
+    let yMax = degMax + padDeg;
+    let yRange = yMax - yMin;
+
+    const pToX = (p) => padL + Math.max(0, Math.min(1, p)) * plotW;
+    const degToY = (d) => padT + plotH - ((d - yMin) / yRange) * plotH;
+
+    // 1. Grid & Y Axis
+    const gridEl = document.getElementById("svgMiniGrid");
+    if (gridEl) {
+        let gHtml = "";
+        const ticks = [yMin, (yMin + yMax) / 2, yMax];
+        ticks.forEach(deg => {
+            const y = degToY(deg);
+            gHtml += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${svgW - padR}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.06)" stroke-dasharray="2 2"/>`;
+            gHtml += `<text x="${padL - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="7.5" fill="#64748b" font-family="monospace">${deg.toFixed(0)}°</text>`;
+        });
+        [0.0, 0.25, 0.5, 0.75, 1.0].forEach(t => {
+            const x = pToX(t);
+            gHtml += `<line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.06)" stroke-dasharray="2 2"/>`;
+            gHtml += `<text x="${x.toFixed(1)}" y="${padT + plotH + 13}" text-anchor="middle" font-size="7.5" fill="#64748b" font-family="monospace">${Math.round(t * 100)}%</text>`;
+        });
+        gridEl.innerHTML = gHtml;
+    }
+
+    // 2. Zero Reference Line
+    const zeroEl = document.getElementById("svgMiniZeroLine");
+    if (zeroEl) {
+        if (0 >= yMin && 0 <= yMax) {
+            const y0 = degToY(0);
+            zeroEl.innerHTML = `<line x1="${padL}" y1="${y0.toFixed(1)}" x2="${svgW - padR}" y2="${y0.toFixed(1)}" stroke="rgba(255,255,255,0.18)" stroke-dasharray="3 2"/>`;
+        } else {
+            zeroEl.innerHTML = "";
+        }
+    }
+
+    // 3. Continuous Curves
+    let panPath = "";
+    let tiltPath = "";
+    sampledPan.forEach((p, i) => {
+        const x = pToX(p.t);
+        const y = degToY(p.val);
+        panPath += (i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : ` L ${x.toFixed(1)} ${y.toFixed(1)}`);
+    });
+    sampledTilt.forEach((p, i) => {
+        const x = pToX(p.t);
+        const y = degToY(p.val);
+        tiltPath += (i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : ` L ${x.toFixed(1)} ${y.toFixed(1)}`);
+    });
+
+    const pathPanEl = document.getElementById("svgMiniPathPan");
+    const pathTiltEl = document.getElementById("svgMiniPathTilt");
+    if (pathPanEl) pathPanEl.setAttribute("d", panPath);
+    if (pathTiltEl) pathTiltEl.setAttribute("d", tiltPath);
+
+    // 4. Interactive Step Points for every planned shot
+    const stepsGroup = document.getElementById("svgMiniSteps");
+    if (stepsGroup) {
+        let sHtml = "";
+        for (let s = 0; s < totalShots; s++) {
+            const t = totalShots > 1 ? s / (totalShots - 1) : 0.0;
+            const x = pToX(t);
+            const panVal = sampleSplineValueAt(currentPanKeyframes, t);
+            const tiltVal = sampleSplineValueAt(currentTiltKeyframes, t);
+            const yPan = degToY(panVal);
+            const yTilt = degToY(tiltVal);
+
+            const shotIndex = s + 1;
+            const isTaken = currentShotNum > 0 && shotIndex < currentShotNum;
+            const isCurrent = currentShotNum > 0 && shotIndex === currentShotNum;
+
+            if (isTaken) {
+                // Completed steps: solid cyan / emerald dots
+                sHtml += `<circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="3" fill="#38bdf8" stroke="#0284c7" stroke-width="1.2" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
+                sHtml += `<circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="3" fill="#34d399" stroke="#059669" stroke-width="1.2" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
+            } else if (isCurrent) {
+                // Active step: vertical guide + highlighted pulsing markers
+                sHtml += `<line x1="${x.toFixed(1)}" y1="${padT}" x2="${x.toFixed(1)}" y2="${padT + plotH}" stroke="#facc15" stroke-width="1.5" stroke-dasharray="2 2"/>`;
+                sHtml += `<circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="4.5" fill="#facc15" stroke="#ffffff" stroke-width="1.5" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
+                sHtml += `<circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="4.5" fill="#facc15" stroke="#ffffff" stroke-width="1.5" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
+            } else {
+                // Pending steps: hollow subtle markers
+                sHtml += `<circle cx="${x.toFixed(1)}" cy="${yPan.toFixed(1)}" r="2.5" fill="#0f172a" stroke="rgba(56, 189, 248, 0.6)" stroke-width="1.2" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
+                sHtml += `<circle cx="${x.toFixed(1)}" cy="${yTilt.toFixed(1)}" r="2.5" fill="#0f172a" stroke="rgba(52, 211, 153, 0.6)" stroke-width="1.2" class="timeline-step-circle" onclick="selectTimelineStep(${shotIndex})" data-shot="${shotIndex}"/>`;
+            }
+        }
+        stepsGroup.innerHTML = sHtml;
+    }
+
+    // 5. Timeline Selected Step Highlight
+    const selGroup = document.getElementById("svgTimelineSelected");
+    if (selGroup) {
+        if (selectedTimelineStep !== null && selectedTimelineStep >= 1 && selectedTimelineStep <= totalShots) {
+            const tSel = totalShots > 1 ? (selectedTimelineStep - 1) / (totalShots - 1) : 0.0;
+            const xSel = pToX(tSel);
+            const panSel = sampleSplineValueAt(currentPanKeyframes, tSel);
+            const tiltSel = sampleSplineValueAt(currentTiltKeyframes, tSel);
+            const yPanSel = degToY(panSel);
+            const yTiltSel = degToY(tiltSel);
+
+            selGroup.innerHTML = `
+                <line x1="${xSel.toFixed(1)}" y1="${padT}" x2="${xSel.toFixed(1)}" y2="${padT + plotH}" stroke="#38bdf8" stroke-width="2" stroke-dasharray="3 3"/>
+                <circle cx="${xSel.toFixed(1)}" cy="${yPanSel.toFixed(1)}" r="7.5" fill="none" stroke="#38bdf8" stroke-width="2"/>
+                <circle cx="${xSel.toFixed(1)}" cy="${yTiltSel.toFixed(1)}" r="7.5" fill="none" stroke="#34d399" stroke-width="2"/>
+            `;
+        } else {
+            selGroup.innerHTML = "";
+        }
+    }
+
+    // 6. Live Rig Position Marker
+    const cursorGroup = document.getElementById("svgMiniCursor");
+    if (cursorGroup) {
+        let curHtml = "";
+        let tLive = 0.0;
+        if (currentShotNum > 0 && totalShots > 1) {
+            tLive = (currentShotNum - 1) / (totalShots - 1);
+        } else if (dryRunActive && dryRunProgressPct > 0) {
+            tLive = Math.min(1.0, dryRunProgressPct / 100);
+        }
+        const xCur = pToX(tLive);
+        const yPanLive = degToY(latestPan);
+        const yTiltLive = degToY(latestTilt);
+
+        curHtml += `<circle cx="${xCur.toFixed(1)}" cy="${yPanLive.toFixed(1)}" r="3" fill="#38bdf8" stroke="#ffffff" stroke-width="1.2"/>`;
+        curHtml += `<circle cx="${xCur.toFixed(1)}" cy="${yTiltLive.toFixed(1)}" r="3" fill="#34d399" stroke="#ffffff" stroke-width="1.2"/>`;
+        cursorGroup.innerHTML = curHtml;
+    }
+
+    // 7. Badges & Progress Text
+    if (shotBadge) {
+        shotBadge.textContent = `Shot ${currentShotNum} / ${totalShots}`;
+    }
+    if (stepText) {
+        const pct = totalShots > 0 ? Math.round((currentShotNum / totalShots) * 100) : 0;
+        stepText.textContent = `${statusLabel} — ${currentShotNum} of ${totalShots} steps (${pct}%) — Click any step to inspect`;
+    }
+}
+
+function selectTimelineStep(shotIndex) {
+    selectedTimelineStep = shotIndex;
+    const totalShots = parseInt(document.getElementById("planTotalShots")?.value, 10) || activePlan?.schedule?.total_shots || 20;
+
+    const badge = document.getElementById("timelineSelectedStepBadge");
+    if (badge) {
+        badge.textContent = `Selected: Step #${shotIndex}`;
+    }
+
+    const t = totalShots > 1 ? (shotIndex - 1) / (totalShots - 1) : 0.0;
+    const targetPan = sampleSplineValueAt(currentPanKeyframes, t);
+    const targetTilt = sampleSplineValueAt(currentTiltKeyframes, t);
+
+    // Look for captured photo
+    const photo = capturedPhotos.find(p => p.shotIndex === shotIndex);
+    const imgEl = document.getElementById("execSelectedFrameImg");
+    const placeholder = document.getElementById("galleryEmptyPlaceholder");
+    const infoEl = document.getElementById("execSelectedFrameInfo");
+    const titleEl = document.getElementById("execFrameShotTitle");
+    const anglesEl = document.getElementById("execFrameAngles");
+    const timeEl = document.getElementById("execFrameTime");
+
+    if (photo && imgEl) {
+        imgEl.src = photo.imgUrl;
+        imgEl.classList.remove("hidden");
+        if (placeholder) placeholder.style.display = "none";
+        if (titleEl) titleEl.textContent = `Shot #${shotIndex}`;
+        if (anglesEl) anglesEl.textContent = `Actual Pan: ${photo.pan.toFixed(1)}° | Tilt: ${photo.tilt.toFixed(1)}° (Target: ${targetPan.toFixed(1)}°, ${targetTilt.toFixed(1)}°)`;
+        if (timeEl) timeEl.textContent = photo.time;
+        if (infoEl) infoEl.classList.remove("hidden");
+    } else {
+        if (imgEl) imgEl.classList.add("hidden");
+        if (placeholder) {
+            placeholder.style.display = "flex";
+            placeholder.innerHTML = `
+                <span class="placeholder-icon">⏳</span>
+                <span>Shot #${shotIndex} (Pending Execution)</span>
+                <span class="mono-sub">Planned Target: Pan ${targetPan.toFixed(1)}° | Tilt ${targetTilt.toFixed(1)}°</span>
+            `;
+        }
+        if (titleEl) titleEl.textContent = `Shot #${shotIndex} (Pending)`;
+        if (anglesEl) anglesEl.textContent = `Target: Pan ${targetPan.toFixed(1)}° | Tilt ${targetTilt.toFixed(1)}°`;
+        if (timeEl) timeEl.textContent = "Awaiting execution";
+        if (infoEl) infoEl.classList.remove("hidden");
+    }
+
+    // Sync active filmstrip item
+    const filmstripItems = document.querySelectorAll(".filmstrip-item");
+    filmstripItems.forEach(item => {
+        const itemShot = parseInt(item.dataset.shot, 10);
+        item.classList.toggle("active", itemShot === shotIndex);
+        if (itemShot === shotIndex) {
+            item.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+        }
+    });
+
+    updateMiniTrajectoryProgress();
+}
+
+function openEnlargedSelectedFrame() {
+    if (!selectedTimelineStep) {
+        if (capturedPhotos.length > 0) {
+            const latest = capturedPhotos[capturedPhotos.length - 1];
+            openImageZoomModal(latest.imgUrl, `Captured Frame #${latest.shotIndex}`);
+        } else {
+            alert("No captured frames to view yet.");
+        }
+        return;
+    }
+    const photo = capturedPhotos.find(p => p.shotIndex === selectedTimelineStep);
+    if (photo) {
+        openImageZoomModal(photo.imgUrl, `Captured Frame #${photo.shotIndex} (Pan: ${photo.pan.toFixed(1)}°, Tilt: ${photo.tilt.toFixed(1)}°)`);
+    } else {
+        alert(`Shot #${selectedTimelineStep} has not been captured yet.`);
+    }
+}
+
+// --------------------------------------------------------------------------
+// Archived & Reached Poses Capture Logger (Studio Right Pane)
+// --------------------------------------------------------------------------
+
+function recordReachedPose({ type = "SHOT", shotNum = null, targetPan = null, targetTilt = null, actualPan = 0, actualTilt = 0 }) {
+    const timeStr = new Date().toTimeString().split(" ")[0];
+    let deltaStr = "--";
+    let deltaClass = "delta-ok";
+
+    if (targetPan !== null && targetTilt !== null) {
+        const dPan = Math.abs(actualPan - targetPan);
+        const dTilt = Math.abs(actualTilt - targetTilt);
+        const totalError = Math.sqrt(dPan * dPan + dTilt * dTilt);
+        deltaStr = `±${totalError.toFixed(2)}°`;
+        if (totalError > 1.0) deltaClass = "delta-err";
+        else if (totalError > 0.3) deltaClass = "delta-warn";
+        else deltaClass = "delta-ok";
+    }
+
+    const poseItem = {
+        id: recordedPoses.length + 1,
+        time: timeStr,
+        shotNum: shotNum !== null ? `#${shotNum}` : `#${recordedPoses.length + 1}`,
+        targetPan: targetPan !== null ? Number(targetPan).toFixed(1) : "--",
+        targetTilt: targetTilt !== null ? Number(targetTilt).toFixed(1) : "--",
+        actualPan: Number(actualPan).toFixed(1),
+        actualTilt: Number(actualTilt).toFixed(1),
+        deltaStr,
+        deltaClass,
+        type: type.toUpperCase()
+    };
+
+    recordedPoses.push(poseItem);
+    if (recordedPoses.length > 500) recordedPoses.shift();
+
+    renderPosesTable();
+}
+
+function renderPosesTable() {
+    const tbody = document.getElementById("posesTableBody");
+    const badge = document.getElementById("lblPoseCountBadge");
+    if (!tbody) return;
+
+    if (badge) {
+        badge.textContent = `${recordedPoses.length} pose${recordedPoses.length === 1 ? "" : "s"}`;
+    }
+
+    if (recordedPoses.length === 0) {
+        tbody.innerHTML = `
+            <tr id="emptyPosesRow">
+                <td colspan="6" class="table-empty-cell">
+                    No poses recorded yet. Reached angles during moves, dry-runs, and shots will log here.
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    let rowsHtml = "";
+    recordedPoses.forEach((p) => {
+        const typeClass = p.type.toLowerCase();
+        rowsHtml += `
+            <tr>
+                <td>${p.shotNum}</td>
+                <td>${p.time}</td>
+                <td>${p.targetPan}° / ${p.targetTilt}°</td>
+                <td>${p.actualPan}° / ${p.actualTilt}°</td>
+                <td class="${p.deltaClass}">${p.deltaStr}</td>
+                <td><span class="badge-type ${typeClass}">${p.type}</span></td>
+            </tr>
+        `;
+    });
+    tbody.innerHTML = rowsHtml;
+
+    // Auto-scroll to the bottom of the table
+    const container = document.getElementById("posesTableContainer");
+    if (container) {
+        container.scrollTop = container.scrollHeight;
+    }
+}
+
+function clearPoseHistory() {
+    recordedPoses = [];
+    lastRecordedTimelapseShot = -1;
+    lastRecordedDryRunShot = -1;
+    renderPosesTable();
 }
 
 // --------------------------------------------------------------------------
@@ -2210,6 +2640,22 @@ function updateDryRunTelemetry(dr) {
     if (pText) pText.textContent = `${pct}%`;
     if (shotText) shotText.textContent = `${dr.current_shot ?? 0} / ${dr.total_shots ?? 0}`;
 
+    if (dr.current_shot && dr.current_shot > lastRecordedDryRunShot && dr.current_shot > 0) {
+        lastRecordedDryRunShot = dr.current_shot;
+        const total = dr.total_shots || 20;
+        const t = total > 1 ? (dr.current_shot - 1) / (total - 1) : 0.0;
+        const tPan = sampleSplineValueAt(currentPanKeyframes, t);
+        const tTilt = sampleSplineValueAt(currentTiltKeyframes, t);
+        recordReachedPose({
+            type: "DRY",
+            shotNum: `R${dr.current_shot}`,
+            targetPan: tPan,
+            targetTilt: tTilt,
+            actualPan: latestPan,
+            actualTilt: latestTilt
+        });
+    }
+
     const badge = document.getElementById("badgeReportStatus");
     if (badge) {
         if (dr.state === "COMPLETED") {
@@ -2275,6 +2721,14 @@ async function triggerPlanTestShot() {
         });
         const data = await res.json();
         if (res.ok) {
+            recordReachedPose({
+                type: "TEST",
+                shotNum: "Test",
+                targetPan: latestPan,
+                targetTilt: latestTilt,
+                actualPan: latestPan,
+                actualTilt: latestTilt
+            });
             await loadTestShotsList();
         } else {
             alert(data.detail?.message || "Test shot failed");
@@ -2643,39 +3097,35 @@ function updatePreFlightChecklist() {
     // 1. Zero confirmed
     const chkZero = document.getElementById("chkZeroRef");
     if (chkZero) {
-        chkZero.className = zeroConfirmed ? "passed" : "failed";
-        chkZero.innerHTML = zeroConfirmed
-            ? '<span class="chk-icon">✅</span> Coordinate Zero Origin Confirmed'
-            : '<span class="chk-icon">❌</span> Coordinate Zero Reference Not Confirmed';
+        chkZero.className = `chk-pill ${zeroConfirmed ? "passed" : "failed"}`;
+        chkZero.innerHTML = `<span class="chk-icon">${zeroConfirmed ? "✅" : "❌"}</span> Zero Origin`;
+        chkZero.title = zeroConfirmed ? "Coordinate Zero Origin Confirmed" : "Coordinate Zero Reference Not Confirmed";
     }
 
     // 2. Motors Connected
     const chkMotors = document.getElementById("chkMotors");
     if (chkMotors) {
         const ok = motorsConnected && driversEnabled;
-        chkMotors.className = ok ? "passed" : "failed";
-        chkMotors.innerHTML = ok
-            ? '<span class="chk-icon">✅</span> Motors Connected & Drivers Active'
-            : '<span class="chk-icon">❌</span> Motors Disconnected or Drivers Disabled';
+        chkMotors.className = `chk-pill ${ok ? "passed" : "failed"}`;
+        chkMotors.innerHTML = `<span class="chk-icon">${ok ? "✅" : "❌"}</span> Motors & Drivers`;
+        chkMotors.title = ok ? "Motors Connected & Drivers Active" : "Motors Disconnected or Drivers Disabled";
     }
 
     // 3. Camera Connected
     const chkCam = document.getElementById("chkCamera");
     if (chkCam) {
-        chkCam.className = cameraConnected ? "passed" : "failed";
-        chkCam.innerHTML = cameraConnected
-            ? '<span class="chk-icon">✅</span> Camera Connected & Ready'
-            : '<span class="chk-icon">❌</span> Camera Disconnected';
+        chkCam.className = `chk-pill ${cameraConnected ? "passed" : "failed"}`;
+        chkCam.innerHTML = `<span class="chk-icon">${cameraConnected ? "✅" : "❌"}</span> Camera Ready`;
+        chkCam.title = cameraConnected ? "Camera Connected & Ready" : "Camera Disconnected";
     }
 
     // 4. Trajectory
     const chkTraj = document.getElementById("chkTrajectory");
     if (chkTraj) {
         const ok = currentPanKeyframes && currentPanKeyframes.length >= 2 && currentTiltKeyframes && currentTiltKeyframes.length >= 2;
-        chkTraj.className = ok ? "passed" : "failed";
-        chkTraj.innerHTML = ok
-            ? '<span class="chk-icon">✅</span> Trajectory Verified (2+ Keyframes on Pan & Tilt)'
-            : '<span class="chk-icon">❌</span> Trajectory Requires At Least 2 Keyframes per Track';
+        chkTraj.className = `chk-pill ${ok ? "passed" : "failed"}`;
+        chkTraj.innerHTML = `<span class="chk-icon">${ok ? "✅" : "❌"}</span> Trajectory`;
+        chkTraj.title = ok ? "Trajectory Verified (2+ Keyframes on Pan & Tilt)" : "Trajectory Requires At Least 2 Keyframes per Track";
     }
 }
 
@@ -2696,22 +3146,35 @@ async function startSequenceExecution() {
     const interval = activePlan?.schedule?.interval_s || 5.0;
     const settle = activePlan?.schedule?.settle_time_s || 0.5;
 
-    const startPan = currentPanKeyframes[0]?.value || 0;
-    const endPan = currentPanKeyframes[currentPanKeyframes.length - 1]?.value || 0;
-    const startTilt = currentTiltKeyframes[0]?.value || 0;
-    const endTilt = currentTiltKeyframes[currentTiltKeyframes.length - 1]?.value || 0;
+    // Sample accurate trajectory Pan and Tilt coordinates for every shot
+    const poses = [];
+    for (let s = 0; s < total; s++) {
+        const t = total > 1 ? s / (total - 1) : 0.0;
+        const p = sampleSplineValueAt(currentPanKeyframes, t);
+        const tl = sampleSplineValueAt(currentTiltKeyframes, t);
+        poses.push({ pan: p, tilt: tl });
+    }
+
+    const startPan = poses[0]?.pan ?? (currentPanKeyframes[0]?.value || 0.0);
+    const endPan = poses[poses.length - 1]?.pan ?? (currentPanKeyframes[currentPanKeyframes.length - 1]?.value || 0.0);
+    const startTilt = poses[0]?.tilt ?? (currentTiltKeyframes[0]?.value || 0.0);
+    const endTilt = poses[poses.length - 1]?.tilt ?? (currentTiltKeyframes[currentTiltKeyframes.length - 1]?.value || 0.0);
 
     try {
         const res = await fetch(`${API_BASE}/api/timelapse/start`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+                plan_id: activePlan?.id || null,
                 total_shots: total,
                 interval_s: interval,
-                pause_s: settle,
-                pan_step: (endPan - startPan) / Math.max(1, total - 1),
-                tilt_step: (endTilt - startTilt) / Math.max(1, total - 1),
-                capture: true
+                settle_time_s: settle,
+                start_pan: startPan,
+                start_tilt: startTilt,
+                end_pan: endPan,
+                end_tilt: endTilt,
+                poses: poses,
+                capture_photo: true
             })
         });
         const data = await res.json();
@@ -2719,6 +3182,14 @@ async function startSequenceExecution() {
             executionActive = true;
             executionPaused = false;
             executionStartTime = Date.now();
+            lastCapturedShotIndex = -1;
+            lastRecordedTimelapseShot = -1;
+            capturedPhotos = [];
+            selectedTimelineStep = 1;
+            const gallery = document.getElementById("execLiveGallery");
+            if (gallery) gallery.innerHTML = "";
+            selectTimelineStep(1);
+
             document.getElementById("btnStartExecution").disabled = true;
             document.getElementById("btnPauseExecution").disabled = false;
             document.getElementById("btnCancelExecution").disabled = false;
@@ -2763,9 +3234,12 @@ async function cancelSequenceExecution() {
 function updateTimelapseTelemetry(tl) {
     if (!tl) return;
 
+    timelapseState = tl.state || "IDLE";
+
     if (tl.state === "RUNNING" || tl.state === "PAUSED") {
         executionActive = true;
         const currentShot = tl.current_shot ?? 0;
+        currentExecutionShot = currentShot;
         const totalShots = tl.total_shots ?? 20;
         const pct = totalShots > 0 ? Math.floor((currentShot / totalShots) * 100) : 0;
 
@@ -2787,9 +3261,25 @@ function updateTimelapseTelemetry(tl) {
             }
         }
 
+        if (currentShot > lastRecordedTimelapseShot && currentShot > 0) {
+            lastRecordedTimelapseShot = currentShot;
+            const t = totalShots > 1 ? (currentShot - 1) / (totalShots - 1) : 0.0;
+            const tPan = sampleSplineValueAt(currentPanKeyframes, t);
+            const tTilt = sampleSplineValueAt(currentTiltKeyframes, t);
+            recordReachedPose({
+                type: "SHOT",
+                shotNum: `${currentShot}`,
+                targetPan: tPan,
+                targetTilt: tTilt,
+                actualPan: latestPan,
+                actualTilt: latestTilt
+            });
+        }
+
         // Fetch latest preview image into live gallery
         fetchLatestCapturedPreview(currentShot);
     } else if (tl.state === "COMPLETED") {
+        currentExecutionShot = tl.total_shots ?? 20;
         if (executionActive) {
             executionActive = false;
             document.getElementById("btnStartExecution").disabled = false;
@@ -2801,6 +3291,8 @@ function updateTimelapseTelemetry(tl) {
             document.getElementById("execProgressPct").textContent = "100%";
         }
     }
+
+    updateMiniTrajectoryProgress();
 }
 
 let lastCapturedShotIndex = -1;
@@ -2808,29 +3300,49 @@ async function fetchLatestCapturedPreview(shotIndex) {
     if (shotIndex <= lastCapturedShotIndex || shotIndex <= 0) return;
     lastCapturedShotIndex = shotIndex;
 
-    const gallery = document.getElementById("execLiveGallery");
-    const placeholder = document.getElementById("galleryEmptyPlaceholder");
-    if (placeholder) placeholder.style.display = "none";
-
-    const item = document.createElement("div");
-    item.className = "gallery-item";
     const imgUrl = `${API_BASE}/api/camera/preview/latest?t=${Date.now()}`;
+    const timeStr = new Date().toLocaleTimeString();
 
-    item.innerHTML = `
-        <img class="gallery-thumb" src="${imgUrl}" alt="Frame ${shotIndex}">
-        <div class="gallery-info">
-            <span class="gallery-title">Shot #${shotIndex}</span>
-            <span class="gallery-sub">Pan: ${latestPan.toFixed(1)}°</span>
-        </div>
-    `;
-    item.onclick = () => openImageZoomModal(imgUrl, `Captured Frame #${shotIndex}`);
+    // Store in capturedPhotos state array
+    const existingIdx = capturedPhotos.findIndex(p => p.shotIndex === shotIndex);
+    const photoObj = {
+        shotIndex,
+        imgUrl,
+        pan: latestPan,
+        tilt: latestTilt,
+        time: timeStr
+    };
+    if (existingIdx >= 0) {
+        capturedPhotos[existingIdx] = photoObj;
+    } else {
+        capturedPhotos.push(photoObj);
+    }
 
+    const gallery = document.getElementById("execLiveGallery");
     if (gallery) {
-        gallery.insertBefore(item, gallery.firstChild);
+        let item = document.getElementById(`filmstripItem_${shotIndex}`);
+        if (!item) {
+            item = document.createElement("div");
+            item.className = "filmstrip-item";
+            item.dataset.shot = shotIndex;
+            item.id = `filmstripItem_${shotIndex}`;
+            gallery.appendChild(item);
+        }
+        item.innerHTML = `
+            <img class="filmstrip-thumb" src="${imgUrl}" alt="Shot ${shotIndex}" />
+            <div class="filmstrip-info">
+                <span class="shot-num">#${shotIndex}</span>
+                <span>${latestPan.toFixed(0)}°/${latestTilt.toFixed(0)}°</span>
+            </div>
+        `;
+        item.onclick = () => selectTimelineStep(shotIndex);
     }
 
     const countEl = document.getElementById("execPhotoCount");
-    if (countEl) countEl.textContent = `${shotIndex} frames captured`;
+    if (countEl) countEl.textContent = `${capturedPhotos.length} photos captured`;
+
+    // Automatically sync and display the latest captured frame
+    selectTimelineStep(shotIndex);
 }
 
 function openImageZoomModal(imgUrl, title) {
