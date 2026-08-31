@@ -27,6 +27,14 @@ def setup_stabilization_env(tmp_path):
     main.camera_mgr = fake_cam
     preview_controller.camera_mgr = fake_cam
 
+    original_send_cmd = serial_mgr.send_command
+
+    async def mock_send_cmd(cmd: str, timeout=None):
+        return {"status": "OK", "response": "OK"}
+
+    serial_mgr.send_command = mock_send_cmd
+    serial_mgr.is_connected = True
+
     if coordinator.is_previewing:
         asyncio.run(coordinator.release("PREVIEW"))
     if coordinator.is_dry_running:
@@ -35,6 +43,8 @@ def setup_stabilization_env(tmp_path):
         asyncio.run(coordinator.release("RECORDING"))
 
     yield
+
+    serial_mgr.send_command = original_send_cmd
 
     plan_store.base_dir = original_base_dir
     rig_mgr.set_limits(0.0, 80.0)

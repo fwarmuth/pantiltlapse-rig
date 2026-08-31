@@ -37,6 +37,7 @@ let dryRunProgressPct = 0;
 // Live View & Post-Processing State
 let isLiveViewActive = false;
 let liveViewFps = 0.0;
+let streamTargetFps = 6; // Default 6 FPS for smooth Wi-Fi stream
 let lastFrameTime = performance.now();
 let streamPollingTimer = null;
 let enhancementEnabled = true;
@@ -302,6 +303,18 @@ function setStepSize(deg) {
         const step = parseFloat(btn.getAttribute("data-step"));
         btn.classList.toggle("active", Math.abs(step - deg) < 1e-4);
     });
+    const selEnlarged = document.getElementById("enlargedJogStep");
+    if (selEnlarged) {
+        selEnlarged.value = String(deg);
+    }
+}
+
+function jogPanRelative(delta) {
+    moveRelative(delta, 0);
+}
+
+function jogTiltRelative(delta) {
+    moveRelative(0, delta);
 }
 
 async function moveRelative(dPan, dTilt) {
@@ -322,8 +335,9 @@ async function moveRelative(dPan, dTilt) {
             if (panEl) panEl.textContent = `${latestPan.toFixed(2)}°`;
             if (tiltEl) tiltEl.textContent = `${latestTilt.toFixed(2)}°`;
             updateKeyframeRigBadges();
+            updateEnlargedLiveHud();
         } else {
-            alert(data.detail?.message || "Move failed");
+            console.warn(data.detail?.message || "Move failed");
         }
     } catch (err) {
         console.error("Move request error:", err);
@@ -350,8 +364,9 @@ async function moveAbsolute(pan, tilt) {
             if (panEl) panEl.textContent = `${latestPan.toFixed(2)}°`;
             if (tiltEl) tiltEl.textContent = `${latestTilt.toFixed(2)}°`;
             updateKeyframeRigBadges();
+            updateEnlargedLiveHud();
         } else {
-            alert(data.detail?.message || "Move absolute failed");
+            console.warn(data.detail?.message || "Move absolute failed");
         }
     } catch (err) {
         console.error("Move absolute error:", err);
@@ -518,14 +533,24 @@ async function stopLiveView() {
     if (fpsBadge) fpsBadge.textContent = "0.0 FPS";
 }
 
+function setStreamTargetFps(val) {
+    streamTargetFps = parseFloat(val) || 6;
+    const selMain = document.getElementById("selStreamFps");
+    const selEnlarged = document.getElementById("selEnlargedStreamFps");
+    if (selMain) selMain.value = String(streamTargetFps);
+    if (selEnlarged) selEnlarged.value = String(streamTargetFps);
+}
+
 async function runFrameFetchLoop() {
     const canvas = document.getElementById("canvasEnhancedPreview");
+    if (!canvas) return;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     
     const enlargedCanvas = document.getElementById("canvasEnlargedLiveView");
     const enlargedCtx = enlargedCanvas ? enlargedCanvas.getContext("2d", { willReadFrequently: true }) : null;
 
     while (isLiveViewActive) {
+        const frameStart = performance.now();
         if (!isFetchingFrame) {
             isFetchingFrame = true;
             try {
@@ -619,7 +644,10 @@ async function runFrameFetchLoop() {
                         updateEnlargedLiveHud();
                     }
 
-                    drawHistogramFromCanvas(canvas);
+                    // Only compute histogram if histogram canvas exists in DOM
+                    if (document.getElementById("canvasHistogram")) {
+                        drawHistogramFromCanvas(canvas);
+                    }
 
                     // Measured FPS
                     const now = performance.now();
@@ -640,7 +668,12 @@ async function runFrameFetchLoop() {
                 isFetchingFrame = false;
             }
         }
-        await new Promise((r) => setTimeout(r, 60)); // ~15 FPS pacing
+
+        // Pacing delay based on target FPS (e.g. 6 FPS = 166ms between frame dispatches)
+        const elapsed = performance.now() - frameStart;
+        const targetInterval = streamTargetFps > 0 ? (1000 / streamTargetFps) : 60;
+        const waitTime = Math.max(25, targetInterval - elapsed);
+        await new Promise((r) => setTimeout(r, waitTime));
     }
 }
 
@@ -1179,6 +1212,32 @@ function createNewPlan() {
     updateTrajectoryPreview();
 }
 
+function onTimingScheduleChanged() {
+    const totalShots = parseInt(document.getElementById("planTotalShots")?.value, 10) || 20;
+    const interval = parseFloat(document.getElementById("planInterval")?.value) || 5.0;
+    const settle = parseFloat(document.getElementById("planSettle")?.value) || 0.5;
+
+    if (!activePlan) {
+        createNewPlan();
+    }
+    if (!activePlan.schedule) {
+        activePlan.schedule = {};
+    }
+    activePlan.schedule.total_shots = totalShots;
+    activePlan.schedule.interval_s = interval;
+    activePlan.schedule.settle_time_s = settle;
+
+    const lblTotal = document.getElementById("lblPlanTotalShots");
+    if (lblTotal) lblTotal.textContent = totalShots;
+
+    const execTotal = document.getElementById("execTotalShots");
+    if (execTotal) execTotal.textContent = totalShots;
+
+    updateTimingCalculations();
+    updateTrajectoryPreview();
+    updateExecutionSummary();
+}
+
 function syncPlanInputs() {
     if (!activePlan) return;
     document.getElementById("planName").value = activePlan.name || "";
@@ -1191,6 +1250,8 @@ function syncPlanInputs() {
     document.getElementById("lblPlanRevision").textContent = activePlan.revision || 1;
     document.getElementById("lblPlanKeyframeCount").textContent = `${currentPanKeyframes.length} Pan / ${currentTiltKeyframes.length} Tilt`;
     document.getElementById("lblPlanTotalShots").textContent = activePlan.schedule?.total_shots || 20;
+    const execTotal = document.getElementById("execTotalShots");
+    if (execTotal) execTotal.textContent = activePlan.schedule?.total_shots || 20;
 
     // Acquisition Settings Sync
     if (activePlan.acquisition) {
@@ -3197,7 +3258,7 @@ function updatePreFlightChecklist() {
 function updateExecutionSummary() {
     if (!activePlan) return;
     document.getElementById("execPlanName").textContent = activePlan.name || "Untitled";
-    const total = activePlan.schedule?.total_shots || 20;
+    const total = parseInt(document.getElementById("planTotalShots")?.value, 10) || activePlan.schedule?.total_shots || 20;
     document.getElementById("execTotalShots").textContent = total;
 }
 
@@ -3207,9 +3268,15 @@ async function startSequenceExecution() {
         if (!proceed) return;
     }
 
-    const total = activePlan?.schedule?.total_shots || 20;
-    const interval = activePlan?.schedule?.interval_s || 5.0;
-    const settle = activePlan?.schedule?.settle_time_s || 0.5;
+    const total = parseInt(document.getElementById("planTotalShots")?.value, 10) || activePlan?.schedule?.total_shots || 20;
+    const interval = parseFloat(document.getElementById("planInterval")?.value) || activePlan?.schedule?.interval_s || 5.0;
+    const settle = parseFloat(document.getElementById("planSettle")?.value) || activePlan?.schedule?.settle_time_s || 0.5;
+
+    if (activePlan && activePlan.schedule) {
+        activePlan.schedule.total_shots = total;
+        activePlan.schedule.interval_s = interval;
+        activePlan.schedule.settle_time_s = settle;
+    }
 
     // Sample accurate trajectory Pan and Tilt coordinates for every shot
     const poses = [];
@@ -3426,6 +3493,49 @@ function closeImageZoomModal() {
     if (modal) modal.classList.add("hidden");
 }
 
+function setupKeyboardFramingShortcuts() {
+    window.addEventListener("keydown", (e) => {
+        const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+        if (tag === "input" || tag === "textarea" || tag === "select") {
+            return;
+        }
+
+        if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            moveRelative(-getStepSize(), 0);
+        } else if (e.key === "ArrowRight") {
+            e.preventDefault();
+            moveRelative(getStepSize(), 0);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            moveRelative(0, getStepSize());
+        } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            moveRelative(0, -getStepSize());
+        } else if (e.key === " " || e.key === "Spacebar") {
+            e.preventDefault();
+            stopMotors();
+        } else if (e.key === "Escape") {
+            if (isEnlargedLiveViewOpen) {
+                closeEnlargedLiveViewModal();
+            }
+        } else if (e.key === "0" || e.key === "Home") {
+            if (currentStep === 1 || isEnlargedLiveViewOpen) {
+                e.preventDefault();
+                moveAbsolute(0, 0);
+            }
+        } else if (e.key === "[" || e.key === "-") {
+            const steps = [0.5, 1.0, 5.0, 15.0];
+            const idx = steps.indexOf(currentStepSize);
+            if (idx > 0) setStepSize(steps[idx - 1]);
+        } else if (e.key === "]" || e.key === "=" || e.key === "+") {
+            const steps = [0.5, 1.0, 5.0, 15.0];
+            const idx = steps.indexOf(currentStepSize);
+            if (idx >= 0 && idx < steps.length - 1) setStepSize(steps[idx + 1]);
+        }
+    });
+}
+
 // ==========================================================================
 // 9. Startup & Initialization
 // ==========================================================================
@@ -3433,6 +3543,7 @@ function closeImageZoomModal() {
 window.addEventListener("DOMContentLoaded", async () => {
     initSSE();
     setupCurveEventListeners();
+    setupKeyboardFramingShortcuts();
     await loadPlansList();
     goToStep(1);
 

@@ -450,15 +450,15 @@
                         <div class="control-grid-3">
                             <div class="control-group">
                                 <label for="planTotalShots">Total Shots</label>
-                                <input type="number" id="planTotalShots" class="input-field" value="20" min="2" onchange="updateTrajectoryPreview()">
+                                <input type="number" id="planTotalShots" class="input-field" value="20" min="2" oninput="onTimingScheduleChanged()" onchange="onTimingScheduleChanged()">
                             </div>
                             <div class="control-group">
                                 <label for="planInterval">Interval (s)</label>
-                                <input type="number" id="planInterval" class="input-field" value="5.0" min="1" step="0.5" onchange="updateTrajectoryPreview()">
+                                <input type="number" id="planInterval" class="input-field" value="5.0" min="1" step="0.5" oninput="onTimingScheduleChanged()" onchange="onTimingScheduleChanged()">
                             </div>
                             <div class="control-group">
                                 <label for="planSettle">Settle Pause (s)</label>
-                                <input type="number" id="planSettle" class="input-field" value="0.5" min="0" step="0.1">
+                                <input type="number" id="planSettle" class="input-field" value="0.5" min="0" step="0.1" oninput="onTimingScheduleChanged()" onchange="onTimingScheduleChanged()">
                             </div>
                         </div>
 
@@ -687,6 +687,15 @@
                     <div class="telemetry-footer">
                         <span>Status: <strong id="streamState">IDLE</strong></span>
                         <span>FPS: <strong id="streamFps">0.0</strong></span>
+                        <span>
+                            Rate:
+                            <select id="selStreamFps" class="dropdown dropdown-xs" style="width: auto; padding: 2px 4px; font-size: 0.7rem;" onchange="setStreamTargetFps(this.value)">
+                                <option value="3">3 FPS</option>
+                                <option value="6" selected>6 FPS</option>
+                                <option value="10">10 FPS</option>
+                                <option value="15">15 FPS</option>
+                            </select>
+                        </span>
                         <span>Res: <strong id="streamRes">640×480</strong></span>
                     </div>
 
@@ -1014,13 +1023,13 @@
                     </div>
                     <div class="hud-dpad-grid">
                         <div></div>
-                        <button class="btn-dpad-mini" onclick="jogTiltRelative(currentStepSize)">▲</button>
+                        <button class="btn-dpad-mini" onclick="moveRelative(0, getStepSize())" title="Tilt Up (↑)">▲</button>
                         <div></div>
-                        <button class="btn-dpad-mini" onclick="jogPanRelative(-currentStepSize)">◀</button>
-                        <button class="btn-dpad-mini btn-dpad-center" onclick="confirmZeroReference()" title="Set 0,0 Origin">🎯</button>
-                        <button class="btn-dpad-mini" onclick="jogPanRelative(currentStepSize)">▶</button>
+                        <button class="btn-dpad-mini" onclick="moveRelative(-getStepSize(), 0)" title="Pan Left (←)">◀</button>
+                        <button class="btn-dpad-mini btn-dpad-center" onclick="confirmZeroReference()" title="Set Current Position as Origin (0°,0°)">🎯</button>
+                        <button class="btn-dpad-mini" onclick="moveRelative(getStepSize(), 0)" title="Pan Right (→)">▶</button>
                         <div></div>
-                        <button class="btn-dpad-mini" onclick="jogTiltRelative(-currentStepSize)">▼</button>
+                        <button class="btn-dpad-mini" onclick="moveRelative(0, -getStepSize())" title="Tilt Down (↓)">▼</button>
                         <div></div>
                     </div>
                 </div>
@@ -1028,6 +1037,15 @@
 
             <!-- Footer / Live Enhancements Bar -->
             <div class="enlarged-live-toolbar">
+                <div class="toolbar-group">
+                    <label>FPS Rate:</label>
+                    <select id="selEnlargedStreamFps" class="dropdown dropdown-xs" onchange="setStreamTargetFps(this.value)">
+                        <option value="3">3 FPS (Low Wi-Fi)</option>
+                        <option value="6" selected>6 FPS (Wi-Fi)</option>
+                        <option value="10">10 FPS (Smooth)</option>
+                        <option value="15">15 FPS (Max)</option>
+                    </select>
+                </div>
                 <div class="toolbar-group">
                     <label>Filter:</label>
                     <select id="selEnlargedEnhanceMode" class="dropdown dropdown-xs" onchange="syncEnhanceModeFromEnlarged(this.value)">
