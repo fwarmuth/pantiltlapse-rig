@@ -39,3 +39,8 @@ Desktop.ini
 *.log
 output/
 .tmp/
+
+# Local & AI Assistant Configurations
+AGENTS.md
+.gemini/
+
