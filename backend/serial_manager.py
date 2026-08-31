@@ -49,12 +49,15 @@ class SerialManager:
         self.port = port_path
         logger.info(f"Connected to motor controller on {port_path} at {self.baudrate} baud.")
 
+        # Allow ESP/NodeMCU hardware to complete reset after DTR toggle
+        await asyncio.sleep(1.5)
+
         # Flush any boot banner text lines from serial buffer
         await self._flush_input_buffer()
 
         # Query version and initial status
-        await self.send_command("V", timeout=1.5)
-        await self.send_command("S", timeout=1.5)
+        await self.send_command("V", timeout=2.0)
+        await self.send_command("S", timeout=2.0)
         return True
 
     async def connect(self) -> bool:
