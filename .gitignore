@@ -43,4 +43,6 @@ output/
 # Local & AI Assistant Configurations
 AGENTS.md
 .gemini/
+.env
+*.env
 
