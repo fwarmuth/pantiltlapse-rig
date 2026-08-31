@@ -429,18 +429,67 @@ async function toggleDrivers() {
     }
 }
 
+async function toggleMotorsConnection() {
+    if (!motorsConnected) {
+        await reconnectMotors();
+    } else {
+        const confirmed = confirm("Motor controller is currently connected.\n\nDisconnect and release serial port?");
+        if (confirmed) {
+            await disconnectMotors();
+        }
+    }
+}
+
+async function disconnectMotors() {
+    try {
+        const res = await fetch(`${API_BASE}/api/motors/disconnect`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+            updateTelemetryData({ motors: data.motors });
+            alert("Motor controller disconnected.");
+        }
+    } catch (err) {
+        console.error("Disconnect motors error:", err);
+    }
+}
+
 async function reconnectMotors() {
     try {
         const res = await fetch(`${API_BASE}/api/motors/reconnect`, { method: "POST" });
         const data = await res.json();
         if (res.ok) {
             updateTelemetryData({ motors: data.motors });
-            alert("Motor controller reconnected successfully.");
+            alert("Motor controller connected successfully!");
         } else {
             alert(data.detail?.message || "Failed to connect to motor serial port");
         }
     } catch (err) {
-        console.error("Reconnect error:", err);
+        console.error("Reconnect motors error:", err);
+        alert("Motor reconnection failed: " + err.message);
+    }
+}
+
+async function toggleCameraConnection() {
+    if (!cameraConnected) {
+        await reconnectCamera();
+    } else {
+        const confirmed = confirm("Camera is currently connected.\n\nDisconnect and release USB session?");
+        if (confirmed) {
+            await disconnectCamera();
+        }
+    }
+}
+
+async function disconnectCamera() {
+    try {
+        const res = await fetch(`${API_BASE}/api/camera/disconnect`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+            updateTelemetryData({ camera: data.camera });
+            alert("Camera session closed / disconnected.");
+        }
+    } catch (err) {
+        console.error("Disconnect camera error:", err);
     }
 }
 

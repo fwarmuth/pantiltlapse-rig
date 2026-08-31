@@ -26,15 +26,15 @@
             <div class="header-center">
                 <!-- Status Badges -->
                 <div class="status-badges">
-                    <div class="status-badge" id="zeroRefBadge" title="Coordinate reference status">
+                    <div class="status-badge" id="zeroRefBadge" onclick="confirmZeroReference()" style="cursor: pointer;" title="Coordinate Zero Reference — Click to Set Origin (0°,0°)">
                         <span class="dot"></span>
                         <span id="zeroRefText">ZERO UNCONFIRMED</span>
                     </div>
-                    <div class="status-badge" id="statusBadge" title="Motor controller connection">
+                    <div class="status-badge" id="statusBadge" onclick="toggleMotorsConnection()" style="cursor: pointer;" title="Motor Controller — Click to Connect / Disconnect">
                         <span class="dot"></span>
                         <span id="statusText">MOTORS...</span>
                     </div>
-                    <div class="status-badge" id="cameraStatusBadge" onclick="reconnectCamera()" style="cursor: pointer;" title="Camera connection - Click to Reconnect">
+                    <div class="status-badge" id="cameraStatusBadge" onclick="toggleCameraConnection()" style="cursor: pointer;" title="Camera Connection — Click to Connect / Disconnect">
                         <span class="dot"></span>
                         <span id="cameraStatusText">CAMERA...</span>
                     </div>

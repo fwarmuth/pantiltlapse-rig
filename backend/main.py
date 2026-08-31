@@ -131,14 +131,6 @@ class CameraConfigRequest(BaseModel):
     value: str = Field(description="Parameter target value, e.g. '400', '1/125'")
 
 
-class SequenceStepRequest(BaseModel):
-    pan: float = Field(default=5.0, description="Pan angle (relative or absolute)")
-    tilt: float = Field(default=0.0, description="Tilt angle (relative or absolute)")
-    relative: bool = Field(default=True, description="If True, relative move")
-    pause_s: float = Field(default=0.5, description="Settle time pause after move before shooting (seconds)")
-    capture: bool = Field(default=True, description="Trigger photo capture")
-
-
 def _require_serial_connected():
     if not serial_mgr.is_connected:
         raise HTTPException(
@@ -175,7 +167,6 @@ async def update_rig_limits(req: RigLimitsRequest):
 
 
 @app.post("/api/rig/confirm-zero")
-@app.post("/api/rig/reset-origin")
 async def confirm_physical_zero():
     """Operator resets current position as origin (0, 0) and confirms zero reference."""
     if serial_mgr.is_connected:
@@ -207,6 +198,13 @@ async def reconnect_motors():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"status": "ERROR", "message": f"Failed to connect to serial port '{serial_mgr.port}'"},
         )
+    return {"status": "OK", "motors": serial_mgr.get_status()}
+
+
+@app.post("/api/motors/disconnect")
+async def disconnect_motors():
+    """Disconnect and close serial port handle to release hardware."""
+    await serial_mgr.disconnect()
     return {"status": "OK", "motors": serial_mgr.get_status()}
 
 
@@ -334,6 +332,13 @@ async def reconnect_camera():
             "message": "Failed to connect to camera. Ensure camera is powered on and awake, then retry.",
         },
     )
+
+
+@app.post("/api/camera/disconnect")
+async def disconnect_camera():
+    """Disconnect and close persistent camera session to release USB handle."""
+    camera_mgr.close()
+    return {"status": "OK", "camera": camera_mgr.get_status()}
 
 
 @app.post("/api/camera/trigger")
@@ -519,59 +524,6 @@ async def set_camera_raw_widget(req: RawWidgetSetRequest):
             detail={"status": "ERROR", "message": res.get("message", "Widget set failed"), "widget": req.widget_name},
         )
     return res
-
-
-# --- Integrated Sequence Step Endpoint ---
-@app.post("/api/sequence/step")
-async def execute_sequence_step(req: SequenceStepRequest):
-    _require_serial_connected()
-    if not coordinator.can_move():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"status": "ERROR", "message": f"Operation lock busy: '{coordinator.active_mode}' active"},
-        )
-    rig_mgr.validate_move(
-        pan=req.pan,
-        tilt=req.tilt,
-        relative=req.relative,
-        current_pan=serial_mgr.current_pan,
-        current_tilt=serial_mgr.current_tilt,
-    )
-    logger.info(f"Executing sequence step: move (pan={req.pan}, tilt={req.tilt}), pause={req.pause_s}s")
-
-    if req.relative:
-        move_res = await serial_mgr.move_relative(req.pan, req.tilt)
-    else:
-        move_res = await serial_mgr.move_absolute(req.pan, req.tilt)
-
-    if move_res.get("status") != "OK":
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"status": "ERROR", "message": move_res.get("message", "Motor move failed")},
-        )
-
-    if req.pause_s > 0:
-        await asyncio.sleep(req.pause_s)
-
-    capture_res = None
-    if req.capture:
-        if not camera_mgr.is_connected:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={"status": "ERROR", "message": "Camera is disconnected"},
-            )
-        capture_res = await camera_mgr.trigger_capture()
-
-    motor_status = serial_mgr.get_status()
-    camera_status = camera_mgr.get_status()
-
-    return {
-        "status": "OK",
-        "move": move_res,
-        "capture": capture_res,
-        "motors": motor_status,
-        "camera": camera_status,
-    }
 
 
 # --- Sequence Plan CRUD & Trajectory API Endpoints ---
