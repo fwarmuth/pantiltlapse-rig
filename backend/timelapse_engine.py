@@ -169,8 +169,14 @@ class TimelapseEngine:
                         f"Shot {k + 1} motor move failed ({move_res.get('message')}). "
                         f"Attempting serial reconnection and retry..."
                     )
-                    await asyncio.sleep(2.0)
-                    reconnected = await self.serial_mgr.reconnect()
+                    reconnected = False
+                    for attempt in range(1, 6):
+                        await asyncio.sleep(1.2)
+                        logger.info(f"Serial reconnection attempt {attempt}/5...")
+                        if await self.serial_mgr.reconnect():
+                            reconnected = True
+                            break
+
                     if reconnected:
                         logger.info(f"Serial reconnected! Retrying motor move to ({target_pan:.2f}°, {target_tilt:.2f}°)...")
                         move_res = await self.serial_mgr.move_absolute(target_pan, target_tilt)
