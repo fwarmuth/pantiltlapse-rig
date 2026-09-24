@@ -283,6 +283,8 @@ function startHTTPPollingFallback() {
     }
 }
 
+const pollStatus = fetchStatus;
+
 async function fetchStatus() {
     if (isMoving) return;
     try {
@@ -538,7 +540,7 @@ async function restartCamera() {
         const data = await res.json();
         if (res.ok) {
             alert(data.message || "Camera restarted and reconnected successfully!");
-            await pollStatus();
+            await fetchStatus();
             await refreshCameraConfigChoices();
         } else {
             alert(data.detail?.message || "Failed to restart camera. Ensure camera is powered on, awake, and dial is set to 'M' (Manual).");
