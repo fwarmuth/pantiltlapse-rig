@@ -48,6 +48,10 @@ class FakeCameraManager:
         await asyncio.sleep(0.1)
         return await self.initialize()
 
+    async def reconnect(self) -> bool:
+        """Alias for restart()."""
+        return await self.restart()
+
     async def step_focus(self, direction: str, step_size: int = 1) -> dict[str, Any]:
         """Simulate manual focus step in fake camera."""
         if not self.is_connected:

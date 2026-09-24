@@ -44,6 +44,7 @@ class TimelapseEngine:
         self.elapsed_time_s: float = 0.0
         self.estimated_eta_s: float = 0.0
         self.last_error: str | None = None
+        self.camera_retry_delay_s: float = 2.5
 
         self._task: asyncio.Task | None = None
         self._pause_event = asyncio.Event()
@@ -199,16 +200,48 @@ class TimelapseEngine:
                 if config.capture_photo:
                     logger.info(f"Shot {k + 1}/{total}: Triggering camera shutter...")
                     capture_res = await self.camera_mgr.trigger_capture(filename=f"tl_{k + 1:04d}.jpg")
-                    if capture_res.get("status") != "OK" and hasattr(self.camera_mgr, "reconnect"):
-                        logger.warning(
-                            f"Shot {k + 1} capture warning ({capture_res.get('message')}). "
-                            f"Attempting camera reconnection and retry..."
-                        )
-                        await asyncio.sleep(1.5)
-                        await self.camera_mgr.reconnect()
-                        capture_res = await self.camera_mgr.trigger_capture(filename=f"tl_{k + 1:04d}.jpg")
+
                     if capture_res.get("status") != "OK":
-                        logger.warning(f"Shot {k + 1} capture failed: {capture_res.get('message')}")
+                        err_msg = capture_res.get("message", "Camera disconnected or capture failed")
+                        logger.warning(
+                            f"Shot {k + 1}/{total} capture failed ({err_msg}). "
+                            f"Holding motor position and waiting for camera to reconnect..."
+                        )
+                        self.last_error = f"Shot {k + 1}: Waiting for camera reconnection ({err_msg})"
+
+                        while not self._cancel_flag:
+                            await self._pause_event.wait()
+                            if self._cancel_flag:
+                                break
+
+                            # Attempt camera recovery
+                            if not self.camera_mgr.is_connected:
+                                logger.info(f"Shot {k + 1}: Attempting camera reconnect...")
+                                if hasattr(self.camera_mgr, "reconnect"):
+                                    await self.camera_mgr.reconnect()
+                                elif hasattr(self.camera_mgr, "restart"):
+                                    await self.camera_mgr.restart()
+                                elif hasattr(self.camera_mgr, "initialize"):
+                                    await self.camera_mgr.initialize()
+
+                            if self.camera_mgr.is_connected:
+                                logger.info(f"Shot {k + 1}: Camera reconnected! Retrying photo capture...")
+                                capture_res = await self.camera_mgr.trigger_capture(filename=f"tl_{k + 1:04d}.jpg")
+                                if capture_res.get("status") == "OK":
+                                    logger.info(
+                                        f"Shot {k + 1}/{total} captured successfully after camera reconnection! Resuming sequence."
+                                    )
+                                    self.last_error = None
+                                    break
+                                else:
+                                    logger.warning(
+                                        f"Shot {k + 1} capture retry failed ({capture_res.get('message')}). Retrying in 3s..."
+                                    )
+
+                            await asyncio.sleep(self.camera_retry_delay_s)
+
+                        if self._cancel_flag:
+                            break
 
                 # Update Progress Telemetry
                 self.current_shot = k + 1

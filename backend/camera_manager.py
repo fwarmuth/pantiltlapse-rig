@@ -37,6 +37,7 @@ class CameraManager:
 
         self._camera: Any = None
         self._lock = asyncio.Lock()
+        self._is_restarting = False
 
     @property
     def is_manual_mode(self) -> bool:
@@ -626,28 +627,44 @@ class CameraManager:
 
     async def restart(self) -> bool:
         """Perform full camera recovery: close session, reset hardware USB port, and re-initialize."""
-        logger.info("Starting complete camera recovery and restart sequence...")
-        self.close()
-        await asyncio.sleep(0.5)
+        if self._is_restarting:
+            logger.info("Camera restart already in progress, waiting for it to complete...")
+            for _ in range(30):
+                if not self._is_restarting:
+                    return self.is_connected
+                await asyncio.sleep(0.5)
+            return self.is_connected
 
-        # 1. Hardware USB reset
-        usb_reset_ok = await self.reset_usb()
-        if usb_reset_ok:
-            logger.info("USB bus reset executed. Waiting 2.5s for kernel enumeration...")
-            await asyncio.sleep(2.5)
-        else:
-            logger.info("Proceeding to re-initialize gphoto2 session...")
-            await asyncio.sleep(1.0)
+        self._is_restarting = True
+        try:
+            logger.info("Starting complete camera recovery and restart sequence...")
+            self.close()
+            await asyncio.sleep(0.5)
 
-        # 2. Re-initialize gphoto2 session
-        connected = await self.initialize()
-        if connected:
-            await self.apply_startup_defaults()
-            logger.info(f"Camera restart successful: '{self.model}', mode='{self.exposure_mode}'")
-            return True
-        else:
-            logger.error("Camera restart failed: could not re-establish session.")
-            return False
+            # 1. Hardware USB reset
+            usb_reset_ok = await self.reset_usb()
+            if usb_reset_ok:
+                logger.info("USB bus reset executed. Waiting 2.5s for kernel enumeration...")
+                await asyncio.sleep(2.5)
+            else:
+                logger.info("Proceeding to re-initialize gphoto2 session...")
+                await asyncio.sleep(1.0)
+
+            # 2. Re-initialize gphoto2 session
+            connected = await self.initialize()
+            if connected:
+                await self.apply_startup_defaults()
+                logger.info(f"Camera restart successful: '{self.model}', mode='{self.exposure_mode}'")
+                return True
+            else:
+                logger.error("Camera restart failed: could not re-establish session.")
+                return False
+        finally:
+            self._is_restarting = False
+
+    async def reconnect(self) -> bool:
+        """Alias for restart()."""
+        return await self.restart()
 
     def get_status(self) -> dict[str, Any]:
         return {
