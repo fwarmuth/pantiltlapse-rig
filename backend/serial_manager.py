@@ -55,9 +55,9 @@ class SerialManager:
         # Flush any boot banner text lines from serial buffer
         await self._flush_input_buffer()
 
-        # Query version and initial status
-        await self.send_command("V", timeout=2.0)
-        await self.send_command("S", timeout=2.0)
+        # Query version and initial status (unlocked to avoid reentrant deadlock when called from reconnect())
+        await self._send_command_unlocked("V", timeout=2.0)
+        await self._send_command_unlocked("S", timeout=2.0)
         return True
 
     async def connect(self) -> bool:
@@ -121,6 +121,38 @@ class SerialManager:
             except asyncio.TimeoutError:
                 break
 
+    async def _send_command_unlocked(self, cmd_clean: str, timeout: float | None = 2.0) -> dict[str, Any]:
+        """Low-level sender without acquiring self._lock (caller must hold self._lock or be initializing)."""
+        if not self._writer or not self._reader:
+            self.is_connected = False
+            self.state = "DISCONNECTED"
+            return {"status": "ERROR", "message": "Not connected"}
+
+        try:
+            msg = f"{cmd_clean}\n"
+            self._writer.write(msg.encode("ascii"))
+            await self._writer.drain()
+
+            # Read response line from hardware with optional timeout
+            if timeout is not None:
+                response_bytes = await asyncio.wait_for(self._reader.readline(), timeout=timeout)
+            else:
+                response_bytes = await self._reader.readline()
+
+            response = response_bytes.decode("ascii", errors="replace").strip()
+            self._parse_response(response)
+            if not response or response.startswith("ERR"):
+                return {"status": "ERROR", "message": response or "Empty response from motor controller"}
+            return {"status": "OK", "response": response}
+        except asyncio.TimeoutError:
+            logger.warning(f"Serial command '{cmd_clean}' timed out waiting for response ({timeout}s)")
+            return {"status": "TIMEOUT", "message": f"Serial command '{cmd_clean}' timed out"}
+        except Exception as e:
+            logger.error(f"Serial communication error: {e}")
+            self.is_connected = False
+            self.state = "ERROR"
+            return {"status": "ERROR", "message": str(e)}
+
     async def send_command(self, cmd_str: str, timeout: float | None = 2.0) -> dict[str, Any]:
         """Send ASCII command string to motor controller (e.g. 'M 10.0 5.0' or 'S'). Strictly serialized via Lock."""
         if not self.is_connected:
@@ -130,35 +162,7 @@ class SerialManager:
         logger.info(f"Serial Command: '{cmd_clean}'")
 
         async with self._lock:
-            if not self._writer or not self._reader:
-                self.is_connected = False
-                self.state = "DISCONNECTED"
-                return {"status": "ERROR", "message": "Not connected"}
-
-            try:
-                msg = f"{cmd_clean}\n"
-                self._writer.write(msg.encode("ascii"))
-                await self._writer.drain()
-
-                # Read response line from hardware with optional timeout
-                if timeout is not None:
-                    response_bytes = await asyncio.wait_for(self._reader.readline(), timeout=timeout)
-                else:
-                    response_bytes = await self._reader.readline()
-
-                response = response_bytes.decode("ascii", errors="replace").strip()
-                self._parse_response(response)
-                if not response or response.startswith("ERR"):
-                    return {"status": "ERROR", "message": response or "Empty response from motor controller"}
-                return {"status": "OK", "response": response}
-            except asyncio.TimeoutError:
-                logger.warning(f"Serial command '{cmd_clean}' timed out waiting for response ({timeout}s)")
-                return {"status": "TIMEOUT", "message": f"Serial command '{cmd_clean}' timed out"}
-            except Exception as e:
-                logger.error(f"Serial communication error: {e}")
-                self.is_connected = False
-                self.state = "ERROR"
-                return {"status": "ERROR", "message": str(e)}
+            return await self._send_command_unlocked(cmd_clean, timeout=timeout)
 
     def _parse_response(self, resp: str):
         """Parse status response from NodeMCU/ESP controller."""

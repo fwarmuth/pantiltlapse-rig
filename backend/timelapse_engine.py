@@ -162,8 +162,19 @@ class TimelapseEngine:
                     f"Shot {k + 1}/{total} [{profile_label}]: Moving to ({target_pan:.2f}°, {target_tilt:.2f}°)..."
                 )
 
-                # Step 1: Move Motors
+                # Step 1: Move Motors (with automatic recovery for transient USB disconnects)
                 move_res = await self.serial_mgr.move_absolute(target_pan, target_tilt)
+                if move_res.get("status") != "OK" and hasattr(self.serial_mgr, "reconnect"):
+                    logger.warning(
+                        f"Shot {k + 1} motor move failed ({move_res.get('message')}). "
+                        f"Attempting serial reconnection and retry..."
+                    )
+                    await asyncio.sleep(2.0)
+                    reconnected = await self.serial_mgr.reconnect()
+                    if reconnected:
+                        logger.info(f"Serial reconnected! Retrying motor move to ({target_pan:.2f}°, {target_tilt:.2f}°)...")
+                        move_res = await self.serial_mgr.move_absolute(target_pan, target_tilt)
+
                 if move_res.get("status") != "OK":
                     message = move_res.get("message", f"Motor returned non-OK status: {move_res}")
                     raise RuntimeError(f"Shot {k + 1} move failed: {message}")
@@ -182,8 +193,16 @@ class TimelapseEngine:
                 if config.capture_photo:
                     logger.info(f"Shot {k + 1}/{total}: Triggering camera shutter...")
                     capture_res = await self.camera_mgr.trigger_capture(filename=f"tl_{k + 1:04d}.jpg")
+                    if capture_res.get("status") != "OK" and hasattr(self.camera_mgr, "reconnect"):
+                        logger.warning(
+                            f"Shot {k + 1} capture warning ({capture_res.get('message')}). "
+                            f"Attempting camera reconnection and retry..."
+                        )
+                        await asyncio.sleep(1.5)
+                        await self.camera_mgr.reconnect()
+                        capture_res = await self.camera_mgr.trigger_capture(filename=f"tl_{k + 1:04d}.jpg")
                     if capture_res.get("status") != "OK":
-                        logger.warning(f"Shot {k + 1} capture warning: {capture_res.get('message')}")
+                        logger.warning(f"Shot {k + 1} capture failed: {capture_res.get('message')}")
 
                 # Update Progress Telemetry
                 self.current_shot = k + 1
