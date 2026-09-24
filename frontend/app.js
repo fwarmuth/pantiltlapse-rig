@@ -1371,23 +1371,51 @@ function syncPlanInputs() {
 async function saveCurrentPlan() {
     if (!activePlan) createNewPlan();
 
-    activePlan.name = document.getElementById("planName").value.trim() || "Untitled Sequence";
-    activePlan.description = document.getElementById("planDesc").value.trim();
-    activePlan.schedule.total_shots = parseInt(document.getElementById("planTotalShots").value, 10) || 20;
-    activePlan.schedule.interval_s = parseFloat(document.getElementById("planInterval").value) || 5.0;
-    activePlan.schedule.settle_time_s = parseFloat(document.getElementById("planSettle").value) || 0.5;
+    const planNameEl = document.getElementById("planName");
+    if (planNameEl && planNameEl.value.trim()) {
+        activePlan.name = planNameEl.value.trim();
+    } else if (!activePlan.name) {
+        activePlan.name = "Untitled Sequence";
+    }
+
+    const planDescEl = document.getElementById("planDesc");
+    if (planDescEl) activePlan.description = planDescEl.value.trim();
+
+    if (!activePlan.schedule) activePlan.schedule = {};
+    const totalShotsEl = document.getElementById("planTotalShots");
+    if (totalShotsEl && totalShotsEl.value) {
+        activePlan.schedule.total_shots = parseInt(totalShotsEl.value, 10) || activePlan.schedule.total_shots || 20;
+    }
+    const intervalEl = document.getElementById("planInterval");
+    if (intervalEl && intervalEl.value) {
+        activePlan.schedule.interval_s = parseFloat(intervalEl.value) || activePlan.schedule.interval_s || 5.0;
+    }
+    const settleEl = document.getElementById("planSettle");
+    if (settleEl && settleEl.value) {
+        activePlan.schedule.settle_time_s = parseFloat(settleEl.value) || activePlan.schedule.settle_time_s || 0.5;
+    }
 
     activePlan.trajectory = {
         pan_keyframes: currentPanKeyframes,
         tilt_keyframes: currentTiltKeyframes
     };
 
-    activePlan.acquisition = {
-        iso: document.getElementById("acqIso").value,
-        shutter_speed: document.getElementById("acqShutter").value,
-        aperture: document.getElementById("acqAperture").value,
-        camera_format: document.getElementById("acqFormat").value
-    };
+    if (!activePlan.acquisition) activePlan.acquisition = {};
+    const isoVal = document.getElementById("acqIso")?.value;
+    if (isoVal) activePlan.acquisition.iso = isoVal;
+    const shutterVal = document.getElementById("acqShutter")?.value;
+    if (shutterVal) activePlan.acquisition.shutter_speed = shutterVal;
+    const apVal = document.getElementById("acqAperture")?.value;
+    if (apVal) activePlan.acquisition.aperture = apVal;
+    const fmtVal = document.getElementById("acqFormat")?.value;
+    if (fmtVal) activePlan.acquisition.camera_format = fmtVal;
+
+    const btnHeaderSave = document.getElementById("btnHeaderSavePlan");
+    const origBtnText = btnHeaderSave ? btnHeaderSave.textContent : null;
+    if (btnHeaderSave) {
+        btnHeaderSave.textContent = "⏳ Saving...";
+        btnHeaderSave.disabled = true;
+    }
 
     try {
         const isExisting = document.getElementById("selectPlan").value === activePlan.id;
@@ -1422,6 +1450,11 @@ async function saveCurrentPlan() {
     } catch (e) {
         console.error("Save plan error:", e);
         alert(`❌ Network or server error while saving plan: ${e.message}`);
+    } finally {
+        if (btnHeaderSave && origBtnText) {
+            btnHeaderSave.textContent = origBtnText;
+            btnHeaderSave.disabled = false;
+        }
     }
 }
 
