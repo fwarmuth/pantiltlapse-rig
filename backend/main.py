@@ -273,7 +273,12 @@ async def get_camera_config_choices():
         )
     try:
         choices = await camera_mgr.get_config_choices()
-        return {"status": "OK", "choices": choices}
+        return {
+            "status": "OK",
+            "choices": choices,
+            "exposure_mode": getattr(camera_mgr, "exposure_mode", "Unknown"),
+            "is_manual_mode": getattr(camera_mgr, "is_manual_mode", True),
+        }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -309,27 +314,55 @@ async def set_camera_config(req: CameraConfigRequest):
     return await camera_mgr.set_config(req.param, req.value)
 
 
+@app.post("/api/camera/restart")
 @app.post("/api/camera/reconnect")
 async def reconnect_camera():
-    """Attempt to re-establish a persistent gphoto2 session with the camera."""
-    camera_mgr.close()
-    await asyncio.sleep(0.5)
-    connected = await camera_mgr.initialize()
+    """Attempt a robust camera restart: releases preview, resets hardware USB port, and reconnects."""
+    if coordinator.is_previewing:
+        try:
+            await preview_ctrl.stop_preview()
+        except Exception as e:
+            logger.warning(f"Error stopping preview during camera restart: {e}")
+            await coordinator.release("PREVIEW")
+
+    if hasattr(camera_mgr, "restart"):
+        connected = await camera_mgr.restart()
+    else:
+        camera_mgr.close()
+        await asyncio.sleep(0.5)
+        connected = await camera_mgr.initialize()
+        if connected:
+            await camera_mgr.apply_startup_defaults()
+
     if connected:
-        await camera_mgr.apply_startup_defaults()
+        try:
+            choices = await camera_mgr.get_config_choices()
+        except Exception:
+            choices = {}
+
+        mode_str = getattr(camera_mgr, "exposure_mode", "Unknown")
+        is_m = getattr(camera_mgr, "is_manual_mode", True)
+        msg = f"Connected to camera '{camera_mgr.model}' [Mode: {mode_str}]"
+        if not is_m:
+            msg += " - Warning: Camera dial is NOT in 'M' (Manual). Exposure settings will be locked by camera hardware."
+
         return {
             "status": "OK",
-            "message": f"Connected to camera '{camera_mgr.model}'",
+            "message": msg,
             "model": camera_mgr.model,
+            "exposure_mode": mode_str,
+            "is_manual_mode": is_m,
             "iso": camera_mgr.iso,
             "shutter_speed": camera_mgr.shutter_speed,
             "aperture": camera_mgr.aperture,
+            "choices": choices,
         }
+
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
             "status": "ERROR",
-            "message": "Failed to connect to camera. Ensure camera is powered on and awake, then retry.",
+            "message": "Failed to connect to camera. Ensure camera is powered on, awake, and dial is set to 'M' (Manual).",
         },
     )
 
@@ -337,6 +370,11 @@ async def reconnect_camera():
 @app.post("/api/camera/disconnect")
 async def disconnect_camera():
     """Disconnect and close persistent camera session to release USB handle."""
+    if coordinator.is_previewing:
+        try:
+            await preview_ctrl.stop_preview()
+        except Exception:
+            await coordinator.release("PREVIEW")
     camera_mgr.close()
     return {"status": "OK", "camera": camera_mgr.get_status()}
 

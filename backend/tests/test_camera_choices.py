@@ -109,3 +109,22 @@ def test_debug_camera_endpoints():
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "OK"
+
+
+def test_camera_restart_and_exposure_mode():
+    with TestClient(app) as client:
+        resp = client.post("/api/camera/restart")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "OK"
+        assert "exposure_mode" in data
+        assert "is_manual_mode" in data
+        assert "choices" in data
+
+        # Check config choices endpoint returns exposure mode metadata
+        resp_choices = client.get("/api/camera/config/choices")
+        assert resp_choices.status_code == 200
+        choices_data = resp_choices.json()
+        assert choices_data["status"] == "OK"
+        assert "exposure_mode" in choices_data
+        assert "is_manual_mode" in choices_data

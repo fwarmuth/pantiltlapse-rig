@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import subprocess
 import time
 from typing import Any
 
@@ -27,6 +28,7 @@ class CameraManager:
 
         self.model = "Unknown"
         self.is_connected = False
+        self.exposure_mode = "Unknown"
         self.iso = "400"
         self.shutter_speed = "1/125"
         self.aperture = "5.6"
@@ -35,6 +37,11 @@ class CameraManager:
 
         self._camera: Any = None
         self._lock = asyncio.Lock()
+
+    @property
+    def is_manual_mode(self) -> bool:
+        """Return True if camera physical dial is in Manual mode ('Manual' or 'M')."""
+        return self.exposure_mode.strip().lower() in ("manual", "m")
 
     async def initialize(self) -> bool:
         if not HAS_GPHOTO2:
@@ -52,6 +59,7 @@ class CameraManager:
                 return False
 
             def _init_gphoto():
+                cam = None
                 try:
                     logger.info("Initializing persistent python-gphoto2 session...")
                     cam = gp.Camera()
@@ -66,6 +74,14 @@ class CameraManager:
                     return cam, model_name
                 except Exception as e:
                     logger.error(f"Failed to open native gphoto2 camera session: {e}")
+                    if cam is not None:
+                        try:
+                            cam.exit()
+                        except Exception:
+                            pass
+                        del cam
+                    import gc
+                    gc.collect()
                     return None, "Disconnected"
 
             cam, model_name = await asyncio.to_thread(_init_gphoto)
@@ -83,7 +99,7 @@ class CameraManager:
             return True
 
     def _read_configs_nolock(self):
-        """Read ISO, shutter speed, and aperture directly from native C config tree."""
+        """Read ISO, shutter speed, aperture, and exposure mode directly from native C config tree."""
         if not self._camera:
             return
         try:
@@ -100,18 +116,41 @@ class CameraManager:
                 self.aperture = str(config.get_child_by_name("aperture").get_value())
             except Exception:
                 pass
+            try:
+                w_mode = self._find_widget_recursive(config, "autoexposuremode")
+                if w_mode is None:
+                    w_mode = self._find_widget_recursive(config, "expprogram")
+                if w_mode is not None:
+                    self.exposure_mode = str(w_mode.get_value())
+                    if not self.is_manual_mode:
+                        logger.warning(
+                            f"Camera dial is in '{self.exposure_mode}' mode. Exposure controls (ISO/shutter/aperture) "
+                            f"will be restricted by camera firmware. Turn dial to 'M' (Manual) for full control."
+                        )
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error reading camera configs: {e}")
 
     async def refresh_config(self) -> dict[str, str]:
         """Refresh exposure settings from active camera session."""
         if not self.is_connected or not self._camera:
-            return {"iso": self.iso, "shutter_speed": self.shutter_speed, "aperture": self.aperture}
+            return {
+                "iso": self.iso,
+                "shutter_speed": self.shutter_speed,
+                "aperture": self.aperture,
+                "exposure_mode": self.exposure_mode,
+            }
 
         async with self._lock:
             self._read_configs_nolock()
 
-        return {"iso": self.iso, "shutter_speed": self.shutter_speed, "aperture": self.aperture}
+        return {
+            "iso": self.iso,
+            "shutter_speed": self.shutter_speed,
+            "aperture": self.aperture,
+            "exposure_mode": self.exposure_mode,
+        }
 
     async def apply_startup_defaults(self):
         """Set startup camera acquisition defaults (Auto ISO, auto/sensible shutter, and aperture ~4.5)."""
@@ -552,14 +591,63 @@ class CameraManager:
                 raise Exception(f"gphoto2 preview failure: {e}") from e
 
     def close(self):
-        """Close persistent camera session cleanly."""
+        """Close persistent camera session cleanly and reset state."""
         if self._camera:
             try:
                 logger.info("Closing persistent python-gphoto2 session...")
                 self._camera.exit()
-                self._camera = None
             except Exception as e:
                 logger.error(f"Error closing camera session: {e}")
+            finally:
+                self._camera = None
+        self.is_connected = False
+        self.model = "Disconnected"
+        self.exposure_mode = "Unknown"
+
+    async def reset_usb(self) -> bool:
+        """Attempt hardware USB port reset using usbreset utility or sysfs."""
+        def _do_reset():
+            targets = ["04a9:3272", "Canon"]
+            for tgt in targets:
+                try:
+                    res = subprocess.run(["usbreset", tgt], capture_output=True, text=True, timeout=5)
+                    if res.returncode == 0:
+                        logger.info(f"Hardware USB reset succeeded for target '{tgt}': {res.stdout.strip()}")
+                        return True
+                except Exception as e:
+                    logger.debug(f"usbreset '{tgt}' exception: {e}")
+            return False
+
+        try:
+            return await asyncio.to_thread(_do_reset)
+        except Exception as e:
+            logger.warning(f"Error executing hardware USB reset: {e}")
+            return False
+
+    async def restart(self) -> bool:
+        """Perform full camera recovery: close session, reset hardware USB port, and re-initialize."""
+        logger.info("Starting complete camera recovery and restart sequence...")
+        self.close()
+        await asyncio.sleep(0.5)
+
+        # 1. Hardware USB reset
+        usb_reset_ok = await self.reset_usb()
+        if usb_reset_ok:
+            logger.info("USB bus reset executed. Waiting 2.5s for kernel enumeration...")
+            await asyncio.sleep(2.5)
+        else:
+            logger.info("Proceeding to re-initialize gphoto2 session...")
+            await asyncio.sleep(1.0)
+
+        # 2. Re-initialize gphoto2 session
+        connected = await self.initialize()
+        if connected:
+            await self.apply_startup_defaults()
+            logger.info(f"Camera restart successful: '{self.model}', mode='{self.exposure_mode}'")
+            return True
+        else:
+            logger.error("Camera restart failed: could not re-establish session.")
+            return False
 
     def get_status(self) -> dict[str, Any]:
         return {
@@ -567,6 +655,8 @@ class CameraManager:
             "mock_mode": False,
             "camera_type": "gphoto2",
             "model": self.model,
+            "exposure_mode": self.exposure_mode,
+            "is_manual_mode": self.is_manual_mode,
             "iso": self.iso,
             "shutter_speed": self.shutter_speed,
             "aperture": self.aperture,

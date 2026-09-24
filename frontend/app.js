@@ -104,6 +104,7 @@ function goToStep(stepNum) {
         // Step 4: Acquisition
         updateTimingCalculations();
         loadTestShotsList();
+        refreshCameraConfigChoices();
     } else if (stepNum === 5) {
         // Step 5: Review & Execution
         updatePreFlightChecklist();
@@ -180,17 +181,39 @@ function updateTelemetryData(data) {
     // Camera Status
     if (data.camera) {
         const c = data.camera;
+        const prevConnected = cameraConnected;
         cameraConnected = c.connected === true;
         const badge = document.getElementById("cameraStatusBadge");
         const statusText = document.getElementById("cameraStatusText");
         if (badge && statusText) {
             if (cameraConnected) {
                 badge.className = "status-badge connected";
-                statusText.textContent = c.mock_mode ? "CAMERA (SIM)" : "CAMERA OK";
+                if (c.mock_mode) {
+                    statusText.textContent = "CAMERA (SIM)";
+                } else if (c.is_manual_mode) {
+                    statusText.textContent = "CAMERA (M)";
+                } else {
+                    statusText.textContent = "CAMERA (AUTO)";
+                }
+
+                if (!c.is_manual_mode && c.exposure_mode && c.exposure_mode !== "Unknown") {
+                    badge.title = `Camera Dial: ${c.exposure_mode}. Click to toggle. (Recommend dial 'M')`;
+                } else {
+                    badge.title = `Camera Connected: ${c.model}. Click to toggle.`;
+                }
             } else {
                 badge.className = "status-badge unconfirmed";
                 statusText.textContent = "CAMERA OFF";
+                badge.title = "Camera Disconnected — Click to Reconnect / Restart";
             }
+        }
+
+        if (c.exposure_mode) {
+            updateCameraModeBanner(c.exposure_mode, c.is_manual_mode);
+        }
+
+        if (!prevConnected && cameraConnected) {
+            refreshCameraConfigChoices();
         }
     }
 
@@ -471,10 +494,10 @@ async function reconnectMotors() {
 
 async function toggleCameraConnection() {
     if (!cameraConnected) {
-        await reconnectCamera();
+        await restartCamera();
     } else {
-        const confirmed = confirm("Camera is currently connected.\n\nDisconnect and release USB session?");
-        if (confirmed) {
+        const choice = confirm("Camera is currently connected.\n\nClick OK to DISCONNECT (release USB).\nClick Cancel to keep connected.");
+        if (choice) {
             await disconnectCamera();
         }
     }
@@ -486,6 +509,7 @@ async function disconnectCamera() {
         const data = await res.json();
         if (res.ok) {
             updateTelemetryData({ camera: data.camera });
+            updateCameraModeBanner("Disconnected", false);
             alert("Camera session closed / disconnected.");
         }
     } catch (err) {
@@ -494,17 +518,42 @@ async function disconnectCamera() {
 }
 
 async function reconnectCamera() {
+    await restartCamera();
+}
+
+async function restartCamera() {
+    const btnHeader = document.getElementById("btnHeaderRestartCam");
+    const btnCard = document.getElementById("btnCardRestartCam");
+    if (btnHeader) {
+        btnHeader.disabled = true;
+        btnHeader.textContent = "⏳ Resetting...";
+    }
+    if (btnCard) {
+        btnCard.disabled = true;
+        btnCard.textContent = "⏳ Resetting...";
+    }
+
     try {
-        const res = await fetch(`${API_BASE}/api/camera/reconnect`, { method: "POST" });
+        const res = await fetch(`${API_BASE}/api/camera/restart`, { method: "POST" });
         const data = await res.json();
         if (res.ok) {
-            alert(data.message || "Camera connected successfully!");
+            alert(data.message || "Camera restarted and reconnected successfully!");
             await pollStatus();
+            await refreshCameraConfigChoices();
         } else {
-            alert(data.detail?.message || "Failed to reconnect camera. Ensure camera is powered on and awake.");
+            alert(data.detail?.message || "Failed to restart camera. Ensure camera is powered on, awake, and dial is set to 'M' (Manual).");
         }
     } catch (err) {
-        alert("Camera reconnection failed: " + err.message);
+        alert("Camera restart failed: " + err.message);
+    } finally {
+        if (btnHeader) {
+            btnHeader.disabled = false;
+            btnHeader.textContent = "🔄 Restart Cam";
+        }
+        if (btnCard) {
+            btnCard.disabled = false;
+            btnCard.textContent = "🔄 Restart Camera";
+        }
     }
 }
 
@@ -3597,18 +3646,51 @@ window.addEventListener("DOMContentLoaded", async () => {
     goToStep(1);
 
     // Initial camera choices load
+    await refreshCameraConfigChoices();
+});
+
+async function refreshCameraConfigChoices() {
     try {
         const res = await fetch(`${API_BASE}/api/camera/config/choices`);
-        if (res.ok) {
-            const data = await res.json();
-            if (data.choices) {
-                populateChoicesDropdown("acqIso", data.choices.iso);
-                populateChoicesDropdown("acqShutter", data.choices.shutter_speed);
-                populateChoicesDropdown("acqAperture", data.choices.aperture);
-            }
+        if (!res.ok) {
+            updateCameraModeBanner("Disconnected", false);
+            return;
         }
-    } catch (e) {}
-});
+        const data = await res.json();
+        const choices = data.choices || {};
+        const mode = data.exposure_mode || (choices.exposure_mode ? choices.exposure_mode[0] : "Unknown");
+        const isManual = data.is_manual_mode ?? (mode.toLowerCase() === "manual" || mode.toLowerCase() === "m");
+
+        updateCameraModeBanner(mode, isManual);
+
+        if (choices.iso && choices.iso.length > 0) populateChoicesDropdown("acqIso", choices.iso);
+        if (choices.shutter_speed && choices.shutter_speed.length > 0) populateChoicesDropdown("acqShutter", choices.shutter_speed);
+        if (choices.aperture && choices.aperture.length > 0) populateChoicesDropdown("acqAperture", choices.aperture);
+    } catch (e) {
+        console.warn("Could not refresh camera choices:", e);
+    }
+}
+
+function updateCameraModeBanner(mode, isManual) {
+    const banner = document.getElementById("cameraModeBanner");
+    if (!banner) return;
+    if (!mode || mode === "Unknown" || mode === "Disconnected") {
+        banner.style.display = "none";
+        return;
+    }
+    banner.style.display = "block";
+    if (isManual) {
+        banner.style.background = "#064e3b";
+        banner.style.color = "#6ee7b7";
+        banner.style.border = "1px solid #059669";
+        banner.innerHTML = `📷 Camera Mode: <strong>Manual (M)</strong> ✅ Exposure controls unlocked.`;
+    } else {
+        banner.style.background = "#78350f";
+        banner.style.color = "#fde68a";
+        banner.style.border = "1px solid #d97706";
+        banner.innerHTML = `⚠️ Camera Dial: <strong>${mode}</strong> (Automatic Mode).<br>Exposure settings are locked by camera firmware. <strong>Please turn the physical dial on top of the camera to "M" (Manual)</strong> to configure ISO, shutter speed, and aperture.`;
+    }
+}
 
 function populateChoicesDropdown(elemId, choices) {
     if (!choices || choices.length === 0) return;

@@ -20,6 +20,7 @@ class FakeCameraManager:
 
         self.model = "Fake Camera (Simulation)"
         self.is_connected = False
+        self.exposure_mode = "Manual"
         self.iso = "400"
         self.shutter_speed = "1/125"
         self.aperture = "5.6"
@@ -27,10 +28,25 @@ class FakeCameraManager:
         self.last_capture_time: float = 0.0
         self.focus_position: float = 50.0
 
+    @property
+    def is_manual_mode(self) -> bool:
+        return True
+
     async def initialize(self) -> bool:
         logger.info("Initializing FakeCameraManager...")
         self.is_connected = True
+        self.model = "Fake Camera (Simulation)"
         return True
+
+    def close(self):
+        self.is_connected = False
+        self.model = "Disconnected"
+
+    async def restart(self) -> bool:
+        logger.info("Restarting FakeCameraManager...")
+        self.close()
+        await asyncio.sleep(0.1)
+        return await self.initialize()
 
     async def step_focus(self, direction: str, step_size: int = 1) -> dict[str, Any]:
         """Simulate manual focus step in fake camera."""
@@ -128,7 +144,12 @@ class FakeCameraManager:
         return {"status": "OK", "widget": name, "value": value, "fake": True}
 
     async def refresh_config(self) -> dict[str, str]:
-        return {"iso": self.iso, "shutter_speed": self.shutter_speed, "aperture": self.aperture}
+        return {
+            "iso": self.iso,
+            "shutter_speed": self.shutter_speed,
+            "aperture": self.aperture,
+            "exposure_mode": self.exposure_mode,
+        }
 
     async def apply_startup_defaults(self):
         """Set startup camera defaults on simulation camera."""
@@ -264,6 +285,8 @@ class FakeCameraManager:
             "mock_mode": True,
             "camera_type": "fake",
             "model": self.model,
+            "exposure_mode": self.exposure_mode,
+            "is_manual_mode": self.is_manual_mode,
             "iso": self.iso,
             "shutter_speed": self.shutter_speed,
             "aperture": self.aperture,

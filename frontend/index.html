@@ -44,7 +44,10 @@
                 </div>
             </div>
 
-            <div class="header-right">
+            <div class="header-right" style="display: flex; gap: 8px; align-items: center;">
+                <button class="btn btn-secondary btn-sm" id="btnHeaderRestartCam" onclick="restartCamera()" title="Restart Camera & Reset USB connection">
+                    🔄 Restart Cam
+                </button>
                 <button class="btn btn-danger btn-sm" id="btnHeaderStop" onclick="stopMotors()" title="Emergency stop motor movement">
                     🛑 STOP
                 </button>
@@ -387,7 +390,15 @@
                     </div>
 
                     <div class="card">
-                        <h3>📸 Camera Exposure Settings</h3>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <h3 style="margin: 0;">📸 Camera Exposure Settings</h3>
+                            <button class="btn btn-secondary btn-xs" id="btnCardRestartCam" onclick="restartCamera()" title="Hardware USB reset & refresh settings">
+                                🔄 Restart Camera
+                            </button>
+                        </div>
+
+                        <!-- Mode Warning / Indicator Banner -->
+                        <div id="cameraModeBanner" style="display: none; padding: 10px 14px; margin-bottom: 14px; border-radius: 6px; font-size: 13px; line-height: 1.4;"></div>
 
                         <div class="control-grid-2">
                             <div class="control-group">
