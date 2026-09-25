@@ -3254,7 +3254,9 @@ function setDarkroomZoomMode(mode) {
 }
 
 function updateDarkroomShots(shots) {
-    darkroomShots = shots || [];
+    // Sort chronologically ascending (oldest first, newest last)
+    // so darkroomShots[darkroomShots.length - 1] is always the most recent snapshot!
+    darkroomShots = [...(shots || [])].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
     const counterBadge = document.getElementById("lblDarkroomShotCounter");
     const placeholder = document.getElementById("darkroomPlaceholder");
 
@@ -3271,7 +3273,7 @@ function updateDarkroomShots(shots) {
         return;
     }
 
-    // Default to the latest snapshot
+    // Default to the most recent snapshot
     renderDarkroomShot(darkroomShots.length - 1);
 }
 
@@ -3327,7 +3329,10 @@ function navigateDarkroomShot(delta) {
 
 function openActiveDarkroomInModal() {
     if (darkroomActiveIndex >= 0 && darkroomActiveIndex < darkroomShots.length) {
-        openTestShotInspector(darkroomActiveIndex);
+        const shot = darkroomShots[darkroomActiveIndex];
+        const sId = shot.id || shot.shot_id || shot.artifact_id;
+        const galleryIdx = currentTestShotsList.findIndex(s => (s.id || s.shot_id || s.artifact_id) === sId);
+        openTestShotInspector(galleryIdx !== -1 ? galleryIdx : 0);
     }
 }
 
@@ -3510,7 +3515,10 @@ function renderTestShotGallery(shots) {
             </div>
         `;
         item.onclick = (e) => {
-            renderDarkroomShot(idx);
+            const darkroomIdx = darkroomShots.findIndex(d => (d.id || d.shot_id || d.artifact_id) === sId);
+            if (darkroomIdx !== -1) {
+                renderDarkroomShot(darkroomIdx);
+            }
             if (e.target.closest(".gallery-hover-overlay")) {
                 openTestShotInspector(idx);
             }
