@@ -383,12 +383,46 @@
                 <section class="step-panel" id="stepPanel4">
                     <div class="panel-header">
                         <div>
-                            <h2>Step 4: Camera Capture & Timing Settings</h2>
-                            <p class="panel-desc">Configure exposure parameters and verify exposure quality with test shots.</p>
+                            <h2>Step 4: Star Focus & Exposure Studio</h2>
+                            <p class="panel-desc">Step lens focus, inspect stars with 5x Loupe, configure exposure & white balance, and verify with snapshots.</p>
                         </div>
                         <div class="step-nav-actions">
                             <button class="btn btn-secondary btn-sm" onclick="goToStep(3)">← Key Poses</button>
                             <button class="btn btn-primary btn-sm" onclick="goToStep(5)">Next: Review & Run →</button>
+                        </div>
+                    </div>
+
+                    <!-- Lens Focus Stepper & Snapshot Station -->
+                    <div class="card step-focus-card">
+                        <div class="card-title-row">
+                            <h3>🎯 Star Focus & Snapshot Studio</h3>
+                            <span id="lblStep4FocusStatus" class="focus-status-text">Idle</span>
+                        </div>
+                        <p class="panel-desc">Step lens focus near or far, capture high-exposure snapshots, and inspect star pinpoint sharpness with the 5x Loupe.</p>
+
+                        <!-- Step 4 Focus Stepper Buttons -->
+                        <div class="step-focus-cluster">
+                            <span class="focus-cluster-label">LENS FOCUS</span>
+                            <div class="focus-btn-group">
+                                <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('far', 3)" title="Far Coarse (3 steps)">⏪ Far 3</button>
+                                <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('far', 2)" title="Far Medium (2 steps)">◀ Far 2</button>
+                                <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('far', 1)" title="Far Fine (1 step)">‹ Far 1</button>
+                                <button class="btn btn-accent btn-xs btn-focus" onclick="triggerCameraAutofocus()" title="Trigger Camera Autofocus">🎯 AF</button>
+                                <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('near', 1)" title="Near Fine (1 step)">Near 1 ›</button>
+                                <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('near', 2)" title="Near Medium (2 steps)">Near 2 ▶</button>
+                                <button class="btn btn-secondary btn-xs btn-focus" onclick="driveCameraFocus('near', 3)" title="Near Coarse (3 steps)">Near 3 ⏩</button>
+                            </div>
+                        </div>
+
+                        <!-- Snapshot Trigger Action Box -->
+                        <div class="snapshot-trigger-box">
+                            <button class="btn btn-primary btn-lg flex-1" id="btnStep4TakeSnapshot" onclick="triggerPlanTestShot()">
+                                ⚡ Take Snapshot
+                            </button>
+                            <div class="snapshot-exposure-pill" id="snapshotExposurePill">
+                                <span class="pill-lbl">EXPOSURE</span>
+                                <span class="pill-val" id="lblSnapshotExpVal">1/125s</span>
+                            </div>
                         </div>
                     </div>
 
@@ -403,7 +437,7 @@
                         <!-- Mode Warning / Indicator Banner -->
                         <div id="cameraModeBanner" style="display: none; padding: 10px 14px; margin-bottom: 14px; border-radius: 6px; font-size: 13px; line-height: 1.4;"></div>
 
-                        <div class="control-grid-2">
+                        <div class="control-grid-3">
                             <div class="control-group">
                                 <label for="acqIso">ISO Sensitivity</label>
                                 <select id="acqIso" class="dropdown" onchange="onAcquisitionSettingChanged('iso', this.value)">
@@ -419,7 +453,7 @@
                             </div>
 
                             <div class="control-group">
-                                <label for="acqShutter">Shutter Speed / Exposure</label>
+                                <label for="acqShutter">Shutter Speed</label>
                                 <select id="acqShutter" class="dropdown" onchange="onAcquisitionSettingChanged('shutter_speed', this.value)">
                                     <option value="Auto">Auto</option>
                                     <option value="1/1000">1/1000</option>
@@ -432,6 +466,10 @@
                                     <option value="1s">1s</option>
                                     <option value="2s">2s</option>
                                     <option value="5s">5s</option>
+                                    <option value="10s">10s</option>
+                                    <option value="15s">15s</option>
+                                    <option value="20s">20s</option>
+                                    <option value="30s">30s</option>
                                 </select>
                             </div>
 
@@ -446,6 +484,18 @@
                                     <option value="8.0">f/8.0</option>
                                     <option value="11.0">f/11.0</option>
                                     <option value="16.0">f/16.0</option>
+                                </select>
+                            </div>
+
+                            <div class="control-group">
+                                <label for="acqWhiteBalance">White Balance</label>
+                                <select id="acqWhiteBalance" class="dropdown" onchange="onAcquisitionSettingChanged('white_balance', this.value)">
+                                    <option value="Auto" selected>Auto</option>
+                                    <option value="Daylight">Daylight</option>
+                                    <option value="Cloudy">Cloudy</option>
+                                    <option value="Tungsten">Tungsten</option>
+                                    <option value="Fluorescent">Fluorescent</option>
+                                    <option value="Custom">Custom / Kelvin</option>
                                 </select>
                             </div>
 
@@ -676,11 +726,71 @@
             <!-- ======================================================== -->
             <div class="studio-right-pane">
 
+                <!-- Snapshot Focus Darkroom Card (Step 4 Primary Viewport) -->
+                <div class="card studio-snapshot-card hidden" id="studioSnapshotCard">
+                    <div class="card-title-row">
+                        <div class="title-with-badge">
+                            <h3>📸 Snapshot Focus Darkroom</h3>
+                            <span class="badge" id="lblDarkroomShotCounter">No Snapshots</span>
+                        </div>
+                        <div style="display:flex; gap:6px; align-items:center;">
+                            <button class="btn btn-xs btn-secondary" id="btnDarkroomPrev" onclick="navigateDarkroomShot(-1)" title="Previous Snapshot (Left Arrow)">◀ Prev</button>
+                            <button class="btn btn-xs btn-secondary" id="btnDarkroomNext" onclick="navigateDarkroomShot(1)" title="Next Snapshot (Right Arrow)">Next ▶</button>
+                            <button class="btn btn-xs btn-secondary" id="btnDarkroomToggleLive" onclick="toggleDarkroomLiveView()" title="Switch to Live Stream Viewport">👁️ Live View</button>
+                        </div>
+                    </div>
+
+                    <!-- Darkroom Canvas Viewport Box -->
+                    <div class="darkroom-viewport-box" id="darkroomViewportBox">
+                        <canvas id="canvasDarkroomSnapshot" class="darkroom-canvas"></canvas>
+
+                        <!-- Empty State / Placeholder -->
+                        <div id="darkroomPlaceholder" class="placeholder-box">
+                            <span class="placeholder-icon">🌌</span>
+                            <span style="font-weight:600; color:#e2e8f0;">Night & Star Focus Darkroom</span>
+                            <span class="mono-sub" style="font-size:0.75rem; color:#94a3b8; text-align:center; max-width:280px;">
+                                Click "⚡ Take Snapshot" to capture an exposure frame and inspect star focus with the 5x Loupe.
+                            </span>
+                            <button class="btn btn-primary btn-sm" onclick="triggerPlanTestShot()">⚡ Take Snapshot</button>
+                        </div>
+
+                        <!-- HUD Overlays on Canvas -->
+                        <div class="darkroom-hud-top-left" id="darkroomHudZoom">
+                            <span class="hud-pill" id="lblDarkroomZoomMode">Fit (100%)</span>
+                        </div>
+
+                        <div class="darkroom-hud-top-right" id="darkroomHudParams">
+                            <span class="hud-pill mono-sub" id="lblDarkroomParams">-- | -- | -- | --</span>
+                        </div>
+
+                        <div class="darkroom-hud-bottom-right" id="darkroomHudDims">
+                            <span class="hud-pill mono-sub" id="lblDarkroomDims">-- × -- px</span>
+                        </div>
+                    </div>
+
+                    <!-- Darkroom Loupe & Navigation Toolbar -->
+                    <div class="darkroom-toolbar">
+                        <div class="darkroom-tools-left">
+                            <button class="btn btn-xs btn-secondary" id="btnDarkroomLoupe5x" onclick="setDarkroomZoomMode('5x')" title="5x Magnification Loupe centered on star">🔍 5x Focus Loupe</button>
+                            <button class="btn btn-xs btn-secondary active" id="btnDarkroomFit" onclick="setDarkroomZoomMode('fit')" title="Fit whole image to canvas">⛶ Fit</button>
+                            <button class="btn btn-xs btn-secondary" id="btnDarkroom1to1" onclick="setDarkroomZoomMode('1to1')" title="1:1 Native Sensor Pixel Peep">1:1 Pixels</button>
+                        </div>
+                        <div class="darkroom-tools-right">
+                            <button class="btn btn-xs btn-secondary" id="btnDarkroomInspectModal" onclick="openActiveDarkroomInModal()" title="Open full-screen inspector & EXIF">🔎 Full EXIF</button>
+                        </div>
+                    </div>
+
+                    <div class="darkroom-hint">
+                        <span>💡 <em>Click anywhere on a star to zoom 5x. Adjust lens focus on the left, then take another snapshot.</em></span>
+                    </div>
+                </div>
+
                 <div class="card studio-station-card">
                     <!-- Live Camera Viewport -->
                     <div class="card-title-row">
                         <h3>👁️ Live Camera Viewport</h3>
                         <div style="display:flex; gap:6px; align-items:center;">
+                            <button class="btn btn-xs btn-accent hidden" id="btnReturnToDarkroom" onclick="toggleDarkroomLiveView()" title="Return to Snapshot Focus Darkroom">📸 Focus Darkroom</button>
                             <button class="btn btn-xs btn-secondary" id="btnEnlargeLiveView" onclick="openEnlargedLiveViewModal()" title="Open enlarged camera viewport">⛶ Enlarge</button>
                             <button class="btn btn-sm btn-primary" id="btnToggleLiveView" onclick="toggleLiveView()">▶ Start Stream</button>
                         </div>
@@ -895,6 +1005,10 @@
                             <div class="exposure-pill">
                                 <span class="exp-label">ISO</span>
                                 <strong class="exp-val" id="inspValIso">400</strong>
+                            </div>
+                            <div class="exposure-pill">
+                                <span class="exp-label">WB</span>
+                                <strong class="exp-val" id="inspValWb">Auto</strong>
                             </div>
                             <div class="exposure-pill">
                                 <span class="exp-label">FORMAT</span>

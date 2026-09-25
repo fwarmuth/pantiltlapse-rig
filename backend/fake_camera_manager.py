@@ -24,6 +24,7 @@ class FakeCameraManager:
         self.iso = "400"
         self.shutter_speed = "1/125"
         self.aperture = "5.6"
+        self.white_balance = "Auto"
         self.latest_photo_path: str | None = None
         self.last_capture_time: float = 0.0
         self.focus_position: float = 50.0
@@ -153,6 +154,7 @@ class FakeCameraManager:
             "iso": self.iso,
             "shutter_speed": self.shutter_speed,
             "aperture": self.aperture,
+            "white_balance": self.white_balance,
             "exposure_mode": self.exposure_mode,
         }
 
@@ -161,9 +163,10 @@ class FakeCameraManager:
         self.iso = "400"
         self.shutter_speed = "1/125"
         self.aperture = "4.5"
+        self.white_balance = "Auto"
         logger.info(
             f"Startup fake camera defaults configured: ISO={self.iso}, Shutter={self.shutter_speed}, "
-            f"Aperture={self.aperture}"
+            f"Aperture={self.aperture}, WB={self.white_balance}"
         )
 
     async def get_config_choices(self) -> dict[str, list[str]]:
@@ -177,11 +180,12 @@ class FakeCameraManager:
                 "1/4000", "1/2000", "1/1000", "1/500", "1/250", "1/125", "1/60",
                 "1/30", "1/15", "1/8", "1/4", "1/2", "1", "2", "4", "8", "15", "30"
             ],
-            "aperture": ["f/1.4", "f/1.8", "f/2", "f/2.8", "f/3.5", "f/4", "f/5.6", "f/8", "f/11", "f/16", "f/22"]
+            "aperture": ["f/1.4", "f/1.8", "f/2", "f/2.8", "f/3.5", "f/4", "f/5.6", "f/8", "f/11", "f/16", "f/22"],
+            "white_balance": ["Auto", "Daylight", "Cloudy", "Tungsten", "Fluorescent", "Custom"]
         }
 
     async def set_config(self, param: str, value: str) -> dict[str, Any]:
-        supported_params = {"iso", "shutter_speed", "aperture"}
+        supported_params = {"iso", "shutter_speed", "aperture", "white_balance"}
         if param not in supported_params:
             return {"status": "ERROR", "message": f"Unsupported parameter '{param}'"}
 
@@ -292,6 +296,7 @@ class FakeCameraManager:
             "iso": self.iso,
             "shutter_speed": self.shutter_speed,
             "aperture": self.aperture,
+            "white_balance": self.white_balance,
             "has_latest_photo": self.latest_photo_path is not None and os.path.exists(self.latest_photo_path),
             "latest_photo_filename": os.path.basename(self.latest_photo_path) if self.latest_photo_path else None,
             "last_capture_time": self.last_capture_time,

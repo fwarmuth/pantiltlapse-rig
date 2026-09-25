@@ -165,7 +165,7 @@ async def create_test_shot_artifact(
     try:
         # Apply requested camera settings
         for param, val in requested_settings.items():
-            if val and param in ("iso", "shutter_speed", "aperture"):
+            if val and param in ("iso", "shutter_speed", "aperture", "white_balance"):
                 res = await camera_mgr.set_config(param, str(val))
                 if isinstance(res, dict) and res.get("status") != "OK":
                     logger.warning(f"Setting config '{param}={val}' warning: {res}")

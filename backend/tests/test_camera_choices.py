@@ -24,8 +24,10 @@ def test_get_camera_choices_success():
         assert "iso" in choices
         assert "shutter_speed" in choices
         assert "aperture" in choices
+        assert "white_balance" in choices
         assert "400" in choices["iso"]
         assert "1/125" in choices["shutter_speed"]
+        assert "Daylight" in choices["white_balance"]
 
 
 def test_get_camera_choices_disconnected():
@@ -47,6 +49,11 @@ def test_post_camera_config_validation():
         # Test valid configuration setting
         resp_valid = client.post("/api/camera/config", json={"param": "iso", "value": "800"})
         assert resp_valid.status_code == 200
+
+        # Test valid white_balance setting
+        resp_wb = client.post("/api/camera/config", json={"param": "white_balance", "value": "Daylight"})
+        assert resp_wb.status_code == 200
+        assert main.camera_mgr.white_balance == "Daylight"
 
         # Test invalid configuration value (should return HTTP 422)
         resp_invalid = client.post("/api/camera/config", json={"param": "iso", "value": "INVALID_ISO_VALUE_999"})

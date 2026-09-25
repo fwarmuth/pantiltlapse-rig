@@ -98,6 +98,7 @@ class AcquisitionProfile(BaseModel):
     shutter_speed: str = Field(default="1/125", description="Shutter speed string")
     aperture: str = Field(default="4.5", description="Aperture string")
     camera_format: str = Field(default="JPEG", description="Camera format")
+    white_balance: str = Field(default="Auto", description="White balance setting string")
     extra_settings: dict[str, Any] = Field(default_factory=dict, description="Custom camera options")
 
 

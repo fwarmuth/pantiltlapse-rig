@@ -127,7 +127,7 @@ class RigLimitsRequest(BaseModel):
 
 
 class CameraConfigRequest(BaseModel):
-    param: str = Field(description="Parameter key: 'iso', 'shutter_speed', or 'aperture'")
+    param: str = Field(description="Parameter key: 'iso', 'shutter_speed', 'aperture', or 'white_balance'")
     value: str = Field(description="Parameter target value, e.g. '400', '1/125'")
 
 
@@ -765,6 +765,7 @@ class TestShotRequest(BaseModel):
     iso: str | None = None
     shutter_speed: str | None = None
     aperture: str | None = None
+    white_balance: str | None = None
 
 
 @app.post("/api/plans/{plan_id}/test-shots", status_code=status.HTTP_201_CREATED)
@@ -791,6 +792,7 @@ async def trigger_plan_test_shot(plan_id: UUID, req: TestShotRequest | None = No
         "iso": (req.iso if req and req.iso else plan.acquisition.iso),
         "shutter_speed": (req.shutter_speed if req and req.shutter_speed else plan.acquisition.shutter_speed),
         "aperture": (req.aperture if req and req.aperture else plan.acquisition.aperture),
+        "white_balance": (req.white_balance if req and req.white_balance else getattr(plan.acquisition, "white_balance", "Auto")),
     }
 
     from media_helper import create_test_shot_artifact

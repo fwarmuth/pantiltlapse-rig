@@ -101,10 +101,11 @@ function goToStep(stepNum) {
         updateTrajectoryPreview();
         updateKeyframeRigBadges();
     } else if (stepNum === 4) {
-        // Step 4: Acquisition
+        // Step 4: Acquisition & Night Focus Studio
         updateTimingCalculations();
         loadTestShotsList();
         refreshCameraConfigChoices();
+        updateExposurePill();
     } else if (stepNum === 5) {
         // Step 5: Review & Execution
         updatePreFlightChecklist();
@@ -113,10 +114,62 @@ function goToStep(stepNum) {
         renderPosesTable();
     }
 
+    // Toggle step-4-active class on body for responsive top-docking on mobile phones
+    document.body.classList.toggle("step-4-active", stepNum === 4);
+
+    // Step 4 Snapshot Darkroom card vs Live View card handling
+    const snapshotCard = document.getElementById("studioSnapshotCard");
+    const stationCard = document.querySelector(".studio-station-card");
+    const btnReturnDarkroom = document.getElementById("btnReturnToDarkroom");
+
+    if (stepNum === 4) {
+        initDarkroomCanvas();
+        if (snapshotCard) {
+            snapshotCard.classList.toggle("hidden", userPrefersLiveViewInStep4);
+        }
+        if (stationCard) {
+            stationCard.classList.toggle("hidden", !userPrefersLiveViewInStep4);
+            stationCard.classList.toggle("force-visible", userPrefersLiveViewInStep4);
+        }
+        if (btnReturnDarkroom) btnReturnDarkroom.classList.remove("hidden");
+        setTimeout(drawDarkroomCanvas, 60);
+    } else {
+        if (snapshotCard) snapshotCard.classList.add("hidden");
+        if (stationCard) {
+            stationCard.classList.remove("hidden");
+            stationCard.classList.remove("force-visible");
+        }
+        if (btnReturnDarkroom) btnReturnDarkroom.classList.add("hidden");
+    }
+
     // Show Reached Poses monitoring panel in right pane ONLY on Step 5 (Review & Run)
     const isReviewStep = (stepNum === 5);
     const posesCard = document.getElementById("studioPosesCard");
     if (posesCard) posesCard.classList.toggle("hidden", !isReviewStep);
+}
+
+function updateExposurePill() {
+    const shutter = document.getElementById("acqShutter")?.value || "1/125";
+    const pill = document.getElementById("lblSnapshotExpVal");
+    if (pill) pill.textContent = shutter;
+}
+
+function toggleDarkroomLiveView() {
+    userPrefersLiveViewInStep4 = !userPrefersLiveViewInStep4;
+    const snapshotCard = document.getElementById("studioSnapshotCard");
+    const stationCard = document.querySelector(".studio-station-card");
+    if (snapshotCard && stationCard) {
+        if (userPrefersLiveViewInStep4) {
+            snapshotCard.classList.add("hidden");
+            stationCard.classList.remove("hidden");
+            stationCard.classList.add("force-visible");
+        } else {
+            stationCard.classList.add("hidden");
+            stationCard.classList.remove("force-visible");
+            snapshotCard.classList.remove("hidden");
+            drawDarkroomCanvas();
+        }
+    }
 }
 
 // ==========================================================================
@@ -871,7 +924,12 @@ async function driveCameraFocus(direction, stepSize) {
     if (isFocusStepping) return;
     isFocusStepping = true;
     const statusEl = document.getElementById("lblFocusStatus");
-    if (statusEl) statusEl.textContent = `Stepping ${direction.toUpperCase()} ${stepSize}...`;
+    const statusEl4 = document.getElementById("lblStep4FocusStatus");
+    const setStatus = (msg) => {
+        if (statusEl) statusEl.textContent = msg;
+        if (statusEl4) statusEl4.textContent = msg;
+    };
+    setStatus(`Stepping ${direction.toUpperCase()} ${stepSize}...`);
 
     try {
         const res = await fetch(`${API_BASE}/api/camera/focus/step`, {
@@ -881,19 +939,21 @@ async function driveCameraFocus(direction, stepSize) {
         });
         const data = await res.json();
         if (res.ok) {
-            if (statusEl) statusEl.textContent = `${direction.toUpperCase()} ${stepSize} OK`;
+            setStatus(`${direction.toUpperCase()} ${stepSize} OK`);
         } else {
-            if (statusEl) statusEl.textContent = "Focus Err";
+            setStatus("Focus Err");
             console.warn("Focus step failed:", data);
         }
     } catch (e) {
         console.error("Focus step error:", e);
-        if (statusEl) statusEl.textContent = "Error";
+        setStatus("Error");
     } finally {
         isFocusStepping = false;
         setTimeout(() => {
-            if (statusEl && statusEl.textContent.includes("OK")) {
-                statusEl.textContent = "Idle";
+            const cur1 = statusEl ? statusEl.textContent : "";
+            const cur2 = statusEl4 ? statusEl4.textContent : "";
+            if (cur1.includes("OK") || cur2.includes("OK")) {
+                setStatus("Idle");
             }
         }, 1500);
     }
@@ -901,23 +961,30 @@ async function driveCameraFocus(direction, stepSize) {
 
 async function triggerCameraAutofocus() {
     const statusEl = document.getElementById("lblFocusStatus");
-    if (statusEl) statusEl.textContent = "Autofocusing...";
+    const statusEl4 = document.getElementById("lblStep4FocusStatus");
+    const setStatus = (msg) => {
+        if (statusEl) statusEl.textContent = msg;
+        if (statusEl4) statusEl4.textContent = msg;
+    };
+    setStatus("Autofocusing...");
 
     try {
         const res = await fetch(`${API_BASE}/api/camera/focus/autofocus`, { method: "POST" });
         const data = await res.json();
         if (res.ok) {
-            if (statusEl) statusEl.textContent = "AF Locked";
+            setStatus("AF Locked");
         } else {
-            if (statusEl) statusEl.textContent = "AF Failed";
+            setStatus("AF Failed");
             alert(data.detail?.message || "Autofocus failed");
         }
     } catch (e) {
-        if (statusEl) statusEl.textContent = "AF Error";
+        setStatus("AF Error");
     } finally {
         setTimeout(() => {
-            if (statusEl && statusEl.textContent.includes("AF Locked")) {
-                statusEl.textContent = "Idle";
+            const cur1 = statusEl ? statusEl.textContent : "";
+            const cur2 = statusEl4 ? statusEl4.textContent : "";
+            if (cur1.includes("AF Locked") || cur2.includes("AF Locked")) {
+                setStatus("Idle");
             }
         }, 1500);
     }
@@ -1358,14 +1425,17 @@ function syncPlanInputs() {
         const isoEl = document.getElementById("acqIso");
         const shutterEl = document.getElementById("acqShutter");
         const apEl = document.getElementById("acqAperture");
+        const wbEl = document.getElementById("acqWhiteBalance");
         const fmtEl = document.getElementById("acqFormat");
         if (isoEl) isoEl.value = activePlan.acquisition.iso || "400";
         if (shutterEl) shutterEl.value = activePlan.acquisition.shutter_speed || "1/125";
         if (apEl) apEl.value = activePlan.acquisition.aperture || "5.6";
+        if (wbEl) wbEl.value = activePlan.acquisition.white_balance || "Auto";
         if (fmtEl) fmtEl.value = activePlan.acquisition.camera_format || "JPEG";
     }
 
     updateTimingCalculations();
+    updateExposurePill();
 }
 
 async function saveCurrentPlan() {
@@ -1407,6 +1477,8 @@ async function saveCurrentPlan() {
     if (shutterVal) activePlan.acquisition.shutter_speed = shutterVal;
     const apVal = document.getElementById("acqAperture")?.value;
     if (apVal) activePlan.acquisition.aperture = apVal;
+    const wbVal = document.getElementById("acqWhiteBalance")?.value;
+    if (wbVal) activePlan.acquisition.white_balance = wbVal;
     const fmtVal = document.getElementById("acqFormat")?.value;
     if (fmtVal) activePlan.acquisition.camera_format = fmtVal;
 
@@ -2943,6 +3015,9 @@ function onAcquisitionSettingChanged(param, val) {
     if (!activePlan) return;
     if (!activePlan.acquisition) activePlan.acquisition = {};
     activePlan.acquisition[param] = val;
+    if (param === "shutter_speed") {
+        updateExposurePill();
+    }
 }
 
 function updateTimingCalculations() {
@@ -2966,7 +3041,38 @@ async function triggerPlanTestShot() {
         return;
     }
     const btn = document.getElementById("btnTakeTestShot");
+    const btnStep4 = document.getElementById("btnStep4TakeSnapshot");
+    const shutterVal = document.getElementById("acqShutter")?.value || "1/125";
+    
+    // Parse duration for exposure badge
+    let shutterSec = 0.5;
+    if (shutterVal.includes("/")) {
+        const parts = shutterVal.split("/");
+        shutterSec = (parseFloat(parts[0]) || 1) / (parseFloat(parts[1]) || 125);
+    } else {
+        shutterSec = parseFloat(shutterVal.replace("s", "")) || 1.0;
+    }
+
     if (btn) btn.disabled = true;
+    if (btnStep4) {
+        btnStep4.disabled = true;
+        btnStep4.textContent = `⏳ Exposing (${shutterVal})...`;
+    }
+
+    // Start a countdown timer if shutter > 1s
+    let countdownSec = Math.ceil(shutterSec);
+    let timerInterval = null;
+    if (countdownSec > 1) {
+        timerInterval = setInterval(() => {
+            countdownSec--;
+            if (countdownSec > 0 && btnStep4) {
+                btnStep4.textContent = `⏳ Exposing (${countdownSec}s)...`;
+            } else if (btnStep4) {
+                btnStep4.textContent = "⏳ Processing image...";
+                clearInterval(timerInterval);
+            }
+        }, 1000);
+    }
 
     try {
         const res = await fetch(`${API_BASE}/api/plans/${activePlan.id}/test-shots`, {
@@ -2975,9 +3081,13 @@ async function triggerPlanTestShot() {
             body: JSON.stringify({
                 iso: document.getElementById("acqIso").value,
                 shutter_speed: document.getElementById("acqShutter").value,
-                aperture: document.getElementById("acqAperture").value
+                aperture: document.getElementById("acqAperture").value,
+                white_balance: document.getElementById("acqWhiteBalance") ? document.getElementById("acqWhiteBalance").value : "Auto"
             })
         });
+        if (timerInterval) clearInterval(timerInterval);
+        if (btnStep4) btnStep4.textContent = "⏳ Downloading preview...";
+
         const data = await res.json();
         if (res.ok) {
             recordReachedPose({
@@ -2995,7 +3105,337 @@ async function triggerPlanTestShot() {
     } catch (e) {
         console.error("Test shot error:", e);
     } finally {
+        if (timerInterval) clearInterval(timerInterval);
         if (btn) btn.disabled = false;
+        if (btnStep4) {
+            btnStep4.disabled = false;
+            btnStep4.textContent = "⚡ Take Snapshot";
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
+// Night Focus & Snapshot Darkroom Controller
+// --------------------------------------------------------------------------
+
+let darkroomShots = [];
+let darkroomActiveIndex = -1;
+let darkroomImg = null;
+let darkroomMode = "fit"; // 'fit', '5x', '1to1'
+let darkroomCenterX = 0.5; // normalized 0..1 (persisted across star focus retakes)
+let darkroomCenterY = 0.5;
+let isDraggingDarkroom = false;
+let darkroomDragStartX = 0;
+let darkroomDragStartY = 0;
+let darkroomInitialCenterX = 0.5;
+let darkroomInitialCenterY = 0.5;
+let darkroomListenersInitialized = false;
+let userPrefersLiveViewInStep4 = false;
+
+function initDarkroomCanvas() {
+    const canvas = document.getElementById("canvasDarkroomSnapshot");
+    if (!canvas || darkroomListenersInitialized) return;
+    darkroomListenersInitialized = true;
+
+    // Window resize handling
+    window.addEventListener("resize", () => {
+        if (currentStep === 4 && !userPrefersLiveViewInStep4) {
+            drawDarkroomCanvas();
+        }
+    });
+
+    const getNormCoords = (clientX, clientY) => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)),
+            y: Math.max(0, Math.min(1, (clientY - rect.top) / rect.height))
+        };
+    };
+
+    const handlePointerDown = (clientX, clientY) => {
+        if (!darkroomImg || !darkroomImg.complete) return;
+        const norm = getNormCoords(clientX, clientY);
+
+        if (darkroomMode === "fit") {
+            // Click to activate 5x Focus Loupe centered on tapped star/feature
+            darkroomCenterX = norm.x;
+            darkroomCenterY = norm.y;
+            setDarkroomZoomMode("5x");
+            return;
+        }
+
+        // In 5x or 1to1 mode: check if clicked inside PiP thumbnail in bottom-left
+        const dpr = window.devicePixelRatio || 1;
+        const pipW = Math.min(130 * dpr, Math.floor(canvas.width * 0.28)) / dpr;
+        const pipH = Math.round(pipW * (darkroomImg.naturalHeight / darkroomImg.naturalWidth));
+        const rect = canvas.getBoundingClientRect();
+        const localX = clientX - rect.left;
+        const localY = clientY - rect.top;
+        const pipX = 14;
+        const pipY = rect.height - pipH - 14;
+
+        if (localX >= pipX && localX <= pipX + pipW && localY >= pipY && localY <= pipY + pipH) {
+            // Jump directly to clicked position inside PiP
+            darkroomCenterX = Math.max(0.05, Math.min(0.95, (localX - pipX) / pipW));
+            darkroomCenterY = Math.max(0.05, Math.min(0.95, (localY - pipY) / pipH));
+            drawDarkroomCanvas();
+            return;
+        }
+
+        // Start drag pan
+        isDraggingDarkroom = true;
+        darkroomDragStartX = clientX;
+        darkroomDragStartY = clientY;
+        darkroomInitialCenterX = darkroomCenterX;
+        darkroomInitialCenterY = darkroomCenterY;
+    };
+
+    const handlePointerMove = (clientX, clientY) => {
+        if (!isDraggingDarkroom || !darkroomImg || !darkroomImg.complete) return;
+        const factor = darkroomMode === "5x" ? 5.0 : Math.max(1.0, darkroomImg.naturalWidth / canvas.clientWidth);
+        const rect = canvas.getBoundingClientRect();
+        const deltaX = (clientX - darkroomDragStartX) / (rect.width * factor);
+        const deltaY = (clientY - darkroomDragStartY) / (rect.height * factor);
+
+        darkroomCenterX = Math.max(0.05, Math.min(0.95, darkroomInitialCenterX - deltaX));
+        darkroomCenterY = Math.max(0.05, Math.min(0.95, darkroomInitialCenterY - deltaY));
+        drawDarkroomCanvas();
+    };
+
+    const handlePointerUp = () => {
+        isDraggingDarkroom = false;
+    };
+
+    // Mouse Events
+    canvas.addEventListener("mousedown", (e) => {
+        if (e.button === 0) handlePointerDown(e.clientX, e.clientY);
+    });
+    window.addEventListener("mousemove", (e) => {
+        handlePointerMove(e.clientX, e.clientY);
+    });
+    window.addEventListener("mouseup", handlePointerUp);
+
+    // Touch Events for Mobile Phones
+    canvas.addEventListener("touchstart", (e) => {
+        if (e.touches.length === 1) {
+            handlePointerDown(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", (e) => {
+        if (e.touches.length === 1 && isDraggingDarkroom) {
+            handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    canvas.addEventListener("touchend", handlePointerUp);
+    canvas.addEventListener("touchcancel", handlePointerUp);
+}
+
+function setDarkroomZoomMode(mode) {
+    darkroomMode = mode;
+    const btn5x = document.getElementById("btnDarkroomLoupe5x");
+    const btnFit = document.getElementById("btnDarkroomFit");
+    const btn1to1 = document.getElementById("btnDarkroom1to1");
+    const canvas = document.getElementById("canvasDarkroomSnapshot");
+
+    if (btn5x) btn5x.classList.toggle("active", mode === "5x");
+    if (btnFit) btnFit.classList.toggle("active", mode === "fit");
+    if (btn1to1) btn1to1.classList.toggle("active", mode === "1to1");
+
+    if (canvas) {
+        canvas.classList.toggle("fit-cursor", mode === "fit");
+        canvas.classList.toggle("loupe-cursor", mode !== "fit");
+    }
+
+    drawDarkroomCanvas();
+}
+
+function updateDarkroomShots(shots) {
+    darkroomShots = shots || [];
+    const counterBadge = document.getElementById("lblDarkroomShotCounter");
+    const placeholder = document.getElementById("darkroomPlaceholder");
+
+    if (darkroomShots.length === 0) {
+        darkroomActiveIndex = -1;
+        darkroomImg = null;
+        if (counterBadge) counterBadge.textContent = "No Snapshots";
+        if (placeholder) placeholder.classList.remove("hidden");
+        const canvas = document.getElementById("canvasDarkroomSnapshot");
+        if (canvas) {
+            const ctx = canvas.getContext("2d");
+            if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        return;
+    }
+
+    // Default to the latest snapshot
+    renderDarkroomShot(darkroomShots.length - 1);
+}
+
+function renderDarkroomShot(index) {
+    if (!darkroomShots || index < 0 || index >= darkroomShots.length) return;
+    darkroomActiveIndex = index;
+
+    const counterBadge = document.getElementById("lblDarkroomShotCounter");
+    if (counterBadge) {
+        counterBadge.textContent = `Shot ${index + 1} of ${darkroomShots.length}`;
+    }
+
+    const btnPrev = document.getElementById("btnDarkroomPrev");
+    const btnNext = document.getElementById("btnDarkroomNext");
+    if (btnPrev) btnPrev.disabled = (index <= 0);
+    if (btnNext) btnNext.disabled = (index >= darkroomShots.length - 1);
+
+    const shot = darkroomShots[index];
+    const shotId = shot.id || shot.shot_id || shot.artifact_id;
+    const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg`;
+
+    const shutter = shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed || "1/125";
+    const ap = shot.camera_settings?.aperture || shot.requested_settings?.aperture || "4.5";
+    const iso = shot.camera_settings?.iso || shot.requested_settings?.iso || "400";
+    const wb = shot.camera_settings?.white_balance || shot.requested_settings?.white_balance || "Auto";
+
+    const paramsEl = document.getElementById("lblDarkroomParams");
+    if (paramsEl) {
+        paramsEl.textContent = `${shutter} | f/${ap} | ISO ${iso} | WB ${wb}`;
+    }
+
+    const placeholder = document.getElementById("darkroomPlaceholder");
+    if (placeholder) placeholder.classList.add("hidden");
+
+    // Load Image
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+        darkroomImg = img;
+        const dimsEl = document.getElementById("lblDarkroomDims");
+        if (dimsEl) dimsEl.textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
+        drawDarkroomCanvas();
+    };
+    img.src = thumbUrl;
+}
+
+function navigateDarkroomShot(delta) {
+    const nextIdx = darkroomActiveIndex + delta;
+    if (nextIdx >= 0 && nextIdx < darkroomShots.length) {
+        renderDarkroomShot(nextIdx);
+    }
+}
+
+function openActiveDarkroomInModal() {
+    if (darkroomActiveIndex >= 0 && darkroomActiveIndex < darkroomShots.length) {
+        openTestShotInspector(darkroomActiveIndex);
+    }
+}
+
+function drawDarkroomCanvas() {
+    const canvas = document.getElementById("canvasDarkroomSnapshot");
+    const container = document.getElementById("darkroomViewportBox");
+    if (!canvas || !container) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const dispW = container.clientWidth || 400;
+    const dispH = container.clientHeight || 280;
+
+    if (canvas.width !== Math.round(dispW * dpr) || canvas.height !== Math.round(dispH * dpr)) {
+        canvas.width = Math.round(dispW * dpr);
+        canvas.height = Math.round(dispH * dpr);
+    }
+
+    const cW = canvas.width;
+    const cH = canvas.height;
+
+    ctx.clearRect(0, 0, cW, cH);
+
+    if (!darkroomImg || !darkroomImg.complete || darkroomImg.naturalWidth === 0) {
+        return;
+    }
+
+    const imgW = darkroomImg.naturalWidth;
+    const imgH = darkroomImg.naturalHeight;
+
+    if (darkroomMode === "fit") {
+        // Fit whole image maintaining aspect ratio
+        const scale = Math.min(cW / imgW, cH / imgH);
+        const dw = imgW * scale;
+        const dh = imgH * scale;
+        const dx = (cW - dw) / 2;
+        const dy = (cH - dh) / 2;
+
+        ctx.drawImage(darkroomImg, 0, 0, imgW, imgH, dx, dy, dw, dh);
+
+        const zoomBadge = document.getElementById("lblDarkroomZoomMode");
+        if (zoomBadge) zoomBadge.textContent = "Fit (100%)";
+    } else {
+        // 5x Loupe or 1:1 Pixel Peep
+        const factor = darkroomMode === "5x" ? 5.0 : Math.max(1.0, (imgW / (dispW * dpr)));
+        const cropW = imgW / factor;
+        const cropH = imgH / factor;
+
+        const cropX = Math.max(0, Math.min(imgW - cropW, (darkroomCenterX * imgW) - (cropW / 2)));
+        const cropY = Math.max(0, Math.min(imgH - cropH, (darkroomCenterY * imgH) - (cropH / 2)));
+
+        ctx.drawImage(darkroomImg, cropX, cropY, cropW, cropH, 0, 0, cW, cH);
+
+        // Draw Center Reticle (Cyan Crosshair with Center Star Aperture)
+        const midX = cW / 2;
+        const midY = cH / 2;
+        ctx.save();
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.9)";
+        ctx.lineWidth = 1.75 * dpr;
+        ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
+        ctx.shadowBlur = 4 * dpr;
+
+        // Outer focus circle
+        ctx.beginPath();
+        ctx.arc(midX, midY, 16 * dpr, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        // Crosshairs with center gap
+        const lineLen = 32 * dpr;
+        const gap = 18 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(midX - lineLen, midY); ctx.lineTo(midX - gap, midY);
+        ctx.moveTo(midX + gap, midY); ctx.lineTo(midX + lineLen, midY);
+        ctx.moveTo(midX, midY - lineLen); ctx.lineTo(midX - gap, midY);
+        ctx.moveTo(midX, midY + gap); ctx.lineTo(midX, midY + lineLen);
+        ctx.stroke();
+
+        // Draw Corner Picture-in-Picture (PiP) Navigator Box in bottom-left
+        const pipW = Math.min(130 * dpr, Math.floor(cW * 0.28));
+        const pipH = Math.round(pipW * (imgH / imgW));
+        const pipX = 14 * dpr;
+        const pipY = cH - pipH - (14 * dpr);
+
+        ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+        ctx.fillRect(pipX - 2, pipY - 2, pipW + 4, pipH + 4);
+        ctx.drawImage(darkroomImg, 0, 0, imgW, imgH, pipX, pipY, pipW, pipH);
+
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+        ctx.lineWidth = 1 * dpr;
+        ctx.strokeRect(pipX, pipY, pipW, pipH);
+
+        // Crop indicator bounding box on PiP
+        const boxX = pipX + (cropX / imgW) * pipW;
+        const boxY = pipY + (cropY / imgH) * pipH;
+        const boxW = Math.max(4 * dpr, (cropW / imgW) * pipW);
+        const boxH = Math.max(4 * dpr, (cropH / imgH) * pipH);
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+        ctx.restore();
+
+        const zoomBadge = document.getElementById("lblDarkroomZoomMode");
+        if (zoomBadge) {
+            zoomBadge.textContent = darkroomMode === "5x" ? "🔍 5x Focus Loupe" : "1:1 Native Pixels";
+        }
     }
 }
 
@@ -3020,6 +3460,7 @@ async function loadTestShotsList() {
         if (res.ok) {
             const shots = await res.json();
             renderTestShotGallery(shots);
+            updateDarkroomShots(shots);
         }
     } catch (e) {
         console.error("Load test shots error:", e);
@@ -3037,7 +3478,7 @@ function renderTestShotGallery(shots) {
             <div class="placeholder-box" style="grid-column:1/-1; padding: 24px; text-align: center;">
                 <div style="font-size: 1.5rem; margin-bottom: 6px;">📷</div>
                 <div style="font-weight: 500; color: #94a3b8;">No test shots taken yet</div>
-                <div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;">Click '⚡ Take Test Shot' to capture an exposure verification frame.</div>
+                <div style="font-size: 0.75rem; color: #64748b; margin-top: 4px;">Click '⚡ Take Snapshot' to capture an exposure verification frame.</div>
             </div>
         `;
         return;
@@ -3068,7 +3509,12 @@ function renderTestShotGallery(shots) {
                 </div>
             </div>
         `;
-        item.onclick = () => openTestShotInspector(idx);
+        item.onclick = (e) => {
+            renderDarkroomShot(idx);
+            if (e.target.closest(".gallery-hover-overlay")) {
+                openTestShotInspector(idx);
+            }
+        };
         gallery.appendChild(item);
     });
 }
@@ -3118,11 +3564,14 @@ function openTestShotInspector(index) {
     const shutter = shot.camera_settings?.shutter_speed || "1/125";
     const aperture = shot.camera_settings?.aperture || "4.5";
     const iso = shot.camera_settings?.iso || "400";
+    const wb = shot.camera_settings?.white_balance || shot.requested_settings?.white_balance || "Auto";
     const format = shot.camera_settings?.camera_format || "JPEG";
 
     document.getElementById("inspValShutter").textContent = shutter.endsWith("s") ? shutter : `${shutter}s`;
     document.getElementById("inspValAperture").textContent = aperture.startsWith("f/") ? aperture : `f/${aperture}`;
     document.getElementById("inspValIso").textContent = iso;
+    const wbEl = document.getElementById("inspValWb");
+    if (wbEl) wbEl.textContent = wb;
     document.getElementById("inspValFormat").textContent = format;
 
     // 4. Verification Diagnostics & Interval Clearance Check
@@ -3308,15 +3757,17 @@ function adoptCurrentTestShotSettings() {
     const iso = shot.camera_settings?.iso || shot.requested_settings?.iso;
     const shutter = shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed;
     const ap = shot.camera_settings?.aperture || shot.requested_settings?.aperture;
+    const wb = shot.camera_settings?.white_balance || shot.requested_settings?.white_balance;
     const fmt = shot.camera_settings?.camera_format || shot.requested_settings?.camera_format;
 
     if (iso && document.getElementById("acqIso")) document.getElementById("acqIso").value = iso;
     if (shutter && document.getElementById("acqShutter")) document.getElementById("acqShutter").value = shutter;
     if (ap && document.getElementById("acqAperture")) document.getElementById("acqAperture").value = ap;
+    if (wb && document.getElementById("acqWhiteBalance")) document.getElementById("acqWhiteBalance").value = wb;
     if (fmt && document.getElementById("acqFormat")) document.getElementById("acqFormat").value = fmt;
 
     saveCurrentPlan();
-    alert(`✅ Adopted test shot settings:\n• ISO: ${iso || "auto"}\n• Shutter: ${shutter || "auto"}\n• Aperture: ${ap || "auto"}\n\nSaved to '${activePlan.name}'!`);
+    alert(`✅ Adopted test shot settings:\n• ISO: ${iso || "auto"}\n• Shutter: ${shutter || "auto"}\n• Aperture: ${ap || "auto"}\n• White Balance: ${wb || "auto"}\n\nSaved to '${activePlan.name}'!`);
 }
 
 async function retakeTestShotFromInspector() {
@@ -3701,6 +4152,7 @@ async function refreshCameraConfigChoices() {
         if (choices.iso && choices.iso.length > 0) populateChoicesDropdown("acqIso", choices.iso);
         if (choices.shutter_speed && choices.shutter_speed.length > 0) populateChoicesDropdown("acqShutter", choices.shutter_speed);
         if (choices.aperture && choices.aperture.length > 0) populateChoicesDropdown("acqAperture", choices.aperture);
+        if (choices.white_balance && choices.white_balance.length > 0) populateChoicesDropdown("acqWhiteBalance", choices.white_balance);
     } catch (e) {
         console.warn("Could not refresh camera choices:", e);
     }

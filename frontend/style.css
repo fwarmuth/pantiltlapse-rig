@@ -2597,4 +2597,205 @@ body {
     }
 }
 
+/* ==========================================================================
+   Night Focus & Snapshot Studio Styles (Step 4)
+   ========================================================================== */
+
+.step-focus-card {
+    border-top: 2px solid var(--accent-color);
+}
+
+.step-focus-cluster {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(15, 23, 42, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-md);
+    margin-bottom: 8px;
+}
+
+.focus-cluster-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.snapshot-trigger-box {
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+}
+
+.snapshot-exposure-pill {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: rgba(30, 41, 59, 0.65);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 6px 14px;
+    min-width: 90px;
+}
+
+.snapshot-exposure-pill .pill-lbl {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+}
+
+.snapshot-exposure-pill .pill-val {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--accent-color);
+    font-family: var(--font-mono);
+}
+
+/* Snapshot Focus Darkroom Card */
+.studio-snapshot-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+}
+
+.darkroom-viewport-box {
+    position: relative;
+    width: 100%;
+    min-height: 280px;
+    max-height: 420px;
+    background: #020617;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    user-select: none;
+    touch-action: none;
+}
+
+.darkroom-canvas {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: 100%;
+    height: 100%;
+}
+
+.darkroom-canvas.fit-cursor {
+    cursor: crosshair;
+}
+
+.darkroom-canvas.loupe-cursor {
+    cursor: grab;
+}
+
+.darkroom-canvas.loupe-cursor:active {
+    cursor: grabbing;
+}
+
+.darkroom-hud-top-left {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 4;
+    pointer-events: none;
+}
+
+.darkroom-hud-top-right {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 4;
+    pointer-events: none;
+}
+
+.darkroom-hud-bottom-right {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    z-index: 4;
+    pointer-events: none;
+}
+
+.hud-pill {
+    display: inline-block;
+    background: rgba(15, 23, 42, 0.78);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    color: #f1f5f9;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    font-size: 0.72rem;
+    padding: 3px 8px;
+    font-weight: 500;
+}
+
+.darkroom-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding-top: 2px;
+}
+
+.darkroom-tools-left,
+.darkroom-tools-right {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.darkroom-hint {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    line-height: 1.35;
+    padding: 2px 0;
+}
+
+/* Mobile Adaptation for Step 4 */
+@media (max-width: 1040px) {
+    body.step-4-active .studio-layout {
+        display: flex;
+        flex-direction: column;
+    }
+    body.step-4-active .studio-right-pane {
+        order: -1;
+        width: 100%;
+        position: static;
+        margin-bottom: 4px;
+    }
+    body.step-4-active .darkroom-viewport-box {
+        min-height: 220px;
+        max-height: 310px;
+    }
+    body.step-4-active .studio-station-card:not(.force-visible) {
+        display: none !important;
+    }
+}
+
+@media (max-width: 640px) {
+    .control-grid-3 {
+        grid-template-columns: 1fr 1fr;
+    }
+    .darkroom-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .darkroom-tools-left {
+        justify-content: space-between;
+    }
+    .darkroom-tools-right {
+        justify-content: flex-end;
+    }
+}
+
+
 

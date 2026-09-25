@@ -32,6 +32,7 @@ class CameraManager:
         self.iso = "400"
         self.shutter_speed = "1/125"
         self.aperture = "5.6"
+        self.white_balance = "Auto"
         self.latest_photo_path: str | None = None
         self.last_capture_time: float = 0.0
 
@@ -118,6 +119,12 @@ class CameraManager:
             except Exception:
                 pass
             try:
+                w_wb = self._find_widget_recursive(config, "whitebalance")
+                if w_wb is not None:
+                    self.white_balance = str(w_wb.get_value())
+            except Exception:
+                pass
+            try:
                 w_mode = self._find_widget_recursive(config, "autoexposuremode")
                 if w_mode is None:
                     w_mode = self._find_widget_recursive(config, "expprogram")
@@ -140,6 +147,7 @@ class CameraManager:
                 "iso": self.iso,
                 "shutter_speed": self.shutter_speed,
                 "aperture": self.aperture,
+                "white_balance": self.white_balance,
                 "exposure_mode": self.exposure_mode,
             }
 
@@ -150,6 +158,7 @@ class CameraManager:
             "iso": self.iso,
             "shutter_speed": self.shutter_speed,
             "aperture": self.aperture,
+            "white_balance": self.white_balance,
             "exposure_mode": self.exposure_mode,
         }
 
@@ -206,6 +215,7 @@ class CameraManager:
                     "iso": "iso",
                     "shutter_speed": "shutterspeed",
                     "aperture": "aperture",
+                    "white_balance": "whitebalance",
                 }
                 choices: dict[str, list[str]] = {}
                 for param, child_name in key_map.items():
@@ -227,11 +237,12 @@ class CameraManager:
                 raise Exception(f"Failed to query camera config choices: {e}") from e
 
     async def set_config(self, param: str, value: str) -> dict[str, Any]:
-        """Set ISO, shutter speed, or aperture."""
+        """Set ISO, shutter speed, aperture, or white balance."""
         key_map = {
             "iso": "iso",
             "shutter_speed": "shutterspeed",
             "aperture": "aperture",
+            "white_balance": "whitebalance",
         }
         if param not in key_map:
             return {"status": "ERROR", "message": f"Unsupported parameter '{param}'"}
@@ -677,6 +688,7 @@ class CameraManager:
             "iso": self.iso,
             "shutter_speed": self.shutter_speed,
             "aperture": self.aperture,
+            "white_balance": self.white_balance,
             "has_latest_photo": self.latest_photo_path is not None and os.path.exists(self.latest_photo_path),
             "latest_photo_filename": os.path.basename(self.latest_photo_path) if self.latest_photo_path else None,
             "last_capture_time": self.last_capture_time,
