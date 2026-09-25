@@ -3254,9 +3254,7 @@ function setDarkroomZoomMode(mode) {
 }
 
 function updateDarkroomShots(shots) {
-    // Sort chronologically ascending (oldest first, newest last)
-    // so darkroomShots[darkroomShots.length - 1] is always the most recent snapshot!
-    darkroomShots = [...(shots || [])].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+    darkroomShots = shots || [];
     const counterBadge = document.getElementById("lblDarkroomShotCounter");
     const placeholder = document.getElementById("darkroomPlaceholder");
 
@@ -3273,8 +3271,8 @@ function updateDarkroomShots(shots) {
         return;
     }
 
-    // Default to the most recent snapshot
-    renderDarkroomShot(darkroomShots.length - 1);
+    // Default to the most recent snapshot (index 0 from backend)
+    renderDarkroomShot(0);
 }
 
 function renderDarkroomShot(index) {
@@ -3282,23 +3280,29 @@ function renderDarkroomShot(index) {
     darkroomActiveIndex = index;
 
     const counterBadge = document.getElementById("lblDarkroomShotCounter");
+    const shotNum = darkroomShots.length - index;
     if (counterBadge) {
-        counterBadge.textContent = `Shot ${index + 1} of ${darkroomShots.length}`;
+        counterBadge.textContent = (index === 0)
+            ? `Shot ${shotNum} of ${darkroomShots.length} (Latest)`
+            : `Shot ${shotNum} of ${darkroomShots.length}`;
     }
 
     const btnPrev = document.getElementById("btnDarkroomPrev");
     const btnNext = document.getElementById("btnDarkroomNext");
-    if (btnPrev) btnPrev.disabled = (index <= 0);
-    if (btnNext) btnNext.disabled = (index >= darkroomShots.length - 1);
+    // Prev navigates to older shot (higher array index)
+    if (btnPrev) btnPrev.disabled = (index >= darkroomShots.length - 1);
+    // Next navigates to newer shot (lower array index)
+    if (btnNext) btnNext.disabled = (index <= 0);
 
     const shot = darkroomShots[index];
     const shotId = shot.id || shot.shot_id || shot.artifact_id;
-    const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg`;
+    const cacheBust = encodeURIComponent(shot.created_at || shotId);
+    const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg?t=${cacheBust}`;
 
-    const shutter = shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed || "1/125";
-    const ap = shot.camera_settings?.aperture || shot.requested_settings?.aperture || "4.5";
-    const iso = shot.camera_settings?.iso || shot.requested_settings?.iso || "400";
-    const wb = shot.camera_settings?.white_balance || shot.requested_settings?.white_balance || "Auto";
+    const shutter = shot.observed_settings?.shutter_speed || shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed || "1/125";
+    const ap = shot.observed_settings?.aperture || shot.camera_settings?.aperture || shot.requested_settings?.aperture || "4.5";
+    const iso = shot.observed_settings?.iso || shot.camera_settings?.iso || shot.requested_settings?.iso || "400";
+    const wb = shot.observed_settings?.white_balance || shot.camera_settings?.white_balance || shot.requested_settings?.white_balance || "Auto";
 
     const paramsEl = document.getElementById("lblDarkroomParams");
     if (paramsEl) {
@@ -3317,22 +3321,31 @@ function renderDarkroomShot(index) {
         if (dimsEl) dimsEl.textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
         drawDarkroomCanvas();
     };
+    img.onerror = () => {
+        // Fall back to original artifact if preview.jpg is missing or errored
+        if (!img.src.includes("/artifacts/original")) {
+            img.src = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/original?t=${cacheBust}`;
+        }
+    };
     img.src = thumbUrl;
 }
 
 function navigateDarkroomShot(delta) {
-    const nextIdx = darkroomActiveIndex + delta;
-    if (nextIdx >= 0 && nextIdx < darkroomShots.length) {
-        renderDarkroomShot(nextIdx);
+    // delta: -1 for Prev (older shot), 1 for Next (newer shot)
+    if (delta === -1 || delta === "prev") {
+        if (darkroomActiveIndex < darkroomShots.length - 1) {
+            renderDarkroomShot(darkroomActiveIndex + 1);
+        }
+    } else if (delta === 1 || delta === "next") {
+        if (darkroomActiveIndex > 0) {
+            renderDarkroomShot(darkroomActiveIndex - 1);
+        }
     }
 }
 
 function openActiveDarkroomInModal() {
     if (darkroomActiveIndex >= 0 && darkroomActiveIndex < darkroomShots.length) {
-        const shot = darkroomShots[darkroomActiveIndex];
-        const sId = shot.id || shot.shot_id || shot.artifact_id;
-        const galleryIdx = currentTestShotsList.findIndex(s => (s.id || s.shot_id || s.artifact_id) === sId);
-        openTestShotInspector(galleryIdx !== -1 ? galleryIdx : 0);
+        openTestShotInspector(darkroomActiveIndex);
     }
 }
 
@@ -3345,8 +3358,13 @@ function drawDarkroomCanvas() {
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    const dispW = container.clientWidth || 400;
-    const dispH = container.clientHeight || 280;
+    const dispW = container.clientWidth;
+    const dispH = container.clientHeight;
+
+    if (dispW === 0 || dispH === 0) {
+        requestAnimationFrame(drawDarkroomCanvas);
+        return;
+    }
 
     if (canvas.width !== Math.round(dispW * dpr) || canvas.height !== Math.round(dispH * dpr)) {
         canvas.width = Math.round(dispW * dpr);
@@ -3493,21 +3511,23 @@ function renderTestShotGallery(shots) {
         const item = document.createElement("div");
         item.className = "gallery-item";
         const sId = s.id || s.shot_id || s.artifact_id;
-        const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${sId}/artifacts/preview.jpg`;
-        const shutter = s.camera_settings?.shutter_speed || s.requested_settings?.shutter_speed || "1/125";
-        const ap = s.camera_settings?.aperture || s.requested_settings?.aperture || "4.5";
-        const iso = s.camera_settings?.iso || s.requested_settings?.iso || "400";
-        const timeStr = s.created_at ? new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : `#${idx + 1}`;
+        const cacheBust = encodeURIComponent(s.created_at || sId);
+        const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${sId}/artifacts/preview.jpg?t=${cacheBust}`;
+        const shutter = s.observed_settings?.shutter_speed || s.camera_settings?.shutter_speed || s.requested_settings?.shutter_speed || "1/125";
+        const ap = s.observed_settings?.aperture || s.camera_settings?.aperture || s.requested_settings?.aperture || "4.5";
+        const iso = s.observed_settings?.iso || s.camera_settings?.iso || s.requested_settings?.iso || "400";
+        const shotNum = currentTestShotsList.length - idx;
+        const timeStr = s.created_at ? new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : `#${shotNum}`;
 
         item.innerHTML = `
             <div class="gallery-thumb-wrap">
-                <img class="gallery-thumb" src="${thumbUrl}" alt="Test Shot #${idx + 1}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'160\\' height=\\'110\\'><rect fill=\\'%23020617\\' width=\\'160\\' height=\\'110\\'/><text fill=\\'%2364748b\\' x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' font-family=\\'sans-serif\\' font-size=\\'12\\'>PREVIEW</text></svg>'">
+                <img class="gallery-thumb" src="${thumbUrl}" alt="Test Shot #${shotNum}" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'160\\' height=\\'110\\'><rect fill=\\'%23020617\\' width=\\'160\\' height=\\'110\\'/><text fill=\\'%2364748b\\' x=\\'50%\\' y=\\'50%\\' dominant-baseline=\\'middle\\' text-anchor=\\'middle\\' font-family=\\'sans-serif\\' font-size=\\'12\\'>PREVIEW</text></svg>'">
                 <div class="gallery-hover-overlay">
                     <span>🔍 Inspect Verification</span>
                 </div>
             </div>
             <div class="gallery-info">
-                <div class="gallery-title">${shutter}s · f/${ap}</div>
+                <div class="gallery-title">${shutter}s · f/${ap} ${idx === 0 ? '<span class="badge" style="font-size:0.6rem; padding:1px 4px; vertical-align:middle; margin-left:4px;">LATEST</span>' : ''}</div>
                 <div class="gallery-sub">
                     <span>ISO ${iso}</span>
                     <span>${timeStr}</span>
@@ -3515,10 +3535,7 @@ function renderTestShotGallery(shots) {
             </div>
         `;
         item.onclick = (e) => {
-            const darkroomIdx = darkroomShots.findIndex(d => (d.id || d.shot_id || d.artifact_id) === sId);
-            if (darkroomIdx !== -1) {
-                renderDarkroomShot(darkroomIdx);
-            }
+            renderDarkroomShot(idx);
             if (e.target.closest(".gallery-hover-overlay")) {
                 openTestShotInspector(idx);
             }
@@ -3543,12 +3560,19 @@ function openTestShotInspector(index) {
 
     // 1. Counter & Nav Buttons
     const badge = document.getElementById("inspShotCounterBadge");
-    if (badge) badge.textContent = `Shot ${activeTestShotIndex + 1} of ${currentTestShotsList.length}`;
+    const shotNum = currentTestShotsList.length - activeTestShotIndex;
+    if (badge) {
+        badge.textContent = (activeTestShotIndex === 0)
+            ? `Shot ${shotNum} of ${currentTestShotsList.length} (Latest)`
+            : `Shot ${shotNum} of ${currentTestShotsList.length}`;
+    }
     
     const prevBtn = document.getElementById("btnPrevTestShot");
     const nextBtn = document.getElementById("btnNextTestShot");
-    if (prevBtn) prevBtn.disabled = activeTestShotIndex <= 0;
-    if (nextBtn) nextBtn.disabled = activeTestShotIndex >= currentTestShotsList.length - 1;
+    // Prev navigates to older shot (higher index in currentTestShotsList)
+    if (prevBtn) prevBtn.disabled = activeTestShotIndex >= currentTestShotsList.length - 1;
+    // Next navigates to newer shot (lower index in currentTestShotsList)
+    if (nextBtn) nextBtn.disabled = activeTestShotIndex <= 0;
 
     // 2. High-Res Image Source & Overlay
     const img = document.getElementById("testShotBigImage");
@@ -3659,7 +3683,8 @@ function closeTestShotInspector() {
 }
 
 function navigateTestShot(delta) {
-    openTestShotInspector(activeTestShotIndex + delta);
+    // delta: -1 for Prev (older shot -> higher index), +1 for Next (newer shot -> lower index)
+    openTestShotInspector(activeTestShotIndex - delta);
 }
 
 function toggleRawMetadataDrawer() {
@@ -3762,11 +3787,11 @@ function adoptCurrentTestShotSettings() {
     const shot = currentTestShotsList[activeTestShotIndex];
     if (!shot || !activePlan) return;
 
-    const iso = shot.camera_settings?.iso || shot.requested_settings?.iso;
-    const shutter = shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed;
-    const ap = shot.camera_settings?.aperture || shot.requested_settings?.aperture;
-    const wb = shot.camera_settings?.white_balance || shot.requested_settings?.white_balance;
-    const fmt = shot.camera_settings?.camera_format || shot.requested_settings?.camera_format;
+    const iso = shot.observed_settings?.iso || shot.camera_settings?.iso || shot.requested_settings?.iso;
+    const shutter = shot.observed_settings?.shutter_speed || shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed;
+    const ap = shot.observed_settings?.aperture || shot.camera_settings?.aperture || shot.requested_settings?.aperture;
+    const wb = shot.observed_settings?.white_balance || shot.camera_settings?.white_balance || shot.requested_settings?.white_balance;
+    const fmt = shot.observed_settings?.camera_format || shot.camera_settings?.camera_format || shot.requested_settings?.camera_format;
 
     if (iso && document.getElementById("acqIso")) document.getElementById("acqIso").value = iso;
     if (shutter && document.getElementById("acqShutter")) document.getElementById("acqShutter").value = shutter;

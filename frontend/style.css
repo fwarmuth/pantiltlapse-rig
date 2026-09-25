@@ -2667,8 +2667,7 @@ body {
 .darkroom-viewport-box {
     position: relative;
     width: 100%;
-    min-height: 280px;
-    max-height: 420px;
+    height: 340px;
     background: #020617;
     border-radius: var(--radius-md);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2773,8 +2772,7 @@ body {
         margin-bottom: 4px;
     }
     body.step-4-active .darkroom-viewport-box {
-        min-height: 220px;
-        max-height: 310px;
+        height: 270px;
     }
     body.step-4-active .studio-station-card:not(.force-visible) {
         display: none !important;
