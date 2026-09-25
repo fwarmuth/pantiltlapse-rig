@@ -48,6 +48,9 @@ class DryRunEngine:
 
         self._task: asyncio.Task | None = None
         self._cancel_flag = False
+        self._cancel_complete = asyncio.Event()
+        self._cancel_complete.set()
+        self._run_started = asyncio.Event()
 
     async def start(self, plan_id: UUID) -> dict[str, Any]:
         """Start dry-run motion rehearsal for specified plan."""
@@ -102,8 +105,13 @@ class DryRunEngine:
         self.elapsed_time_s = 0.0
         self.last_error = None
         self._cancel_flag = False
+        self._cancel_complete = asyncio.Event()
+        self._cancel_complete.set()
+        self._run_started = asyncio.Event()
 
-        self._task = asyncio.create_task(self._run_loop(plan, traj_result.samples))
+        self._task = asyncio.create_task(
+            self._run_loop(plan, traj_result.samples, self._cancel_complete, self._run_started)
+        )
         return {"status": "OK", "state": self.state}
 
     async def cancel(self) -> dict[str, Any]:
@@ -111,16 +119,49 @@ class DryRunEngine:
         if self.state != "RUNNING":
             return {"status": "OK", "state": self.state}
 
+        task = self._task
+        cancel_complete = self._cancel_complete
+        run_started = self._run_started
         self.state = "CANCELLED"
         self._cancel_flag = True
-        if self._task and not self._task.done():
-            self._task.cancel()
+        cancel_complete.clear()
+
+        stop_error: Exception | None = None
+        try:
+            # Stop physical motion before waiting for report/task cleanup.
+            if hasattr(self.serial_mgr, "stop"):
+                await self.serial_mgr.stop()
+        except Exception as exc:
+            stop_error = exc
+            self.last_error = f"Motor stop failed during cancellation: {exc}"
+            logger.error(self.last_error)
+        finally:
+            cancel_complete.set()
+            if task and not task.done():
+                task.cancel()
+
+        if task and not task.done():
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if not run_started.is_set():
+            await self.coordinator.release("DRY_RUN")
 
         logger.info("Dry run sequence CANCELLED.")
+        if stop_error:
+            return {"status": "ERROR", "state": self.state, "message": self.last_error}
         return {"status": "OK", "state": self.state}
 
-    async def _run_loop(self, plan: Any, samples: list[Any]):
+    async def _run_loop(
+        self,
+        plan: Any,
+        samples: list[Any],
+        cancel_complete: asyncio.Event,
+        run_started: asyncio.Event,
+    ):
         """Asynchronous motion loop traversing dry-run poses with response inspection."""
+        run_started.set()
         completed_records = []
         ref_id_at_start = str(self.rig_mgr.reference.reference_id)
         plan_rev_at_start = plan.revision
@@ -221,7 +262,19 @@ class DryRunEngine:
                 records=completed_records,
             )
         finally:
-            await self.coordinator.release("DRY_RUN")
+            if self._cancel_flag:
+                while not cancel_complete.is_set():
+                    try:
+                        await asyncio.shield(cancel_complete.wait())
+                    except asyncio.CancelledError:
+                        continue
+            release_task = asyncio.create_task(self.coordinator.release("DRY_RUN"))
+            while not release_task.done():
+                try:
+                    await asyncio.shield(release_task)
+                except asyncio.CancelledError:
+                    continue
+            release_task.result()
 
     def _save_report(
         self,

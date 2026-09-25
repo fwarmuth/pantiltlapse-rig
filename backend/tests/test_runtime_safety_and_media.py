@@ -30,7 +30,7 @@ def setup_stabilization_env(tmp_path):
     original_send_cmd = serial_mgr.send_command
 
     async def mock_send_cmd(cmd: str, timeout=None):
-        return {"status": "OK", "response": "OK"}
+        return {"status": "OK", "response": "STATUS 0.00 0.00 1"}
 
     serial_mgr.send_command = mock_send_cmd
     serial_mgr.is_connected = True

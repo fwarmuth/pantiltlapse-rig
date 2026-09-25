@@ -43,6 +43,10 @@ async def test_fake_camera_manager(tmp_path):
     assert cap_res["status"] == "OK"
     assert os.path.exists(cap_res["path"])
 
+    fake_cam.close()
+    assert fake_cam.get_status()["connected"] is False
+    assert (await fake_cam.trigger_capture("after_close.jpg"))["status"] == "ERROR"
+
 
 @pytest.mark.asyncio
 async def test_real_camera_manager_disconnected_no_fake_fallback(tmp_path):

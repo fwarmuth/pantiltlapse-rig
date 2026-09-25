@@ -39,6 +39,7 @@ class FakeCameraManager:
         return True
 
     def close(self):
+        logger.info("Closing FakeCameraManager session.")
         self.is_connected = False
         self.model = "Disconnected"
 
@@ -240,9 +241,6 @@ class FakeCameraManager:
             "timestamp": self.last_capture_time,
             "result": result,
         }
-
-    def close(self):
-        logger.info("Closing FakeCameraManager session.")
 
     def _create_placeholder_files(self, file_path: str, ext: str) -> str | None:
         """Create placeholder original file and optional companion preview."""

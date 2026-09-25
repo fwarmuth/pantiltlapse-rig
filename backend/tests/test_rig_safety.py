@@ -13,7 +13,7 @@ def setup_rig_safety_env():
 
 def test_rig_safety_workflow(monkeypatch):
     async def mock_send_command(cmd: str):
-        return {"status": "OK", "response": "OK"}
+        return {"status": "OK", "response": "STATUS 0.00 0.00 1"}
     monkeypatch.setattr(serial_mgr, "send_command", mock_send_command)
 
     with TestClient(app) as client:

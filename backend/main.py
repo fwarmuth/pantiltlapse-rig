@@ -139,6 +139,51 @@ def _require_serial_connected():
         )
 
 
+def _require_hardware_idle(action: str):
+    """Reject lifecycle/reference changes while an operation owns the rig."""
+    if coordinator.is_recording or coordinator.is_dry_running or serial_mgr.state in ("MOVING", "STOPPING"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "status": "ERROR",
+                "message": f"Cannot {action} while operation '{coordinator.active_mode}' is active",
+            },
+        )
+
+
+def _require_camera_lifecycle_idle(action: str):
+    if coordinator.is_recording or coordinator.is_dry_running:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "status": "ERROR",
+                "message": f"Cannot {action} while operation '{coordinator.active_mode}' is active",
+            },
+        )
+
+
+def _require_camera_control_idle(action: str):
+    if coordinator.is_recording or coordinator.is_dry_running or coordinator.is_maintenance:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "status": "ERROR",
+                "message": f"Cannot {action} while operation '{coordinator.active_mode}' owns the camera",
+            },
+        )
+
+
+async def _acquire_maintenance(action: str):
+    if not await coordinator.begin_maintenance(allow_preview=True):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "status": "ERROR",
+                "message": f"Cannot {action} while operation '{coordinator.active_mode}' is active",
+            },
+        )
+
+
 # --- Rig & Coordinate Reference Endpoints ---
 @app.get("/api/rig/status")
 async def get_rig_status():
@@ -169,13 +214,42 @@ async def update_rig_limits(req: RigLimitsRequest):
 @app.post("/api/rig/confirm-zero")
 async def confirm_physical_zero():
     """Operator resets current position as origin (0, 0) and confirms zero reference."""
-    if serial_mgr.is_connected:
-        await serial_mgr.send_command("e")
+    _require_serial_connected()
+    _require_hardware_idle("confirm zero")
+    await _acquire_maintenance("confirm zero")
+    try:
+        rig_mgr.invalidate_reference("Zero confirmation reset requested")
+        enable_res = await serial_mgr.send_command("e")
+        if not isinstance(enable_res, dict) or enable_res.get("status") != "OK":
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "ERROR", "message": "Motor controller rejected zero confirmation reset"},
+            )
+        status_res = await serial_mgr.send_command("S")
+        response = status_res.get("response") if isinstance(status_res, dict) else None
+        try:
+            status_parts = str(response).split()
+            is_zero = (
+                status_parts[0] == "STATUS"
+                and abs(float(status_parts[1])) < 1e-6
+                and abs(float(status_parts[2])) < 1e-6
+            )
+            drivers_on = status_parts[3] == "1"
+        except (IndexError, TypeError, ValueError):
+            is_zero = False
+            drivers_on = False
+        if not isinstance(status_res, dict) or status_res.get("status") != "OK" or not is_zero or not drivers_on:
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "ERROR", "message": "Motor controller status unavailable after zero reset"},
+            )
         serial_mgr.current_pan = 0.0
         serial_mgr.current_tilt = 0.0
-        await serial_mgr.send_command("S")
-    ref = rig_mgr.confirm_reference()
-    return {"status": "OK", "reference": ref, "motors": serial_mgr.get_status()}
+        serial_mgr.drivers_enabled = True
+        ref = rig_mgr.confirm_reference()
+        return {"status": "OK", "reference": ref, "motors": serial_mgr.get_status()}
+    finally:
+        await coordinator.end_maintenance()
 
 
 # --- Motor API Endpoints ---
@@ -192,20 +266,32 @@ async def get_motor_status():
 @app.post("/api/motors/reconnect")
 async def reconnect_motors():
     """Attempt reconnection to physical serial port."""
-    connected = await serial_mgr.reconnect()
-    if not connected:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"status": "ERROR", "message": f"Failed to connect to serial port '{serial_mgr.port}'"},
-        )
-    return {"status": "OK", "motors": serial_mgr.get_status()}
+    _require_hardware_idle("reconnect motors")
+    await _acquire_maintenance("reconnect motors")
+    try:
+        rig_mgr.invalidate_reference("Motor controller reconnect requested")
+        connected = await serial_mgr.reconnect()
+        if not connected:
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "ERROR", "message": f"Failed to connect to serial port '{serial_mgr.port}'"},
+            )
+        return {"status": "OK", "motors": serial_mgr.get_status(), "reference": rig_mgr.reference}
+    finally:
+        await coordinator.end_maintenance()
 
 
 @app.post("/api/motors/disconnect")
 async def disconnect_motors():
     """Disconnect and close serial port handle to release hardware."""
-    await serial_mgr.disconnect()
-    return {"status": "OK", "motors": serial_mgr.get_status()}
+    _require_hardware_idle("disconnect motors")
+    await _acquire_maintenance("disconnect motors")
+    try:
+        rig_mgr.invalidate_reference("Motor controller disconnect requested")
+        await serial_mgr.disconnect()
+        return {"status": "OK", "motors": serial_mgr.get_status(), "reference": rig_mgr.reference}
+    finally:
+        await coordinator.end_maintenance()
 
 
 @app.post("/api/motors/move")
@@ -288,6 +374,7 @@ async def get_camera_config_choices():
 
 @app.post("/api/camera/config")
 async def set_camera_config(req: CameraConfigRequest):
+    _require_camera_control_idle("change camera configuration")
     if not camera_mgr.is_connected:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -318,21 +405,21 @@ async def set_camera_config(req: CameraConfigRequest):
 @app.post("/api/camera/reconnect")
 async def reconnect_camera():
     """Attempt a robust camera restart: releases preview, resets hardware USB port, and reconnects."""
-    if coordinator.is_previewing:
-        try:
-            await preview_ctrl.stop_preview()
-        except Exception as e:
-            logger.warning(f"Error stopping preview during camera restart: {e}")
-            await coordinator.release("PREVIEW")
-
-    if hasattr(camera_mgr, "restart"):
-        connected = await camera_mgr.restart()
-    else:
-        camera_mgr.close()
-        await asyncio.sleep(0.5)
-        connected = await camera_mgr.initialize()
-        if connected:
-            await camera_mgr.apply_startup_defaults()
+    _require_camera_lifecycle_idle("reconnect camera")
+    await _acquire_maintenance("reconnect camera")
+    try:
+        if coordinator.is_previewing:
+            await preview_controller.stop()
+        if hasattr(camera_mgr, "restart"):
+            connected = await camera_mgr.restart()
+        else:
+            camera_mgr.close()
+            await asyncio.sleep(0.5)
+            connected = await camera_mgr.initialize()
+            if connected:
+                await camera_mgr.apply_startup_defaults()
+    finally:
+        await coordinator.end_maintenance()
 
     if connected:
         try:
@@ -344,7 +431,10 @@ async def reconnect_camera():
         is_m = getattr(camera_mgr, "is_manual_mode", True)
         msg = f"Connected to camera '{camera_mgr.model}' [Mode: {mode_str}]"
         if not is_m:
-            msg += " - Warning: Camera dial is NOT in 'M' (Manual). Exposure settings will be locked by camera hardware."
+            msg += (
+                " - Warning: Camera dial is NOT in 'M' (Manual). "
+                "Exposure settings will be locked by camera hardware."
+            )
 
         return {
             "status": "OK",
@@ -362,7 +452,10 @@ async def reconnect_camera():
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
             "status": "ERROR",
-            "message": "Failed to connect to camera. Ensure camera is powered on, awake, and dial is set to 'M' (Manual).",
+            "message": (
+                "Failed to connect to camera. Ensure camera is powered on, awake, "
+                "and dial is set to 'M' (Manual)."
+            ),
         },
     )
 
@@ -370,17 +463,20 @@ async def reconnect_camera():
 @app.post("/api/camera/disconnect")
 async def disconnect_camera():
     """Disconnect and close persistent camera session to release USB handle."""
-    if coordinator.is_previewing:
-        try:
-            await preview_ctrl.stop_preview()
-        except Exception:
-            await coordinator.release("PREVIEW")
-    camera_mgr.close()
+    _require_camera_lifecycle_idle("disconnect camera")
+    await _acquire_maintenance("disconnect camera")
+    try:
+        if coordinator.is_previewing:
+            await preview_controller.stop()
+        camera_mgr.close()
+    finally:
+        await coordinator.end_maintenance()
     return {"status": "OK", "camera": camera_mgr.get_status()}
 
 
 @app.post("/api/camera/trigger")
 async def trigger_camera_shot():
+    _require_camera_control_idle("trigger camera")
     if not camera_mgr.is_connected:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -489,6 +585,7 @@ class FocusStepRequest(BaseModel):
 @app.post("/api/camera/focus/step")
 async def step_camera_focus(req: FocusStepRequest):
     """Drive camera manual focus near or far in discrete steps."""
+    _require_camera_control_idle("change camera focus")
     if not camera_mgr.is_connected:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -506,6 +603,7 @@ async def step_camera_focus(req: FocusStepRequest):
 @app.post("/api/camera/focus/autofocus")
 async def trigger_camera_autofocus():
     """Trigger camera autofocus lock."""
+    _require_camera_control_idle("trigger camera autofocus")
     if not camera_mgr.is_connected:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -550,6 +648,7 @@ class RawWidgetSetRequest(BaseModel):
 @app.post("/api/debug/camera/set-raw-widget")
 async def set_camera_raw_widget(req: RawWidgetSetRequest):
     """Set a raw camera configuration widget directly and return detailed gphoto2 response."""
+    _require_camera_control_idle("change camera configuration")
     if not camera_mgr.is_connected:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

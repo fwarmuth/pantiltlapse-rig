@@ -66,7 +66,7 @@ def test_dry_run_full_execution_and_stale_detection(monkeypatch):
         return {"status": "OK", "response": "DONE"}
 
     async def mock_send_command(cmd: str):
-        return "R:0.00,0.00,0,0,0,0,0,0,0,0"
+        return {"status": "OK", "response": "STATUS 0.00 0.00 1"}
 
     monkeypatch.setattr(serial_mgr, "move_absolute", mock_move_absolute)
     monkeypatch.setattr(serial_mgr, "send_command", mock_send_command)
@@ -114,7 +114,7 @@ def test_dry_run_lock_conflict():
 
     with TestClient(app) as client:
         serial_mgr.is_connected = True
-        client.post("/api/rig/confirm-zero")
+        rig_mgr.confirm_reference()
 
         # Manually lock coordinator mode to RECORDING
         asyncio.run(coordinator.acquire("RECORDING"))

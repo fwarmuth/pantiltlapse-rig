@@ -21,7 +21,7 @@ class FakeCameraManager:
     def __init__(self):
         self.captures = 0
 
-    async def trigger_capture(self, filename: str):
+    async def trigger_capture(self, filename: str, target_dir: str | None = None):
         self.captures += 1
         return {"status": "OK"}
 
@@ -69,7 +69,7 @@ class FlakyCameraManager:
         self.captures = 0
         self.reconnect_calls = 0
 
-    async def trigger_capture(self, filename: str):
+    async def trigger_capture(self, filename: str, target_dir: str | None = None):
         if self.captures == 0 and self.reconnect_calls == 0:
             self.is_connected = False
             return {"status": "ERROR", "message": "Camera disconnected unexpectedly"}
@@ -111,4 +111,3 @@ def test_timelapse_waits_for_camera_reconnect_on_capture_failure(tmp_path):
         assert coordinator.active_mode == "IDLE"
 
     asyncio.run(run())
-

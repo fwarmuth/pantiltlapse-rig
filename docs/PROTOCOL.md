@@ -15,7 +15,7 @@ Firmware v1.0.4 uses newline-terminated ASCII at 9600 baud. `M` targets are abso
 | `d`/`D` / `e`/`E` | `OK DRIVERS OFF/ON` | Disable / enable both drivers; resets coordinates to zero |
 | other | `ERR Unknown` | Reject command |
 
-`M` blocks the firmware command loop, so `X` is processed only after an active move returns; it is not a hardware-interrupt emergency stop.
+`M` starts a move and replies `DONE` once both axes reach their targets. The firmware continues reading commands during motion, so `X` can interrupt a move and replies `OK STOP`. This remains a software stop over serial, not a hardware interrupt.
 
 ## HTTP API
 
@@ -42,4 +42,5 @@ All routes return JSON except preview MJPEG stream and SSE. Full schemas: `/docs
 
 - **PREVIEW** and **DRY_RUN** can run concurrently **only if** both operate on the same plan ID.
 - **RECORDING** requires exclusive execution.
+- **MAINTENANCE** reserves hardware during zero resets and connection changes; new recording, rehearsal, and manual movement requests are rejected until it finishes. Existing preview may remain active for motor maintenance; camera maintenance stops it first.
 - Manual move, driver toggle, limit updates, and test shots are rejected with `409 Conflict` during active dry-run or recording sequences.

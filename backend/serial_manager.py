@@ -36,6 +36,9 @@ class SerialManager:
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._lock = asyncio.Lock()
+        self._stop_lock = asyncio.Lock()
+        self._move_tasks: set[asyncio.Task[dict[str, Any]]] = set()
+        self._stopping = False
 
     async def _open_port(self, port_path: str) -> bool:
         """Internal helper to open a specific serial port and establish initial handshakes."""
@@ -180,22 +183,33 @@ class SerialManager:
         """Move motors to absolute target angles in degrees."""
         if not self.is_connected:
             return {"status": "ERROR", "message": "Serial motor controller disconnected"}
+        if self._stopping:
+            return {"status": "ERROR", "message": "Emergency stop in progress"}
 
         self.state = "MOVING"
-        res = await self.send_command(f"M {pan:.2f} {tilt:.2f}", timeout=60.0)
-        if res.get("status") == "OK" and res.get("response") == "DONE":
-            self.current_pan = pan
-            self.current_tilt = tilt
-            self.state = "IDLE"
-            await self.send_command("S")
-        else:
-            if res.get("status") == "OK":
-                res = {
-                    "status": "ERROR",
-                    "message": f"Unexpected motor move response: {res.get('response', '')}",
-                }
-            self.state = "ERROR"
-        return res
+        task = asyncio.create_task(self._move_absolute_transaction(pan, tilt))
+        self._move_tasks.add(task)
+        task.add_done_callback(self._move_tasks.discard)
+        return await asyncio.shield(task)
+
+    async def _move_absolute_transaction(self, pan: float, tilt: float) -> dict[str, Any]:
+        """Run a complete move transaction while retaining a cancellable command task."""
+        async with self._lock:
+            self.state = "MOVING"
+            res = await self._send_command_unlocked(f"M {pan:.2f} {tilt:.2f}", timeout=60.0)
+            if res.get("status") == "OK" and res.get("response") == "DONE":
+                self.current_pan = pan
+                self.current_tilt = tilt
+                self.state = "IDLE"
+                await self._send_command_unlocked("S", timeout=2.0)
+            else:
+                if res.get("status") == "OK":
+                    res = {
+                        "status": "ERROR",
+                        "message": f"Unexpected motor move response: {res.get('response', '')}",
+                    }
+                self.state = "ERROR"
+            return res
 
     async def move_relative(self, delta_pan: float, delta_tilt: float) -> dict[str, Any]:
         """Move motors relative to current position."""
@@ -206,14 +220,78 @@ class SerialManager:
         target_tilt = self.current_tilt + delta_tilt
         return await self.move_absolute(target_pan, target_tilt)
 
-    async def stop(self) -> dict[str, Any]:
-        """Emergency stop both motor axes."""
-        if not self.is_connected:
-            return {"status": "ERROR", "message": "Serial motor controller disconnected"}
+    async def stop(self, timeout: float = 2.0) -> dict[str, Any]:
+        """Interrupt pending moves, stop both axes, and synchronize the reported pose."""
+        async with self._stop_lock:
+            self._stopping = True
+            try:
+                pending_moves = [task for task in self._move_tasks if not task.done()]
+                for task in pending_moves:
+                    task.cancel()
+                if pending_moves:
+                    await asyncio.gather(*pending_moves, return_exceptions=True)
 
-        res = await self.send_command("X")
-        self.state = "IDLE"
-        return res
+                if not self.is_connected:
+                    return {"status": "ERROR", "message": "Serial motor controller disconnected"}
+
+                self.state = "STOPPING"
+                async with self._lock:
+                    res = await self._send_stop_unlocked(timeout)
+                    if res.get("status") != "OK":
+                        self.is_connected = False
+                        self.state = "ERROR"
+                        return res
+
+                    status_res = await self._send_command_unlocked("S", timeout=timeout)
+                    if status_res.get("status") != "OK" or not status_res.get("response", "").startswith("STATUS"):
+                        self.is_connected = False
+                        self.state = "ERROR"
+                        return {
+                            "status": "ERROR",
+                            "message": "Motors stopped, but position synchronization failed; reconnect required",
+                            "stop_response": res.get("response"),
+                            "status_response": status_res,
+                        }
+
+                self.state = "IDLE"
+                return res
+            finally:
+                self._stopping = False
+
+    async def _send_stop_unlocked(self, timeout: float) -> dict[str, Any]:
+        """Send X and discard replies from the interrupted transaction until OK STOP."""
+        if not self._writer or not self._reader:
+            self.is_connected = False
+            self.state = "DISCONNECTED"
+            return {"status": "ERROR", "message": "Not connected"}
+
+        try:
+            self._writer.write(b"X\n")
+            await self._writer.drain()
+            deadline = asyncio.get_running_loop().time() + timeout
+
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                response_bytes = await asyncio.wait_for(self._reader.readline(), timeout=remaining)
+                response = response_bytes.decode("ascii", errors="replace").strip()
+                self._parse_response(response)
+
+                if response == "OK STOP":
+                    return {"status": "OK", "response": response}
+                if not response or response.startswith("ERR"):
+                    return {"status": "ERROR", "message": response or "Empty response from motor controller"}
+
+                logger.warning(f"Discarding pre-stop serial response while awaiting OK STOP: '{response}'")
+        except asyncio.TimeoutError:
+            logger.warning(f"Emergency stop timed out waiting for acknowledgement ({timeout}s)")
+            return {"status": "TIMEOUT", "message": "Emergency stop timed out"}
+        except Exception as e:
+            logger.error(f"Emergency stop serial communication error: {e}")
+            self.is_connected = False
+            self.state = "ERROR"
+            return {"status": "ERROR", "message": str(e)}
 
     async def set_drivers(self, enable: bool) -> dict[str, Any]:
         """Enable ('e') or Disable ('d') motor drivers."""

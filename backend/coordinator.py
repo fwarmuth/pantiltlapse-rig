@@ -19,11 +19,14 @@ class OperationCoordinator:
         self.is_previewing = False
         self.is_dry_running = False
         self.is_recording = False
+        self.is_maintenance = False
         self.active_plan_id: str | None = None
         self._lock = asyncio.Lock()
 
     @property
     def active_mode(self) -> str:
+        if self.is_maintenance:
+            return "MAINTENANCE"
         if self.is_recording:
             return "RECORDING"
         if self.is_dry_running and self.is_previewing:
@@ -36,23 +39,23 @@ class OperationCoordinator:
 
     def can_move(self) -> bool:
         """Manual jog moves are allowed unless dry-run or recording is active."""
-        return not self.is_dry_running and not self.is_recording
+        return not self.is_dry_running and not self.is_recording and not self.is_maintenance
 
     def can_change_drivers(self) -> bool:
         """Driver changes are allowed only when idle or previewing without active motion rehearsal/run."""
-        return not self.is_dry_running and not self.is_recording
+        return not self.is_dry_running and not self.is_recording and not self.is_maintenance
 
     def can_change_limits(self) -> bool:
         """Rig limits updates are allowed only when idle or previewing."""
-        return not self.is_dry_running and not self.is_recording
+        return not self.is_dry_running and not self.is_recording and not self.is_maintenance
 
     def can_test_shot(self) -> bool:
         """Test shots are allowed only when idle or previewing."""
-        return not self.is_dry_running and not self.is_recording
+        return not self.is_dry_running and not self.is_recording and not self.is_maintenance
 
     def can_dry_run(self, plan_id: str | None = None) -> bool:
         """Dry run is allowed if no recording or dry-run is active, and plan matches active preview plan if set."""
-        if self.is_recording or self.is_dry_running:
+        if self.is_recording or self.is_dry_running or self.is_maintenance:
             return False
         if self.is_previewing and self.active_plan_id and plan_id and self.active_plan_id != str(plan_id):
             return False
@@ -60,7 +63,7 @@ class OperationCoordinator:
 
     def can_preview(self, plan_id: str | None = None) -> bool:
         """Preview is allowed if no recording is active, and plan matches active dry run plan if set."""
-        if self.is_recording:
+        if self.is_recording or self.is_maintenance:
             return False
         if self.is_dry_running and self.active_plan_id and plan_id and self.active_plan_id != str(plan_id):
             return False
@@ -68,7 +71,21 @@ class OperationCoordinator:
 
     def can_record(self, plan_id: str | None = None) -> bool:
         """Recording requires exclusive execution."""
-        return not self.is_recording and not self.is_dry_running and not self.is_previewing
+        return not self.is_recording and not self.is_dry_running and not self.is_previewing and not self.is_maintenance
+
+    async def begin_maintenance(self, allow_preview: bool = False) -> bool:
+        """Reserve the coordinator for an awaited hardware lifecycle operation."""
+        async with self._lock:
+            if self.is_maintenance or self.is_recording or self.is_dry_running:
+                return False
+            if self.is_previewing and not allow_preview:
+                return False
+            self.is_maintenance = True
+            return True
+
+    async def end_maintenance(self):
+        async with self._lock:
+            self.is_maintenance = False
 
     async def acquire(self, mode: OperationMode, plan_id: str | None = None) -> bool:
         """Acquire operation lock for mode. Enforces plan matching for concurrent PREVIEW and DRY_RUN."""
@@ -127,4 +144,5 @@ class OperationCoordinator:
             "is_previewing": self.is_previewing,
             "is_dry_running": self.is_dry_running,
             "is_recording": self.is_recording,
+            "is_maintenance": self.is_maintenance,
         }
