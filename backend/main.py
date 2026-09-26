@@ -21,6 +21,7 @@ from domain.rig import RigManager
 from domain.trajectory import sample_trajectory
 from dry_run_engine import DryRunEngine
 from fake_camera_manager import FakeCameraManager
+from media_helper import generate_resized_preview_sync
 from preview_controller import PreviewController
 from serial_manager import SerialManager
 from storage import PlanStore
@@ -875,9 +876,17 @@ async def delete_test_shot(plan_id: UUID, shot_id: UUID):
         ) from e
 
 
-@app.get("/api/plans/{plan_id}/test-shots/{shot_id}/artifacts/{artifact_type}")
-async def get_test_shot_artifact_file(plan_id: UUID, shot_id: UUID, artifact_type: str):
-    """Serve an image artifact file by ID, type, or filename for a test shot."""
+@app.api_route(
+    "/api/plans/{plan_id}/test-shots/{shot_id}/artifacts/{artifact_type}",
+    methods=["GET", "HEAD"],
+)
+async def get_test_shot_artifact_file(
+    plan_id: UUID,
+    shot_id: UUID,
+    artifact_type: str,
+    quality: str | None = None,
+):
+    """Serve an image artifact file by ID, type, or filename for a test shot, supporting on-demand quality downscaling."""
     shot_dir = (plan_store.base_dir / str(plan_id) / "test-shots" / str(shot_id)).resolve()
     if not shot_dir.exists():
         raise HTTPException(
@@ -889,7 +898,49 @@ async def get_test_shot_artifact_file(plan_id: UUID, shot_id: UUID, artifact_typ
     target_file = None
     media_type = "application/octet-stream"
 
-    if meta_file.exists():
+    # Locate original file in shot_dir as reference source
+    orig_path = shot_dir / "original.jpg"
+    if not orig_path.exists():
+        for p in shot_dir.glob("original.*"):
+            orig_path = p
+            break
+
+    # Handle quality-specific preview requests
+    if artifact_type in ("preview", "preview.jpg", "preview.jpeg", "thumbnail"):
+        if quality in ("fast", "low"):
+            cached_fast = shot_dir / "preview_fast.jpg"
+            if cached_fast.exists():
+                target_file = cached_fast
+                media_type = "image/jpeg"
+            elif orig_path.exists() and orig_path.suffix.lower() in (".jpg", ".jpeg"):
+                ok = await asyncio.to_thread(generate_resized_preview_sync, orig_path, cached_fast, 1024, 75)
+                if ok and cached_fast.exists():
+                    target_file = cached_fast
+                    media_type = "image/jpeg"
+            elif orig_path.exists() and orig_path.suffix.lower() == ".svg":
+                target_file = orig_path
+                media_type = "image/svg+xml"
+
+        elif quality in ("medium", "balanced"):
+            cached_med = shot_dir / "preview_medium.jpg"
+            if cached_med.exists():
+                target_file = cached_med
+                media_type = "image/jpeg"
+            elif orig_path.exists() and orig_path.suffix.lower() in (".jpg", ".jpeg"):
+                ok = await asyncio.to_thread(generate_resized_preview_sync, orig_path, cached_med, 1920, 82)
+                if ok and cached_med.exists():
+                    target_file = cached_med
+                    media_type = "image/jpeg"
+            elif orig_path.exists() and orig_path.suffix.lower() == ".svg":
+                target_file = orig_path
+                media_type = "image/svg+xml"
+
+        elif quality in ("full", "native", "original"):
+            if orig_path.exists():
+                target_file = orig_path
+                media_type = "image/jpeg" if orig_path.suffix.lower() in (".jpg", ".jpeg") else "application/octet-stream"
+
+    if not target_file and meta_file.exists():
         try:
             with open(meta_file, encoding="utf-8") as f:
                 meta = json.load(f)

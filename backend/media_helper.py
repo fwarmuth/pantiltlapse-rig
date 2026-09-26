@@ -49,6 +49,41 @@ def extract_jpeg_exif(file_path: Path) -> dict[str, Any]:
         return {}
 
 
+def generate_resized_preview_sync(
+    orig_path: Path,
+    dest_path: Path,
+    max_dimension: int = 1024,
+    quality: int = 75,
+) -> bool:
+    """Downscale an image file using Pillow, handling orientation and fast DCT draft."""
+    if not orig_path.exists():
+        return False
+    if orig_path.suffix.lower() == ".svg":
+        try:
+            shutil.copy2(orig_path, dest_path)
+            return True
+        except Exception:
+            return False
+
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(orig_path) as im:
+            im = ImageOps.exif_transpose(im)
+            if hasattr(im, "draft") and max_dimension <= 1920:
+                im.draft("RGB", (max_dimension, max_dimension))
+            im.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            tmp = dest_path.with_suffix(".tmp")
+            im.save(tmp, "JPEG", quality=quality, optimize=True)
+            tmp.replace(dest_path)
+            return True
+    except Exception as e:
+        logger.warning(f"Failed to generate resized preview '{dest_path}' from '{orig_path}': {e}")
+        return False
+
+
 async def publish_media_artifact(
     target_dir: Path,
     artifact_id: UUID,

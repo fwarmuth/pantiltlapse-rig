@@ -65,10 +65,18 @@ def test_create_and_fetch_test_shot_api():
         detail = resp.json()
         assert detail["shot_id"] == shot_id
 
-        # 4. Fetch Preview Artifact File
+        # 4. Fetch Preview Artifact File (Default, Fast, and Full)
         resp = client.get(f"/api/plans/{plan.id}/test-shots/{shot_id}/artifacts/preview")
         assert resp.status_code == 200
         assert len(resp.content) > 0
+
+        resp_fast = client.get(f"/api/plans/{plan.id}/test-shots/{shot_id}/artifacts/preview?quality=fast")
+        assert resp_fast.status_code == 200
+        assert len(resp_fast.content) > 0
+
+        resp_full = client.get(f"/api/plans/{plan.id}/test-shots/{shot_id}/artifacts/preview?quality=full")
+        assert resp_full.status_code == 200
+        assert len(resp_full.content) > 0
 
         # 5. Delete Test Shot
         resp = client.delete(f"/api/plans/{plan.id}/test-shots/{shot_id}")

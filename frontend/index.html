@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>pantiltlapse-rig - Timelapse Trajectory Studio</title>
-    <link rel="stylesheet" href="style.css?v=20260925_04">
+    <link rel="stylesheet" href="style.css?v=20260926_01">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -507,6 +507,15 @@
                                     <option value="RAW+JPEG">RAW + JPEG</option>
                                 </select>
                             </div>
+
+                            <div class="control-group">
+                                <label for="acqPreviewQuality">Preview Wi-Fi Quality</label>
+                                <select id="acqPreviewQuality" class="dropdown" onchange="setDarkroomPreviewQuality(this.value)" title="Choose resolution transferred over Wi-Fi for snapshot inspection">
+                                    <option value="fast" selected>⚡ Fast Web (1024px, ~40 KB)</option>
+                                    <option value="medium">⚖️ Balanced (1080p, ~160 KB)</option>
+                                    <option value="full">🔎 Full Sensor (Native, ~3–5 MB)</option>
+                                </select>
+                            </div>
                         </div>
 
                         <h3 style="margin-top:14px;">⏱️ Timing Schedule</h3>
@@ -776,6 +785,14 @@
                             <button class="btn btn-xs btn-secondary" id="btnDarkroom1to1" onclick="setDarkroomZoomMode('1to1')" title="1:1 Native Sensor Pixel Peep">1:1 Pixels</button>
                         </div>
                         <div class="darkroom-tools-right">
+                            <div style="display:flex; align-items:center; gap:5px;">
+                                <label for="darkroomQualitySelect" style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">Quality:</label>
+                                <select id="darkroomQualitySelect" class="dropdown dropdown-xs" style="padding:2px 6px; font-size:0.7rem; height:24px; min-width:115px;" onchange="setDarkroomPreviewQuality(this.value)" title="Choose preview transfer resolution over Wi-Fi">
+                                    <option value="fast" selected>⚡ Fast (1024px)</option>
+                                    <option value="medium">⚖️ Balanced (1080p)</option>
+                                    <option value="full">🔎 Full Sensor</option>
+                                </select>
+                            </div>
                             <button class="btn btn-xs btn-secondary" id="btnDarkroomInspectModal" onclick="openActiveDarkroomInModal()" title="Open full-screen inspector & EXIF">🔎 Full EXIF</button>
                         </div>
                     </div>
@@ -1209,6 +1226,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260925_04"></script>
+    <script src="app.js?v=20260926_01"></script>
 </body>
 </html>

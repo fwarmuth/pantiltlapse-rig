@@ -124,6 +124,12 @@ function goToStep(stepNum) {
 
     if (stepNum === 4) {
         initDarkroomCanvas();
+        // Sync quality dropdowns with stored preference
+        const selDarkroom = document.getElementById("darkroomQualitySelect");
+        if (selDarkroom) selDarkroom.value = darkroomPreviewQuality;
+        const selAcq = document.getElementById("acqPreviewQuality");
+        if (selAcq) selAcq.value = darkroomPreviewQuality;
+
         if (snapshotCard) {
             snapshotCard.classList.toggle("hidden", userPrefersLiveViewInStep4);
         }
@@ -3131,6 +3137,26 @@ let darkroomInitialCenterX = 0.5;
 let darkroomInitialCenterY = 0.5;
 let darkroomListenersInitialized = false;
 let userPrefersLiveViewInStep4 = false;
+let darkroomPreviewQuality = localStorage.getItem("pantiltlapse_preview_quality") || "fast";
+
+function setDarkroomPreviewQuality(quality) {
+    if (!quality) quality = "fast";
+    darkroomPreviewQuality = quality;
+    try {
+        localStorage.setItem("pantiltlapse_preview_quality", quality);
+    } catch (_) {}
+
+    // Synchronize UI dropdowns
+    const selDarkroom = document.getElementById("darkroomQualitySelect");
+    if (selDarkroom && selDarkroom.value !== quality) selDarkroom.value = quality;
+    const selAcq = document.getElementById("acqPreviewQuality");
+    if (selAcq && selAcq.value !== quality) selAcq.value = quality;
+
+    // Reload active snapshot in darkroom if currently displayed
+    if (darkroomActiveIndex >= 0 && darkroomActiveIndex < darkroomShots.length) {
+        renderDarkroomShot(darkroomActiveIndex);
+    }
+}
 
 function initDarkroomCanvas() {
     const canvas = document.getElementById("canvasDarkroomSnapshot");
@@ -3297,7 +3323,8 @@ function renderDarkroomShot(index) {
     const shot = darkroomShots[index];
     const shotId = shot.id || shot.shot_id || shot.artifact_id;
     const cacheBust = encodeURIComponent(shot.created_at || shotId);
-    const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg?t=${cacheBust}`;
+    const quality = darkroomPreviewQuality || "fast";
+    const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg?quality=${quality}&t=${cacheBust}`;
 
     const shutter = shot.observed_settings?.shutter_speed || shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed || "1/125";
     const ap = shot.observed_settings?.aperture || shot.camera_settings?.aperture || shot.requested_settings?.aperture || "4.5";
@@ -3318,7 +3345,8 @@ function renderDarkroomShot(index) {
     img.onload = () => {
         darkroomImg = img;
         const dimsEl = document.getElementById("lblDarkroomDims");
-        if (dimsEl) dimsEl.textContent = `${img.naturalWidth} × ${img.naturalHeight} px`;
+        const qualLabel = quality === "fast" ? "Fast 1024" : (quality === "medium" ? "1080p" : "Native Full");
+        if (dimsEl) dimsEl.textContent = `${img.naturalWidth} × ${img.naturalHeight} px [${qualLabel}]`;
         drawDarkroomCanvas();
     };
     img.onerror = () => {
@@ -3512,7 +3540,7 @@ function renderTestShotGallery(shots) {
         item.className = "gallery-item";
         const sId = s.id || s.shot_id || s.artifact_id;
         const cacheBust = encodeURIComponent(s.created_at || sId);
-        const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${sId}/artifacts/preview.jpg?t=${cacheBust}`;
+        const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${sId}/artifacts/preview.jpg?quality=fast&t=${cacheBust}`;
         const shutter = s.observed_settings?.shutter_speed || s.camera_settings?.shutter_speed || s.requested_settings?.shutter_speed || "1/125";
         const ap = s.observed_settings?.aperture || s.camera_settings?.aperture || s.requested_settings?.aperture || "4.5";
         const iso = s.observed_settings?.iso || s.camera_settings?.iso || s.requested_settings?.iso || "400";
@@ -3576,12 +3604,15 @@ function openTestShotInspector(index) {
 
     // 2. High-Res Image Source & Overlay
     const img = document.getElementById("testShotBigImage");
-    const imgUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg`;
+    const cacheBust = encodeURIComponent(shot.created_at || shotId);
+    const quality = darkroomPreviewQuality || "fast";
+    const imgUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg?quality=${quality}&t=${cacheBust}`;
     if (img) {
         img.src = imgUrl;
         img.onload = () => {
             const dimEl = document.getElementById("lblTestShotDims");
-            if (dimEl) dimEl.textContent = `${img.naturalWidth || 1920} × ${img.naturalHeight || 1080} px`;
+            const qualLabel = quality === "fast" ? "Fast 1024" : (quality === "medium" ? "1080p" : "Native Full");
+            if (dimEl) dimEl.textContent = `${img.naturalWidth || 1920} × ${img.naturalHeight || 1080} px [${qualLabel}]`;
         };
     }
 
@@ -4163,6 +4194,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     setupKeyboardFramingShortcuts();
     await loadPlansList();
     goToStep(1);
+
+    // Initialize quality dropdowns from stored preference
+    const selDarkroom = document.getElementById("darkroomQualitySelect");
+    if (selDarkroom) selDarkroom.value = darkroomPreviewQuality;
+    const selAcq = document.getElementById("acqPreviewQuality");
+    if (selAcq) selAcq.value = darkroomPreviewQuality;
 
     // Initial camera choices load
     await refreshCameraConfigChoices();
