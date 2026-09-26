@@ -33,6 +33,7 @@ class CameraManager:
         self.shutter_speed = "1/125"
         self.aperture = "5.6"
         self.white_balance = "Auto"
+        self.focus_mode = "Unknown"
         self.latest_photo_path: str | None = None
         self.last_capture_time: float = 0.0
 
@@ -134,6 +135,17 @@ class CameraManager:
                         logger.warning(
                             f"Camera dial is in '{self.exposure_mode}' mode. Exposure controls (ISO/shutter/aperture) "
                             f"will be restricted by camera firmware. Turn dial to 'M' (Manual) for full control."
+                        )
+            except Exception:
+                pass
+            try:
+                w_fm = self._find_widget_recursive(config, "focusmode")
+                if w_fm is not None:
+                    self.focus_mode = str(w_fm.get_value())
+                    if self.focus_mode.lower() in ("manual", "mf"):
+                        logger.warning(
+                            "Camera reports lens focusmode='Manual'. Note: The physical switch on the lens barrel "
+                            "must be set to 'AF' for software electronic manual focus steps to drive the lens motor."
                         )
             except Exception:
                 pass
@@ -323,6 +335,12 @@ class CameraManager:
             return {"status": "ERROR", "message": "Direction must be 'near' or 'far'"}
         step_size = max(1, min(3, int(step_size)))
         drive_str = f"{direction.capitalize()} {step_size}"
+
+        if self.focus_mode.lower() in ("manual", "mf"):
+            logger.warning(
+                "Camera reports lens focusmode='Manual'. Note: The physical switch on the lens barrel "
+                "must be set to 'AF' for software electronic manual focus steps to drive the lens motor."
+            )
 
         async with self._lock:
             def _drive_focus():
@@ -527,7 +545,58 @@ class CameraManager:
                 logger.info("Triggering native gphoto2 shutter release...")
 
                 def _do_gphoto_capture():
-                    file_path = self._camera.capture(gp.GP_CAPTURE_IMAGE)
+                    file_path = None
+
+                    # 1. On Canon EOS cameras, use 'Press Full MF' to release shutter without triggering AF
+                    try:
+                        config = self._camera.get_config()
+                        eos_release = self._find_widget_recursive(config, "eosremoterelease")
+                        if eos_release is not None:
+                            choices = []
+                            try:
+                                for i in range(eos_release.count_choices()):
+                                    choices.append(str(eos_release.get_choice(i)))
+                            except Exception:
+                                pass
+
+                            if "Press Full MF" in choices:
+                                logger.info("Triggering shutter via Canon EOS remoterelease 'Press Full MF' (pure manual focus release)...")
+                                eos_release.set_value("Press Full MF")
+                                self._camera.set_config(config)
+
+                                # Release shutter button
+                                time.sleep(0.05)
+                                try:
+                                    config = self._camera.get_config()
+                                    eos_release = self._find_widget_recursive(config, "eosremoterelease")
+                                    if eos_release:
+                                        eos_release.set_value("Release Full")
+                                        self._camera.set_config(config)
+                                except Exception as e:
+                                    logger.warning(f"Could not reset eosremoterelease: {e}")
+
+                                # Wait for GP_EVENT_FILE_ADDED event
+                                context = gp.Context()
+                                start_wait = time.time()
+                                while time.time() - start_wait < 15.0:
+                                    evt_type, evt_data = self._camera.wait_for_event(100, context)
+                                    if evt_type == gp.GP_EVENT_FILE_ADDED:
+                                        file_path = evt_data
+                                        break
+
+                                # Drain post-capture property events so camera state is clean
+                                drain_start = time.time()
+                                while time.time() - drain_start < 2.0:
+                                    evt_type, _ = self._camera.wait_for_event(50, context)
+                                    if evt_type == gp.GP_EVENT_TIMEOUT:
+                                        break
+                    except Exception as e:
+                        logger.warning(f"Canon EOS Press Full MF capture failed: {e}. Falling back to standard capture.")
+
+                    # 2. Fallback to standard capture if eosremoterelease was not available or produced no file
+                    if file_path is None:
+                        file_path = self._camera.capture(gp.GP_CAPTURE_IMAGE)
+
                     cam_ext = os.path.splitext(file_path.name)[1].lower() or ".jpg"
 
                     if filename:
@@ -582,7 +651,11 @@ class CameraManager:
                 }
             except Exception as e:
                 logger.error(f"Native gphoto2 capture error: {e}")
-                self.is_connected = False
+                try:
+                    _ = self._camera.get_summary()
+                except Exception:
+                    logger.warning("Camera connection dropped after capture error")
+                    self.is_connected = False
                 return {"status": "ERROR", "message": str(e)}
 
     async def capture_preview_frame(self, gain: float = 1.0) -> bytes:
