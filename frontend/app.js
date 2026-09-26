@@ -3372,9 +3372,7 @@ function navigateDarkroomShot(delta) {
 }
 
 function openActiveDarkroomInModal() {
-    if (darkroomActiveIndex >= 0 && darkroomActiveIndex < darkroomShots.length) {
-        openTestShotInspector(darkroomActiveIndex);
-    }
+    // Inspection modal removed for simplicity
 }
 
 function drawDarkroomCanvas() {
@@ -3573,6 +3571,8 @@ function renderTestShotGallery(shots) {
 }
 
 function openTestShotInspector(index) {
+    const modal = document.getElementById("testShotInspectorModal");
+    if (!modal) return;
     if (!currentTestShotsList || currentTestShotsList.length === 0) return;
     if (index < 0) index = 0;
     if (index >= currentTestShotsList.length) index = currentTestShotsList.length - 1;
