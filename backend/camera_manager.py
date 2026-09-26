@@ -98,6 +98,26 @@ class CameraManager:
             self.is_connected = True
             self.model = model_name
             logger.info(f"Connected to persistent camera session: '{self.model}'")
+
+            def _init_clean_state():
+                try:
+                    if hasattr(cam, "get_single_config") and hasattr(cam, "set_single_config"):
+                        try:
+                            eos = cam.get_single_config("eosremoterelease")
+                            eos.set_value("Release")
+                            cam.set_single_config("eosremoterelease", eos)
+                        except Exception:
+                            pass
+                    else:
+                        cfg = cam.get_config()
+                        eos = self._find_widget_recursive(cfg, "eosremoterelease")
+                        if eos:
+                            eos.set_value("Release")
+                            cam.set_config(cfg)
+                except Exception:
+                    pass
+            await asyncio.to_thread(_init_clean_state)
+
             await asyncio.to_thread(self._read_configs_nolock)
             return True
 
@@ -267,14 +287,26 @@ class CameraManager:
         if param == "aperture":
             val_str = val_str.replace("f/", "").replace("F/", "").strip()
 
+        # If parameter is already at target value, skip USB overhead
+        if getattr(self, param, None) == val_str:
+            return {"status": "OK", "param": param, "value": val_str, "unchanged": True}
+
         async with self._lock:
             try:
-                config = self._camera.get_config()
-                child = self._find_widget_recursive(config, child_name)
-                if child is None:
-                    return {"status": "ERROR", "message": f"Widget '{child_name}' not found on camera"}
-                child.set_value(val_str)
-                self._camera.set_config(config)
+                def _apply_config():
+                    if hasattr(self._camera, "get_single_config") and hasattr(self._camera, "set_single_config"):
+                        child = self._camera.get_single_config(child_name)
+                        child.set_value(val_str)
+                        self._camera.set_single_config(child_name, child)
+                    else:
+                        config = self._camera.get_config()
+                        child = self._find_widget_recursive(config, child_name)
+                        if child is None:
+                            raise Exception(f"Widget '{child_name}' not found on camera")
+                        child.set_value(val_str)
+                        self._camera.set_config(config)
+
+                await asyncio.to_thread(_apply_config)
                 setattr(self, param, val_str)
                 logger.info(f"Updated camera config '{param}' -> '{val_str}'")
                 return {"status": "OK", "param": param, "value": val_str}
@@ -345,25 +377,35 @@ class CameraManager:
         async with self._lock:
             def _drive_focus():
                 try:
-                    config = self._camera.get_config()
-                    widget, widget_name = self._find_focus_widget(config)
+                    widget = None
+                    widget_name = None
+                    choices = []
+
+                    # 1. Prefer get_single_config for manualfocusdrive
+                    if hasattr(self._camera, "get_single_config") and hasattr(self._camera, "set_single_config"):
+                        for cand in ["manualfocusdrive", "focusdrive"]:
+                            try:
+                                w = self._camera.get_single_config(cand)
+                                if w is not None:
+                                    widget = w
+                                    widget_name = cand
+                                    break
+                            except Exception:
+                                pass
+
+                    # 2. Fallback to searching full tree if single config didn't find it
+                    full_cfg = None
+                    if widget is None:
+                        full_cfg = self._camera.get_config()
+                        widget, widget_name = self._find_focus_widget(full_cfg)
 
                     if widget is None or widget_name is None:
-                        # Extract list of available names for debugging
-                        all_widgets = []
-                        self._extract_widgets_recursive(config, all_widgets)
-                        avail_names = [w["name"] for w in all_widgets[:30]]
-                        names_summary = ", ".join(avail_names)
                         return {
                             "status": "ERROR",
-                            "message": (
-                                f"Camera does not expose a focus drive widget. "
-                                f"(Found {len(all_widgets)} widgets: {names_summary}...)"
-                            ),
+                            "message": "Camera does not expose a focus drive widget.",
                             "hint": "Check /debug/camera widget tree to view available controls.",
                         }
 
-                    choices = []
                     try:
                         count = widget.count_choices()
                         for i in range(count):
@@ -374,20 +416,20 @@ class CameraManager:
                     target_val = drive_str
                     if choices:
                         matched = False
-                        # 1. Exact / case-insensitive match
+                        # Exact / case-insensitive match
                         for c in choices:
                             if c.lower() == drive_str.lower():
                                 target_val = c
                                 matched = True
                                 break
-                        # 2. Direction & step_size substring match
+                        # Direction & step_size substring match
                         if not matched:
                             for c in choices:
                                 if direction in c.lower() and str(step_size) in c:
                                     target_val = c
                                     matched = True
                                     break
-                        # 3. Signed integer string match (-3..+3)
+                        # Signed integer match (-3..+3)
                         if not matched:
                             signed_str = f"-{step_size}" if direction == "far" else str(step_size)
                             for c in choices:
@@ -402,7 +444,33 @@ class CameraManager:
                         val_num = step_size if direction == "near" else -step_size
                         widget.set_value(val_num)
 
-                    self._camera.set_config(config)
+                    # Apply via single config if available to avoid sending full tree
+                    if hasattr(self._camera, "set_single_config") and widget_name:
+                        self._camera.set_single_config(widget_name, widget)
+                    elif full_cfg is not None:
+                        self._camera.set_config(full_cfg)
+                    else:
+                        cfg = self._camera.get_config()
+                        w = self._find_widget_recursive(cfg, widget_name)
+                        if w:
+                            w.set_value(target_val)
+                            self._camera.set_config(cfg)
+
+                    # Allow mechanical lens DC motor travel to settle before returning
+                    settle_sec = 0.25 if step_size == 1 else (0.35 if step_size == 2 else 0.5)
+                    try:
+                        context = gp.Context()
+                        t_end = time.time() + settle_sec
+                        while time.time() < t_end:
+                            evt_type, _ = self._camera.wait_for_event(50, context)
+                            if evt_type == gp.GP_EVENT_TIMEOUT:
+                                pass
+                    except Exception:
+                        time.sleep(settle_sec)
+
+                    # Note: Do NOT set manualfocusdrive="None".
+                    # In Canon PTP, manualfocusdrive is an action trigger that automatically resets.
+
                     logger.info(f"Manual focus step applied: widget={widget_name}, value={target_val}")
                     return {
                         "status": "OK",
@@ -532,6 +600,17 @@ class CameraManager:
 
             return await asyncio.to_thread(_set)
 
+    @staticmethod
+    def _estimate_exposure_seconds(shutter_speed_str: str) -> float:
+        try:
+            s = str(shutter_speed_str).strip().lower()
+            if "/" in s:
+                parts = s.split("/", 1)
+                return float(parts[0]) / float(parts[1])
+            return float(s)
+        except Exception:
+            return 0.5
+
     async def trigger_capture(self, filename: str | None = None, target_dir: str | None = None) -> dict[str, Any]:
         """Trigger shutter release and save photo preserving real camera extension."""
         if not self.is_connected or not self._camera:
@@ -546,13 +625,25 @@ class CameraManager:
 
                 def _do_gphoto_capture():
                     file_path = None
+                    used_eos_mf = False
 
                     # 1. On Canon EOS cameras, use 'Press Full MF' to release shutter without triggering AF
                     try:
-                        config = self._camera.get_config()
-                        eos_release = self._find_widget_recursive(config, "eosremoterelease")
+                        eos_release = None
+                        choices = []
+
+                        if hasattr(self._camera, "get_single_config") and hasattr(self._camera, "set_single_config"):
+                            try:
+                                eos_release = self._camera.get_single_config("eosremoterelease")
+                            except Exception:
+                                eos_release = None
+
+                        full_cfg = None
+                        if eos_release is None:
+                            full_cfg = self._camera.get_config()
+                            eos_release = self._find_widget_recursive(full_cfg, "eosremoterelease")
+
                         if eos_release is not None:
-                            choices = []
                             try:
                                 for i in range(eos_release.count_choices()):
                                     choices.append(str(eos_release.get_choice(i)))
@@ -560,41 +651,72 @@ class CameraManager:
                                 pass
 
                             if "Press Full MF" in choices:
+                                used_eos_mf = True
                                 logger.info("Triggering shutter via Canon EOS remoterelease 'Press Full MF' (pure manual focus release)...")
-                                eos_release.set_value("Press Full MF")
-                                self._camera.set_config(config)
-
-                                # Release shutter button
-                                time.sleep(0.05)
                                 try:
-                                    config = self._camera.get_config()
-                                    eos_release = self._find_widget_recursive(config, "eosremoterelease")
-                                    if eos_release:
-                                        eos_release.set_value("Release Full")
-                                        self._camera.set_config(config)
-                                except Exception as e:
-                                    logger.warning(f"Could not reset eosremoterelease: {e}")
+                                    pre_ctx = gp.Context()
+                                    t_pre = time.time() + 0.1
+                                    while time.time() < t_pre:
+                                        evt, _ = self._camera.wait_for_event(20, pre_ctx)
+                                        if evt == gp.GP_EVENT_TIMEOUT:
+                                            break
+                                except Exception:
+                                    pass
+
+                                eos_release.set_value("Press Full MF")
+                                if hasattr(self._camera, "set_single_config"):
+                                    self._camera.set_single_config("eosremoterelease", eos_release)
+                                elif full_cfg is not None:
+                                    self._camera.set_config(full_cfg)
+                                else:
+                                    cfg = self._camera.get_config()
+                                    w = self._find_widget_recursive(cfg, "eosremoterelease")
+                                    if w:
+                                        w.set_value("Press Full MF")
+                                        self._camera.set_config(cfg)
 
                                 # Wait for GP_EVENT_FILE_ADDED event
+                                # Dynamically scale timeout based on exposure time
+                                exp_sec = self._estimate_exposure_seconds(self.shutter_speed)
+                                max_wait = max(15.0, exp_sec * 2.5 + 8.0)
                                 context = gp.Context()
                                 start_wait = time.time()
-                                while time.time() - start_wait < 15.0:
-                                    evt_type, evt_data = self._camera.wait_for_event(100, context)
-                                    if evt_type == gp.GP_EVENT_FILE_ADDED:
-                                        file_path = evt_data
-                                        break
+                                try:
+                                    while time.time() - start_wait < max_wait:
+                                        evt_type, evt_data = self._camera.wait_for_event(100, context)
+                                        if evt_type == gp.GP_EVENT_FILE_ADDED:
+                                            file_path = evt_data
+                                            break
+                                finally:
+                                    # ALWAYS release the shutter button completely using 'Release'
+                                    try:
+                                        rel_val = "Release" if "Release" in choices else "Release Full"
+                                        if hasattr(self._camera, "get_single_config") and hasattr(self._camera, "set_single_config"):
+                                            rel_w = self._camera.get_single_config("eosremoterelease")
+                                            rel_w.set_value(rel_val)
+                                            self._camera.set_single_config("eosremoterelease", rel_w)
+                                        else:
+                                            cfg = self._camera.get_config()
+                                            rel_w = self._find_widget_recursive(cfg, "eosremoterelease")
+                                            if rel_w:
+                                                rel_w.set_value(rel_val)
+                                                self._camera.set_config(cfg)
+                                    except Exception as e:
+                                        logger.warning(f"Could not reset eosremoterelease: {e}")
 
-                                # Drain post-capture property events so camera state is clean
-                                drain_start = time.time()
-                                while time.time() - drain_start < 2.0:
-                                    evt_type, _ = self._camera.wait_for_event(50, context)
-                                    if evt_type == gp.GP_EVENT_TIMEOUT:
-                                        break
+                                    # Drain post-capture property events so camera state is clean
+                                    drain_start = time.time()
+                                    while time.time() - drain_start < 2.0:
+                                        evt_type, _ = self._camera.wait_for_event(50, context)
+                                        if evt_type == gp.GP_EVENT_TIMEOUT:
+                                            break
                     except Exception as e:
-                        logger.warning(f"Canon EOS Press Full MF capture failed: {e}. Falling back to standard capture.")
+                        logger.warning(f"Canon EOS Press Full MF capture failed: {e}")
 
-                    # 2. Fallback to standard capture if eosremoterelease was not available or produced no file
+                    # 2. Fallback: NEVER fallback to camera.capture if Press Full MF was attempted
                     if file_path is None:
+                        if used_eos_mf:
+                            raise Exception(f"Canon EOS capture timed out waiting for image event (exposure: {self.shutter_speed}s)")
                         file_path = self._camera.capture(gp.GP_CAPTURE_IMAGE)
 
                     cam_ext = os.path.splitext(file_path.name)[1].lower() or ".jpg"
