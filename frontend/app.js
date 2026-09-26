@@ -3294,11 +3294,13 @@ function updateDarkroomShots(shots) {
             const ctx = canvas.getContext("2d");
             if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
+        renderDarkroomHistoryStrip();
         return;
     }
 
     // Default to the most recent snapshot (index 0 from backend)
     renderDarkroomShot(0);
+    renderDarkroomHistoryStrip();
 }
 
 function renderDarkroomShot(index) {
@@ -3356,6 +3358,7 @@ function renderDarkroomShot(index) {
         }
     };
     img.src = thumbUrl;
+    updateDarkroomHistoryActive(index);
 }
 
 function navigateDarkroomShot(delta) {
@@ -3373,6 +3376,111 @@ function navigateDarkroomShot(delta) {
 
 function openActiveDarkroomInModal() {
     // Inspection modal removed for simplicity
+}
+
+let darkroomHistoryExpanded = false;
+
+function toggleDarkroomHistoryExpansion() {
+    darkroomHistoryExpanded = !darkroomHistoryExpanded;
+    renderDarkroomHistoryStrip();
+}
+
+function renderDarkroomHistoryStrip() {
+    const section = document.getElementById("darkroomHistorySection");
+    const container = document.getElementById("darkroomHistoryStrip");
+    const toggleBtn = document.getElementById("btnToggleDarkroomHistory");
+    if (!section || !container) return;
+
+    if (!darkroomShots || darkroomShots.length === 0) {
+        section.style.display = "none";
+        container.innerHTML = "";
+        return;
+    }
+
+    section.style.display = "block";
+    const total = darkroomShots.length;
+
+    if (toggleBtn) {
+        if (total > 3) {
+            toggleBtn.style.display = "inline-flex";
+            toggleBtn.innerHTML = darkroomHistoryExpanded
+                ? "Show Last 3 ▲"
+                : `All (${total}) ▼`;
+        } else {
+            toggleBtn.style.display = "none";
+        }
+    }
+
+    container.className = darkroomHistoryExpanded ? "darkroom-history-strip expanded" : "darkroom-history-strip";
+    container.innerHTML = "";
+
+    const visibleShots = darkroomHistoryExpanded ? darkroomShots : darkroomShots.slice(0, 3);
+
+    visibleShots.forEach((shot, sliceIdx) => {
+        const actualIdx = sliceIdx;
+        const shotId = shot.id || shot.shot_id || shot.artifact_id;
+        const cacheBust = encodeURIComponent(shot.created_at || shotId);
+        const thumbUrl = `${API_BASE}/api/plans/${activePlan.id}/test-shots/${shotId}/artifacts/preview.jpg?quality=fast&t=${cacheBust}`;
+
+        const shotNum = total - actualIdx;
+        const shutter = shot.observed_settings?.shutter_speed || shot.camera_settings?.shutter_speed || shot.requested_settings?.shutter_speed || "1/125";
+        const ap = shot.observed_settings?.aperture || shot.camera_settings?.aperture || shot.requested_settings?.aperture || "4.5";
+        const iso = shot.observed_settings?.iso || shot.camera_settings?.iso || shot.requested_settings?.iso || "400";
+        const timeStr = shot.created_at ? new Date(shot.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : `#${shotNum}`;
+        const isLatest = actualIdx === 0;
+        const isActive = actualIdx === darkroomActiveIndex;
+
+        const card = document.createElement("div");
+        card.className = `darkroom-thumb-item ${isActive ? "active" : ""}`;
+        card.dataset.index = actualIdx;
+        card.onclick = () => renderDarkroomShot(actualIdx);
+
+        card.innerHTML = `
+            <div class="thumb-img-wrapper">
+                <img src="${thumbUrl}" alt="Snapshot ${shotNum}" loading="lazy" />
+                <span class="thumb-badge ${isLatest ? "latest" : ""}">${isLatest ? "Latest" : `#${shotNum}`}</span>
+                <button class="thumb-delete-btn" title="Delete snapshot" onclick="deleteDarkroomSnapshot(${actualIdx}, event)">✕</button>
+            </div>
+            <div class="thumb-meta">
+                <span class="thumb-time">${timeStr}</span>
+                <span class="thumb-exp">${shutter} f/${ap} ISO ${iso}</span>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+function updateDarkroomHistoryActive(index) {
+    const items = document.querySelectorAll(".darkroom-thumb-item");
+    items.forEach(el => {
+        const idx = parseInt(el.dataset.index, 10);
+        if (idx === index) {
+            el.classList.add("active");
+        } else {
+            el.classList.remove("active");
+        }
+    });
+}
+
+async function deleteDarkroomSnapshot(idx, event) {
+    if (event) event.stopPropagation();
+    if (!darkroomShots || idx < 0 || idx >= darkroomShots.length) return;
+    const shot = darkroomShots[idx];
+    if (!shot) return;
+    const sId = shot.id || shot.shot_id || shot.artifact_id;
+    if (!confirm("Delete this snapshot?")) return;
+    try {
+        const res = await fetch(`${API_BASE}/api/plans/${activePlan.id}/test-shots/${sId}`, {
+            method: "DELETE"
+        });
+        if (res.ok) {
+            await loadTestShotsList();
+        } else {
+            alert("Failed to delete snapshot.");
+        }
+    } catch (e) {
+        console.error("Delete snapshot error:", e);
+    }
 }
 
 function drawDarkroomCanvas() {

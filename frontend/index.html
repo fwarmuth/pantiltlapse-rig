@@ -784,6 +784,17 @@
                     <div class="darkroom-hint">
                         <span>💡 <em>Click anywhere on a star to zoom 5x. Adjust lens focus on the left, then take another snapshot.</em></span>
                     </div>
+
+                    <!-- Snapshot History Strip -->
+                    <div class="darkroom-history-section" id="darkroomHistorySection" style="display:none;">
+                        <div class="darkroom-history-header">
+                            <span class="darkroom-history-title">Snapshot History</span>
+                            <button class="btn btn-xs btn-secondary" id="btnToggleDarkroomHistory" onclick="toggleDarkroomHistoryExpansion()" style="display:none;">
+                                All (0) ▼
+                            </button>
+                        </div>
+                        <div class="darkroom-history-strip" id="darkroomHistoryStrip"></div>
+                    </div>
                 </div>
 
                 <div class="card studio-station-card">

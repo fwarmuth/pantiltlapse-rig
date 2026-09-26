@@ -2759,6 +2759,149 @@ body {
     padding: 2px 0;
 }
 
+/* Snapshot History Strip in Darkroom */
+.darkroom-history-section {
+    margin-top: 6px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.darkroom-history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.darkroom-history-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.darkroom-history-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    transition: all 0.2s ease-in-out;
+}
+
+.darkroom-history-strip.expanded {
+    grid-template-columns: repeat(3, 1fr);
+    max-height: 220px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.darkroom-thumb-item {
+    background: #020617;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+.darkroom-thumb-item:hover {
+    border-color: rgba(56, 189, 248, 0.5);
+    transform: translateY(-1px);
+}
+
+.darkroom-thumb-item.active {
+    border-color: #38bdf8;
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+}
+
+.thumb-img-wrapper {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    background: #0f172a;
+    overflow: hidden;
+}
+
+.thumb-img-wrapper img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.thumb-badge {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    background: rgba(15, 23, 42, 0.85);
+    color: #cbd5e1;
+    font-size: 0.6rem;
+    font-weight: 600;
+    padding: 1px 4px;
+    border-radius: 3px;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.thumb-badge.latest {
+    background: rgba(14, 165, 233, 0.85);
+    color: #ffffff;
+    font-weight: 700;
+    border: 1px solid rgba(56, 189, 248, 0.5);
+}
+
+.thumb-delete-btn {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    background: rgba(239, 68, 68, 0.85);
+    color: white;
+    border: none;
+    border-radius: 3px;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.darkroom-thumb-item:hover .thumb-delete-btn {
+    opacity: 1;
+}
+
+.thumb-delete-btn:hover {
+    background: #dc2626;
+}
+
+.thumb-meta {
+    padding: 3px 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: rgba(15, 23, 42, 0.6);
+}
+
+.thumb-time {
+    font-size: 0.64rem;
+    font-weight: 600;
+    color: #e2e8f0;
+}
+
+.thumb-exp {
+    font-size: 0.58rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* Mobile Adaptation for Step 4 */
 @media (max-width: 1040px) {
     body.step-4-active .studio-layout {
