@@ -34,6 +34,7 @@ class CameraManager:
         self.aperture = "5.6"
         self.white_balance = "Auto"
         self.focus_mode = "Unknown"
+        self._pending_focus_actions: list[str] = []
         self.latest_photo_path: str | None = None
         self.last_capture_time: float = 0.0
 
@@ -470,6 +471,7 @@ class CameraManager:
 
                     # Note: Do NOT set manualfocusdrive="None".
                     # In Canon PTP, manualfocusdrive is an action trigger that automatically resets.
+                    self._pending_focus_actions.append(f"{direction.capitalize()} {step_size}")
 
                     logger.info(f"Manual focus step applied: widget={widget_name}, value={target_val}")
                     return {
@@ -871,6 +873,17 @@ class CameraManager:
     async def reconnect(self) -> bool:
         """Alias for restart()."""
         return await self.restart()
+
+    def consume_pending_focus_change(self) -> dict[str, Any]:
+        """Consume and summarize all focus commands executed since the prior snapshot."""
+        actions = list(self._pending_focus_actions)
+        self._pending_focus_actions.clear()
+        if not actions:
+            return {"actions": [], "summary": "Unchanged", "has_change": False}
+        from collections import Counter
+        counts = Counter(actions)
+        summary = ", ".join(f"{k} (x{v})" if v > 1 else k for k, v in counts.items())
+        return {"actions": actions, "summary": summary, "has_change": True}
 
     def get_status(self) -> dict[str, Any]:
         return {

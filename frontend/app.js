@@ -65,12 +65,51 @@ let sseEventSource = null;
 let httpPollingInterval = null;
 
 // ==========================================================================
+// Toast Notification & Server State Sync System
+// ==========================================================================
+
+function showToast(message, type = "info", duration = 3500) {
+    const container = document.getElementById("toastContainer");
+    if (!container) return;
+    const toast = document.createElement("div");
+    toast.className = `toast toast-${type}`;
+    const icon = type === "success" ? "✅" : type === "warning" ? "⚠️" : type === "error" ? "❌" : "ℹ️";
+    toast.innerHTML = `<span style="font-size:1.1rem;">${icon}</span><span>${message}</span>`;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = "0";
+        toast.style.transform = "translateY(8px)";
+        setTimeout(() => toast.remove(), 250);
+    }, duration);
+}
+
+let appStateSyncTimer = null;
+function syncAppStateToServer(partialState) {
+    clearTimeout(appStateSyncTimer);
+    appStateSyncTimer = setTimeout(async () => {
+        try {
+            await fetch(`${API_BASE}/api/app/state`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(partialState)
+            });
+        } catch (e) {
+            console.warn("Failed to sync app state to server:", e);
+        }
+    }, 250);
+}
+
+// ==========================================================================
 // 1. Wizard Step Navigation
 // ==========================================================================
 
-function goToStep(stepNum) {
+function goToStep(stepNum, shouldSyncServer = true) {
     if (stepNum < 1 || stepNum > 5) return;
     currentStep = stepNum;
+
+    if (shouldSyncServer) {
+        syncAppStateToServer({ active_step: stepNum });
+    }
 
     // Update Stepper Nav Buttons
     for (let i = 1; i <= 5; i++) {
@@ -91,6 +130,7 @@ function goToStep(stepNum) {
     if (stepNum === 1) {
         // Step 1: Framing
         updateKeyframeRigBadges();
+        updateZeroCalibrationUI();
     } else if (stepNum === 2) {
         // Step 2: Sequence Plan
         syncPlanInputs();
@@ -109,6 +149,7 @@ function goToStep(stepNum) {
     } else if (stepNum === 5) {
         // Step 5: Review & Execution
         updatePreFlightChecklist();
+        updateZeroCalibrationUI();
         updateExecutionSummary();
         updateMiniTrajectoryProgress();
         renderPosesTable();
@@ -197,6 +238,7 @@ function updateTelemetryData(data) {
                 text.textContent = "ZERO UNCONFIRMED";
             }
         }
+        updateZeroCalibrationUI();
     }
 
     // Motors Status
@@ -380,7 +422,7 @@ function getStepSize() {
     return currentStepSize;
 }
 
-function setStepSize(deg) {
+function setStepSize(deg, shouldSyncServer = true) {
     currentStepSize = deg;
     const buttons = document.querySelectorAll("#jogStepSegments .segment");
     buttons.forEach((btn) => {
@@ -390,6 +432,9 @@ function setStepSize(deg) {
     const selEnlarged = document.getElementById("enlargedJogStep");
     if (selEnlarged) {
         selEnlarged.value = String(deg);
+    }
+    if (shouldSyncServer) {
+        syncAppStateToServer({ jog_step_deg: deg });
     }
 }
 
@@ -459,6 +504,64 @@ async function moveAbsolute(pan, tilt) {
     }
 }
 
+async function goHome() {
+    if (!zeroConfirmed) {
+        showToast("Cannot Go Home: Zero Origin is unconfirmed. Set origin in Step 1 first.", "warning");
+        goToStep(1);
+        return;
+    }
+    showToast("🏠 Moving rig to Origin (0.00°, 0.00°)...", "info");
+    await moveAbsolute(0.0, 0.0);
+}
+
+function updateZeroCalibrationUI() {
+    const unconfirmedSec = document.getElementById("zeroUnconfirmedSection");
+    const confirmedSec = document.getElementById("zeroConfirmedSection");
+    const badge = document.getElementById("step1ZeroStatusBadge");
+    const warningBanner = document.getElementById("execZeroWarningBanner");
+    const btnStartExec = document.getElementById("btnStartExecution");
+
+    if (badge) {
+        badge.textContent = zeroConfirmed ? "ORIGIN LOCKED" : "UNCONFIRMED";
+        badge.className = zeroConfirmed ? "badge success" : "badge danger";
+    }
+    if (unconfirmedSec) unconfirmedSec.classList.toggle("hidden", zeroConfirmed);
+    if (confirmedSec) confirmedSec.classList.toggle("hidden", !zeroConfirmed);
+    if (warningBanner) warningBanner.classList.toggle("hidden", zeroConfirmed || executionActive);
+    if (btnStartExec && !executionActive) {
+        btnStartExec.disabled = !zeroConfirmed;
+        if (!zeroConfirmed) {
+            btnStartExec.title = "Coordinate zero origin is unconfirmed. Please calibrate in Step 1.";
+        } else {
+            btnStartExec.title = "Start time-lapse sequence capture";
+        }
+    }
+}
+
+function handleZeroBadgeClick() {
+    if (!zeroConfirmed) {
+        goToStep(1);
+        showToast("Please position your rig and lock origin in Step 1", "info");
+    } else {
+        showToast("✅ Coordinate Zero is calibrated and locked at (0.00°, 0.00°)", "info");
+    }
+}
+
+function requestRecalibrateZero() {
+    const modal = document.getElementById("recalibrateModal");
+    if (modal) modal.classList.remove("hidden");
+}
+
+function closeRecalibrateModal() {
+    const modal = document.getElementById("recalibrateModal");
+    if (modal) modal.classList.add("hidden");
+}
+
+async function executeRecalibrateZero() {
+    closeRecalibrateModal();
+    await confirmZeroReference();
+}
+
 async function confirmZeroReference() {
     try {
         const res = await fetch(`${API_BASE}/api/rig/confirm-zero`, { method: "POST" });
@@ -473,6 +576,7 @@ async function confirmZeroReference() {
             if (tiltEl) tiltEl.textContent = "0.00°";
             updateTelemetryData({ reference: data.reference, motors: data.motors });
             updateKeyframeRigBadges();
+            updateZeroCalibrationUI();
             recordReachedPose({
                 type: "ZERO",
                 shotNum: "Origin",
@@ -481,10 +585,13 @@ async function confirmZeroReference() {
                 actualPan: 0.0,
                 actualTilt: 0.0
             });
-            alert("🎯 Origin reset to current position (0.00°, 0.00°) & Zero Reference Confirmed!");
+            showToast("🎯 Origin set to (0.00°, 0.00°) & Zero Reference Locked!", "success");
+        } else {
+            showToast(data.detail?.message || "Failed to confirm zero reference", "error");
         }
     } catch (err) {
         console.error("Confirm zero failed:", err);
+        showToast("Error connecting to rig to confirm zero", "error");
     }
 }
 
@@ -503,6 +610,13 @@ async function toggleDrivers() {
         const data = await res.json();
         if (data.status === "OK") {
             driversEnabled = targetState;
+            if (!targetState) {
+                zeroConfirmed = false;
+                updateZeroCalibrationUI();
+                showToast("⚠️ Drivers disabled: Coordinate zero invalidated. Calibrate in Step 1 after positioning.", "warning");
+            } else {
+                showToast("⚡ Drivers enabled. Please confirm zero origin in Step 1.", "info");
+            }
             updateTelemetryData({
                 motors: { drivers_enabled: targetState, connected: motorsConnected, pan: latestPan, tilt: latestTilt },
                 reference: data.reference
@@ -510,6 +624,7 @@ async function toggleDrivers() {
         }
     } catch (err) {
         console.error("Toggle drivers failed:", err);
+        showToast("Failed to toggle motor drivers", "error");
     }
 }
 
@@ -1068,7 +1183,34 @@ async function triggerPlanTestShotFromEnlarged() {
     await triggerPlanTestShot();
 }
 
-function updateEnhancementSettings() {
+function applyFilterSettingsToUI() {
+    const selMode = document.getElementById("selEnhanceMode");
+    const sGain = document.getElementById("sliderGain");
+    const sContrast = document.getElementById("sliderContrast");
+    const sClip = document.getElementById("sliderClipLimit");
+
+    if (selMode) selMode.value = enhanceMode;
+    if (sGain) sGain.value = filterGain;
+    if (sContrast) sContrast.value = filterContrast;
+    if (sClip) sClip.value = filterClipLimit;
+
+    const lblG = document.getElementById("lblValGain");
+    const lblC = document.getElementById("lblValContrast");
+    const lblClip = document.getElementById("lblValClip");
+
+    if (lblG) lblG.textContent = `${filterGain.toFixed(1)}x`;
+    if (lblC) lblC.textContent = `${filterContrast.toFixed(1)}x`;
+    if (lblClip) lblClip.textContent = `${filterClipLimit.toFixed(1)}`;
+
+    const selEnlarged = document.getElementById("selEnlargedEnhanceMode");
+    const sGainEnlarged = document.getElementById("sliderEnlargedGain");
+    const sContrastEnlarged = document.getElementById("sliderEnlargedContrast");
+    if (selEnlarged) selEnlarged.value = enhanceMode;
+    if (sGainEnlarged) sGainEnlarged.value = filterGain;
+    if (sContrastEnlarged) sContrastEnlarged.value = filterContrast;
+}
+
+function updateEnhancementSettings(shouldSyncServer = true) {
     const selMode = document.getElementById("selEnhanceMode");
     const sGain = document.getElementById("sliderGain");
     const sContrast = document.getElementById("sliderContrast");
@@ -1079,21 +1221,17 @@ function updateEnhancementSettings() {
     if (sContrast) filterContrast = parseFloat(sContrast.value);
     if (sClip) filterClipLimit = parseFloat(sClip.value);
 
-    const lblG = document.getElementById("lblValGain");
-    const lblC = document.getElementById("lblValContrast");
-    const lblClip = document.getElementById("lblValClip");
+    applyFilterSettingsToUI();
 
-    if (lblG) lblG.textContent = `${filterGain.toFixed(1)}x`;
-    if (lblC) lblC.textContent = `${filterContrast.toFixed(1)}x`;
-    if (lblClip) lblClip.textContent = `${filterClipLimit.toFixed(1)}`;
-
-    // Mirror to enlarged controls
-    const selEnlarged = document.getElementById("selEnlargedEnhanceMode");
-    const sGainEnlarged = document.getElementById("sliderEnlargedGain");
-    const sContrastEnlarged = document.getElementById("sliderEnlargedContrast");
-    if (selEnlarged) selEnlarged.value = enhanceMode;
-    if (sGainEnlarged) sGainEnlarged.value = filterGain;
-    if (sContrastEnlarged) sContrastEnlarged.value = filterContrast;
+    if (shouldSyncServer) {
+        syncAppStateToServer({
+            filter_settings: {
+                mode: enhanceMode,
+                gain: filterGain,
+                contrast: filterContrast
+            }
+        });
+    }
 }
 
 /**
@@ -1299,19 +1437,24 @@ function drawChannelCurve(ctx, histArray, maxCount, w, h, color) {
 // 5. Step 2: Sequence Plan CRUD
 // ==========================================================================
 
+function populatePlansDropdown(plans) {
+    const select = document.getElementById("selectPlan");
+    if (!select) return;
+    select.innerHTML = '<option value="">-- Create or Select Sequence Plan --</option>';
+    plans.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = `${p.name} (Rev ${p.revision}, ${p.total_shots} shots)`;
+        select.appendChild(opt);
+    });
+}
+
 async function loadPlansList() {
     try {
         const res = await fetch(`${API_BASE}/api/plans`);
         if (res.ok) {
             const plans = await res.json();
-            const select = document.getElementById("selectPlan");
-            select.innerHTML = '<option value="">-- Create or Select Sequence Plan --</option>';
-            plans.forEach((p) => {
-                const opt = document.createElement("option");
-                opt.value = p.id;
-                opt.textContent = `${p.name} (Rev ${p.revision}, ${p.total_shots} shots)`;
-                select.appendChild(opt);
-            });
+            populatePlansDropdown(plans);
 
             if (!activePlan && plans.length > 0) {
                 onPlanSelected(plans[0].id);
@@ -1322,7 +1465,7 @@ async function loadPlansList() {
     }
 }
 
-async function onPlanSelected(planId) {
+async function onPlanSelected(planId, shouldSyncServer = true) {
     if (!planId) {
         createNewPlan();
         return;
@@ -1333,9 +1476,16 @@ async function onPlanSelected(planId) {
             activePlan = await res.json();
             currentPanKeyframes = JSON.parse(JSON.stringify(activePlan.trajectory.pan_keyframes || []));
             currentTiltKeyframes = JSON.parse(JSON.stringify(activePlan.trajectory.tilt_keyframes || []));
+            const select = document.getElementById("selectPlan");
+            if (select && select.value !== planId) {
+                select.value = planId;
+            }
             syncPlanInputs();
             renderKeyframeTable();
             updateTrajectoryPreview();
+            if (shouldSyncServer) {
+                syncAppStateToServer({ active_plan_id: planId });
+            }
         }
     } catch (e) {
         console.error("Load plan detail error:", e);
@@ -1557,7 +1707,7 @@ async function deleteCurrentPlan() {
 // 6. Step 3: Key Poses & Interactive Trajectory Visualizer
 // ==========================================================================
 
-function switchTrackTab(track) {
+function switchTrackTab(track, shouldSyncServer = true) {
     activeTrackTab = track;
     document.getElementById("tabTrackPan")?.classList.toggle("active", track === "pan");
     document.getElementById("tabTrackTilt")?.classList.toggle("active", track === "tilt");
@@ -1575,14 +1725,22 @@ function switchTrackTab(track) {
 
     renderKeyframeTable();
     updateTrajectoryPreview();
+
+    if (shouldSyncServer) {
+        syncAppStateToServer({ active_track_tab: track });
+    }
 }
 
-function setCurveFilter(filter) {
+function setCurveFilter(filter, shouldSyncServer = true) {
     curveFilter = filter;
     document.getElementById("btnFilterAll")?.classList.toggle("active", filter === "all");
     document.getElementById("btnFilterPan")?.classList.toggle("active", filter === "pan");
     document.getElementById("btnFilterTilt")?.classList.toggle("active", filter === "tilt");
     updateTrajectoryPreview();
+
+    if (shouldSyncServer) {
+        syncAppStateToServer({ curve_filter: filter });
+    }
 }
 
 function selectKeyframe(track, idx) {
@@ -2936,8 +3094,13 @@ function setupCurveEventListeners() {
 // --------------------------------------------------------------------------
 
 async function startDryRun() {
+    if (!zeroConfirmed) {
+        showToast("⚠️ Cannot start Dry Run: Coordinate zero origin is unconfirmed. Calibrate in Step 1.", "error");
+        goToStep(1);
+        return;
+    }
     if (!activePlan) {
-        alert("Please save your sequence plan first.");
+        showToast("Please save your sequence plan first.", "warning");
         return;
     }
     try {
@@ -2947,11 +3110,13 @@ async function startDryRun() {
             dryRunActive = true;
             document.getElementById("badgeReportStatus").textContent = "Clearance: REHEARSING...";
             document.getElementById("badgeReportStatus").className = "badge";
+            showToast("🚀 Motion clearance test (Dry Run) started", "info");
         } else {
-            alert(data.detail?.message || "Dry run start failed");
+            showToast(data.detail?.message || "Dry run start failed", "error");
         }
     } catch (e) {
         console.error("Dry run start error:", e);
+        showToast("Error starting dry run", "error");
     }
 }
 
@@ -3338,6 +3503,16 @@ function renderDarkroomShot(index) {
         paramsEl.textContent = `${shutter} | f/${ap} | ISO ${iso} | WB ${wb}`;
     }
 
+    const fc = shot.focus_change || shot.extra_metadata?.focus_change;
+    const hasChange = fc?.has_change ?? (fc?.actions && fc.actions.length > 0);
+    const fcSummary = fc?.summary || (hasChange ? fc.actions.join(", ") : "Unchanged");
+    const fcEl = document.getElementById("lblDarkroomFocusChange");
+    if (fcEl) {
+        fcEl.textContent = hasChange ? `🎯 Focus: ${fcSummary}` : `🎯 Focus: Unchanged`;
+        fcEl.style.color = hasChange ? "#38bdf8" : "#94a3b8";
+        fcEl.style.borderColor = hasChange ? "rgba(56,189,248,0.5)" : "rgba(148,163,184,0.3)";
+    }
+
     const placeholder = document.getElementById("darkroomPlaceholder");
     if (placeholder) placeholder.classList.add("hidden");
 
@@ -3430,6 +3605,12 @@ function renderDarkroomHistoryStrip() {
         const isLatest = actualIdx === 0;
         const isActive = actualIdx === darkroomActiveIndex;
 
+        const fc = shot.focus_change || shot.extra_metadata?.focus_change;
+        const hasChange = fc?.has_change ?? (fc?.actions && fc.actions.length > 0);
+        const fcSummary = fc?.summary || (hasChange ? fc.actions.join(", ") : "No change");
+        const badgeClass = hasChange ? "thumb-focus-tag changed" : "thumb-focus-tag unchanged";
+        const focusTagHtml = `<span class="${badgeClass}" title="Focus adjustments made before this shot">🎯 ${fcSummary}</span>`;
+
         const card = document.createElement("div");
         card.className = `darkroom-thumb-item ${isActive ? "active" : ""}`;
         card.dataset.index = actualIdx;
@@ -3444,6 +3625,7 @@ function renderDarkroomHistoryStrip() {
             <div class="thumb-meta">
                 <span class="thumb-time">${timeStr}</span>
                 <span class="thumb-exp">${shutter} f/${ap} ISO ${iso}</span>
+                ${focusTagHtml}
             </div>
         `;
         container.appendChild(card);
@@ -4020,8 +4202,9 @@ function updateExecutionSummary() {
 
 async function startSequenceExecution() {
     if (!zeroConfirmed) {
-        const proceed = confirm("⚠️ Origin is unconfirmed. Do you wish to start the sequence anyway?");
-        if (!proceed) return;
+        showToast("⚠️ Cannot start sequence: Coordinate zero origin is unconfirmed. Calibrate in Step 1.", "error");
+        goToStep(1);
+        return;
     }
 
     const total = parseInt(document.getElementById("planTotalShots")?.value, 10) || activePlan?.schedule?.total_shots || 20;
@@ -4083,11 +4266,13 @@ async function startSequenceExecution() {
             document.getElementById("btnCancelExecution").disabled = false;
             document.getElementById("liveRunStateBadge").textContent = "RUNNING";
             document.getElementById("liveRunStateBadge").className = "badge success";
+            showToast("🚀 Time-lapse capture sequence started!", "success");
         } else {
-            alert(data.detail?.message || "Failed to start time-lapse sequence");
+            showToast(data.detail?.message || "Failed to start time-lapse sequence", "error");
         }
     } catch (e) {
         console.error("Start execution error:", e);
+        showToast("Error starting time-lapse execution", "error");
     }
 }
 
@@ -4119,6 +4304,54 @@ async function cancelSequenceExecution() {
     } catch (e) {}
 }
 
+async function loadTimelapseCaptures() {
+    try {
+        const res = await fetch(`${API_BASE}/api/timelapse/captures`);
+        if (res.ok) {
+            const captures = await res.json();
+            if (captures && captures.length > 0) {
+                const gallery = document.getElementById("execLiveGallery");
+                if (gallery) gallery.innerHTML = "";
+                capturedPhotos = [];
+                for (const c of captures) {
+                    const photoObj = {
+                        shotIndex: c.shot_index,
+                        imgUrl: c.url,
+                        pan: c.pan ?? 0.0,
+                        tilt: c.tilt ?? 0.0,
+                        time: c.timestamp ? new Date(c.timestamp).toLocaleTimeString() : "--:--"
+                    };
+                    capturedPhotos.push(photoObj);
+                    if (gallery) {
+                        const item = document.createElement("div");
+                        item.className = "filmstrip-item";
+                        item.dataset.shot = c.shot_index;
+                        item.id = `filmstripItem_${c.shot_index}`;
+                        item.innerHTML = `
+                            <img class="filmstrip-thumb" src="${c.url}" alt="Shot ${c.shot_index}" />
+                            <div class="filmstrip-info">
+                                <span class="shot-num">#${c.shot_index}</span>
+                                <span>${(c.pan ?? 0).toFixed(0)}°/${(c.tilt ?? 0).toFixed(0)}°</span>
+                            </div>
+                        `;
+                        item.onclick = () => selectTimelineStep(c.shot_index);
+                        gallery.appendChild(item);
+                    }
+                }
+                const countEl = document.getElementById("execPhotoCount");
+                if (countEl) countEl.textContent = `${capturedPhotos.length} photos captured`;
+                const latest = capturedPhotos[capturedPhotos.length - 1];
+                if (latest) {
+                    lastCapturedShotIndex = latest.shotIndex;
+                    selectTimelineStep(latest.shotIndex);
+                }
+            }
+        }
+    } catch (e) {
+        console.warn("Could not load time-lapse captures:", e);
+    }
+}
+
 function updateTimelapseTelemetry(tl) {
     if (!tl) return;
 
@@ -4126,6 +4359,24 @@ function updateTimelapseTelemetry(tl) {
 
     if (tl.state === "RUNNING" || tl.state === "PAUSED") {
         executionActive = true;
+        executionPaused = (tl.state === "PAUSED");
+
+        const btnStart = document.getElementById("btnStartExecution");
+        const btnPause = document.getElementById("btnPauseExecution");
+        const btnCancel = document.getElementById("btnCancelExecution");
+        const badge = document.getElementById("liveRunStateBadge");
+
+        if (btnStart) btnStart.disabled = true;
+        if (btnPause) {
+            btnPause.disabled = false;
+            btnPause.textContent = executionPaused ? "▶️ Resume" : "⏸️ Pause";
+        }
+        if (btnCancel) btnCancel.disabled = false;
+        if (badge) {
+            badge.textContent = tl.state;
+            badge.className = executionPaused ? "badge warning" : "badge success";
+        }
+
         const currentShot = tl.current_shot ?? 0;
         currentExecutionShot = currentShot;
         const totalShots = tl.total_shots ?? 20;
@@ -4135,19 +4386,17 @@ function updateTimelapseTelemetry(tl) {
         document.getElementById("execProgressPct").textContent = `${pct}%`;
         document.getElementById("execCurrentShot").textContent = `${currentShot} / ${totalShots}`;
 
-        if (executionStartTime) {
-            const elapsed = Math.floor((Date.now() - executionStartTime) / 1000);
-            const em = Math.floor(elapsed / 60).toString().padStart(2, "0");
-            const es = (elapsed % 60).toString().padStart(2, "0");
-            document.getElementById("execElapsed").textContent = `${em}:${es}`;
+        const elapsed = Math.floor(tl.elapsed_time_s || (executionStartTime ? (Date.now() - executionStartTime) / 1000 : 0));
+        const em = Math.floor(elapsed / 60).toString().padStart(2, "0");
+        const es = (elapsed % 60).toString().padStart(2, "0");
+        const elElapsed = document.getElementById("execElapsed");
+        if (elElapsed) elElapsed.textContent = `${em}:${es}`;
 
-            if (currentShot > 0) {
-                const remaining = Math.max(0, Math.floor((elapsed / currentShot) * (totalShots - currentShot)));
-                const rm = Math.floor(remaining / 60).toString().padStart(2, "0");
-                const rs = (remaining % 60).toString().padStart(2, "0");
-                document.getElementById("execRemaining").textContent = `${rm}:${rs}`;
-            }
-        }
+        const remaining = Math.floor(tl.estimated_eta_s || 0);
+        const rm = Math.floor(remaining / 60).toString().padStart(2, "0");
+        const rs = (remaining % 60).toString().padStart(2, "0");
+        const elRem = document.getElementById("execRemaining");
+        if (elRem) elRem.textContent = `${rm}:${rs}`;
 
         if (currentShot > lastRecordedTimelapseShot && currentShot > 0) {
             lastRecordedTimelapseShot = currentShot;
@@ -4164,8 +4413,13 @@ function updateTimelapseTelemetry(tl) {
             });
         }
 
-        // Fetch latest preview image into live gallery
-        fetchLatestCapturedPreview(currentShot);
+        // If page reloaded and capturedPhotos is empty but shots were captured, rehydrate them
+        if (capturedPhotos.length === 0 && currentShot > 0) {
+            loadTimelapseCaptures();
+        } else {
+            // Fetch latest preview image into live gallery
+            fetchLatestCapturedPreview(currentShot);
+        }
     } else if (tl.state === "COMPLETED") {
         currentExecutionShot = tl.total_shots ?? 20;
         if (executionActive) {
@@ -4300,8 +4554,79 @@ window.addEventListener("DOMContentLoaded", async () => {
     initSSE();
     setupCurveEventListeners();
     setupKeyboardFramingShortcuts();
-    await loadPlansList();
-    goToStep(1);
+
+    // Concurrently fetch app state, plans, timelapse engine status, and rig reference status
+    const [appStateRes, plansRes, timelapseRes, rigRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/app/state`).then(r => r.ok ? r.json() : null),
+        fetch(`${API_BASE}/api/plans`).then(r => r.ok ? r.json() : []),
+        fetch(`${API_BASE}/api/timelapse/status`).then(r => r.ok ? r.json() : null),
+        fetch(`${API_BASE}/api/rig/status`).then(r => r.ok ? r.json() : null)
+    ]);
+
+    const savedState = appStateRes.status === "fulfilled" ? appStateRes.value : null;
+    const plans = plansRes.status === "fulfilled" ? plansRes.value : [];
+    const initialTl = timelapseRes.status === "fulfilled" ? timelapseRes.value : null;
+    const initialRig = rigRes.status === "fulfilled" ? rigRes.value : null;
+
+    if (initialRig && initialRig.reference) {
+        zeroConfirmed = initialRig.reference.confirmed === true;
+        const badge = document.getElementById("zeroRefBadge");
+        const text = document.getElementById("zeroRefText");
+        if (badge && text) {
+            badge.className = zeroConfirmed ? "status-badge confirmed" : "status-badge unconfirmed";
+            text.textContent = zeroConfirmed ? "ZERO CONFIRMED" : "ZERO UNCONFIRMED";
+        }
+    }
+
+    // Populate plans dropdown
+    populatePlansDropdown(plans);
+
+    // Restore UI preferences from savedState
+    if (savedState) {
+        if (savedState.jog_step_deg) {
+            setStepSize(savedState.jog_step_deg, false);
+        }
+        if (savedState.filter_settings) {
+            enhanceMode = savedState.filter_settings.mode || "none";
+            filterGain = savedState.filter_settings.gain ?? 1.5;
+            filterContrast = savedState.filter_settings.contrast ?? 1.3;
+            applyFilterSettingsToUI();
+        }
+        if (savedState.active_track_tab) {
+            activeTrackTab = savedState.active_track_tab;
+            selectedTrack = savedState.active_track_tab;
+            document.getElementById("tabTrackPan")?.classList.toggle("active", activeTrackTab === "pan");
+            document.getElementById("tabTrackTilt")?.classList.toggle("active", activeTrackTab === "tilt");
+        }
+        if (savedState.curve_filter) {
+            curveFilter = savedState.curve_filter;
+            document.getElementById("btnFilterAll")?.classList.toggle("active", curveFilter === "all");
+            document.getElementById("btnFilterPan")?.classList.toggle("active", curveFilter === "pan");
+            document.getElementById("btnFilterTilt")?.classList.toggle("active", curveFilter === "tilt");
+        }
+    }
+
+    // Rehydrate active plan: use savedState.active_plan_id if present in plans list, else plans[0]
+    let targetPlanId = savedState?.active_plan_id;
+    if (!targetPlanId || !plans.some(p => p.id === targetPlanId)) {
+        targetPlanId = plans.length > 0 ? plans[0].id : null;
+    }
+    if (targetPlanId) {
+        await onPlanSelected(targetPlanId, false);
+    } else {
+        createNewPlan(false);
+    }
+
+    // Rehydrate execution state: if timelapse is RUNNING or PAUSED, jump directly to Step 5
+    if (initialTl && (initialTl.state === "RUNNING" || initialTl.state === "PAUSED")) {
+        goToStep(5, false);
+        updateTimelapseTelemetry(initialTl);
+        await loadTimelapseCaptures();
+    } else {
+        // Otherwise navigate to saved wizard step (or default to Step 1)
+        const targetStep = savedState?.active_step ? Math.max(1, Math.min(5, savedState.active_step)) : 1;
+        goToStep(targetStep, false);
+    }
 
     // Initialize quality dropdowns from stored preference
     const selDarkroom = document.getElementById("darkroomQualitySelect");
@@ -4311,6 +4636,9 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     // Initial camera choices load
     await refreshCameraConfigChoices();
+
+    // Sync Zero Origin UI state
+    updateZeroCalibrationUI();
 });
 
 async function refreshCameraConfigChoices() {

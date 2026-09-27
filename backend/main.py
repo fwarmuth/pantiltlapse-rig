@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 import shutil
 from contextlib import asynccontextmanager
 from typing import Any
@@ -18,6 +19,7 @@ from camera_manager import CameraManager
 from coordinator import OperationCoordinator
 from domain.models import SequencePlan
 from domain.rig import RigManager
+from domain.studio_state import AppStateManager
 from domain.trajectory import sample_trajectory
 from dry_run_engine import DryRunEngine
 from fake_camera_manager import FakeCameraManager
@@ -50,6 +52,7 @@ else:
     camera_mgr = CameraManager(capture_dir=capture_dir)
 
 plan_store = PlanStore()
+app_state_mgr = AppStateManager()
 rig_mgr = RigManager(tilt_min_deg=0.0, tilt_max_deg=80.0)
 
 coordinator = OperationCoordinator()
@@ -1037,10 +1040,55 @@ async def cancel_timelapse():
     return await timelapse_engine.cancel()
 
 
+@app.get("/api/timelapse/captures")
+async def get_timelapse_captures():
+    """Return ordered list of captured photos for the active or latest time-lapse run."""
+    return timelapse_engine.get_captures()
+
+
+@app.get("/api/timelapse/captures/{filename}")
+async def get_timelapse_capture_file(filename: str):
+    """Serve a captured time-lapse image file."""
+    if not timelapse_engine.capture_dir:
+        raise HTTPException(status_code=404, detail="No active or recent time-lapse capture directory")
+    capture_dir_path = Path(timelapse_engine.capture_dir).resolve()
+    file_path = (capture_dir_path / filename).resolve()
+    if capture_dir_path not in file_path.parents and file_path != capture_dir_path:
+        raise HTTPException(status_code=403, detail="Forbidden file path")
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Capture file '{filename}' not found")
+    media_type = "image/svg+xml" if filename.endswith(".svg") else "image/jpeg"
+    return FileResponse(str(file_path), media_type=media_type)
+
+
+# --- Studio UI State & Reload Rehydration Endpoints ---
+class StudioStateUpdateRequest(BaseModel):
+    active_plan_id: UUID | None = None
+    active_step: int | None = Field(default=None, ge=1, le=5)
+    jog_step_deg: float | None = None
+    filter_settings: dict[str, Any] | None = None
+    active_track_tab: str | None = None
+    curve_filter: str | None = None
+
+
+@app.get("/api/app/state")
+async def get_app_state():
+    """Return current studio UI session state for rehydration."""
+    return app_state_mgr.state.model_dump(mode="json")
+
+
+@app.post("/api/app/state")
+async def update_app_state(req: StudioStateUpdateRequest):
+    """Update studio UI session state across reloads."""
+    updates = req.model_dump(exclude_unset=True)
+    updated = app_state_mgr.update(**updates)
+    return updated.model_dump(mode="json")
+
+
 # --- Real-Time Server-Sent Events (SSE) Streaming ---
 @app.get("/api/events")
 async def stream_events():
-    """Stream real-time motor, camera, rig, time-lapse, dry run, and coordinator state events."""
+    """Stream real-time motor, camera, rig, time-lapse, dry run, coordinator, and studio app state events."""
 
     async def event_generator():
         while True:
@@ -1052,6 +1100,7 @@ async def stream_events():
                 "timelapse": timelapse_engine.get_status(),
                 "dry_run": dry_run_engine.get_status(),
                 "coordinator": coordinator.get_status(),
+                "app_state": app_state_mgr.state.model_dump(mode="json"),
             }
             yield f"data: {json.dumps(payload, default=str)}\n\n"
             await asyncio.sleep(1.0)

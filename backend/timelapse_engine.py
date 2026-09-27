@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import logging
 import math
 import time
@@ -57,6 +58,7 @@ class TimelapseEngine:
         self.motor_retry_delay_s: float = 1.2
         self.run_id: str | None = None
         self.capture_dir: str | None = None
+        self.captured_shots: list[dict[str, Any]] = []
 
         self._task: asyncio.Task | None = None
         self._pause_event = asyncio.Event()
@@ -99,6 +101,7 @@ class TimelapseEngine:
         self.elapsed_time_s = 0.0
         self.estimated_eta_s = config.total_shots * config.interval_s
         self.last_error = None
+        self.captured_shots = []
         self._cancel_flag = False
         self._cancel_complete = asyncio.Event()
         self._cancel_complete.set()
@@ -307,7 +310,8 @@ class TimelapseEngine:
                 # Step 3: Trigger Shutter Release & USB Photo Download
                 if config.capture_photo:
                     logger.info(f"Shot {k + 1}/{total}: Triggering camera shutter...")
-                    capture_res = await self._trigger_capture(self._capture_filename(k))
+                    filename = self._capture_filename(k)
+                    capture_res = await self._trigger_capture(filename)
 
                     if capture_res.get("status") != "OK":
                         err_msg = capture_res.get("message", "Camera disconnected or capture failed")
@@ -334,7 +338,7 @@ class TimelapseEngine:
 
                             if self.camera_mgr.is_connected:
                                 logger.info(f"Shot {k + 1}: Camera reconnected! Retrying photo capture...")
-                                capture_res = await self._trigger_capture(self._capture_filename(k))
+                                capture_res = await self._trigger_capture(filename)
                                 if capture_res.get("status") == "OK":
                                     logger.info(
                                         f"Shot {k + 1}/{total} captured successfully after camera reconnection! "
@@ -352,6 +356,14 @@ class TimelapseEngine:
 
                         if self._cancel_flag:
                             break
+
+                    self.captured_shots.append({
+                        "shot_index": k + 1,
+                        "filename": filename,
+                        "pan": target_pan,
+                        "tilt": target_tilt,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
 
                 # Update Progress Telemetry
                 self.current_shot = k + 1
@@ -414,3 +426,35 @@ class TimelapseEngine:
             "capture_dir": self.capture_dir,
             "config": self.config.model_dump(mode="json") if self.config else None,
         }
+
+    def get_captures(self) -> list[dict[str, Any]]:
+        """Return ordered list of captured photos for the current/latest time-lapse run."""
+        results = []
+        capture_path = Path(self.capture_dir) if self.capture_dir else None
+
+        for shot in self.captured_shots:
+            fn = shot["filename"]
+            exists = (capture_path / fn).exists() if capture_path else False
+            results.append({
+                **shot,
+                "url": f"/api/timelapse/captures/{fn}",
+                "exists": exists,
+            })
+
+        if not results and capture_path and capture_path.exists():
+            for f in sorted(capture_path.iterdir()):
+                if f.is_file() and f.suffix.lower() in [".jpg", ".jpeg", ".svg", ".cr2", ".nef"]:
+                    shot_idx = 0
+                    try:
+                        parts = f.stem.split("_")
+                        shot_idx = int(parts[-1])
+                    except (ValueError, IndexError):
+                        pass
+                    results.append({
+                        "shot_index": shot_idx,
+                        "filename": f.name,
+                        "url": f"/api/timelapse/captures/{f.name}",
+                        "size_bytes": f.stat().st_size,
+                        "exists": True,
+                    })
+        return results

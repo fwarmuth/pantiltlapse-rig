@@ -26,7 +26,7 @@
             <div class="header-center">
                 <!-- Status Badges -->
                 <div class="status-badges">
-                    <div class="status-badge" id="zeroRefBadge" onclick="confirmZeroReference()" style="cursor: pointer;" title="Coordinate Zero Reference — Click to Set Origin (0°,0°)">
+                    <div class="status-badge" id="zeroRefBadge" onclick="handleZeroBadgeClick()" style="cursor: pointer;" title="Coordinate Zero Reference — Click to view status or calibrate">
                         <span class="dot"></span>
                         <span id="zeroRefText">ZERO UNCONFIRMED</span>
                     </div>
@@ -100,24 +100,48 @@
                         </div>
                     </div>
 
-                    <div class="card">
+                    <div class="card" id="cardZeroCalibration">
                         <div class="card-title-row">
                             <h3>🎯 Coordinate Zero Origin Calibration</h3>
+                            <span class="badge" id="step1ZeroStatusBadge">UNCONFIRMED</span>
                         </div>
-                        <p class="panel-desc">
-                            Use the Jog D-Pad on the right to position your rig to the physical zero reference (level 0° tilt and center azimuth), then click below to lock the coordinate system.
-                        </p>
 
-                        <div class="action-btn-group" style="margin-top:8px;">
-                            <button class="btn btn-accent btn-lg" id="btnConfirmZero" onclick="confirmZeroReference()">
-                                🎯 Set Current Position as Origin (0°, 0°) & Confirm
-                            </button>
+                        <!-- Unconfirmed State -->
+                        <div id="zeroUnconfirmedSection">
+                            <p class="panel-desc">
+                                Level your camera rig (0° tilt and center azimuth) using either the Jog D-Pad on the right or by disabling drivers to position by hand. Once aligned, click below to lock this position as the physical origin (0°, 0°).
+                            </p>
+
+                            <div class="action-btn-group" style="margin-top:10px;">
+                                <button class="btn btn-accent btn-lg btn-block" id="btnConfirmZero" onclick="confirmZeroReference()">
+                                    🎯 Set Current Position as Origin (0°, 0°) & Lock
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Confirmed State -->
+                        <div id="zeroConfirmedSection" class="hidden">
+                            <div class="locked-origin-banner">
+                                <span class="locked-icon">✅</span>
+                                <div class="locked-info">
+                                    <strong style="color: #6ee7b7;">Coordinate Zero Origin Locked</strong>
+                                    <p class="mono-sub" style="margin-top:2px;">Origin established at (0.00°, 0.00°). Rig safety bounds and trajectory plans are active.</p>
+                                </div>
+                            </div>
+                            <div class="btn-row" style="margin-top:12px;">
+                                <button class="btn btn-primary flex-1" onclick="goHome()" title="Move motors back to Origin (0°, 0°)">
+                                    🏠 Test Go Home (0°, 0°)
+                                </button>
+                                <button class="btn btn-secondary flex-1" onclick="requestRecalibrateZero()" title="Unlock and re-set physical zero origin">
+                                    🔄 Recalibrate Origin
+                                </button>
+                            </div>
                         </div>
 
                         <div class="tip-box" style="margin-top:12px;">
                             <span class="tip-icon">💡</span>
                             <div class="tip-text">
-                                The ESP32 stepper driver firmware uses an operator-established zero reference. Disabling motor drivers allows free hand-positioning, after which you re-confirm zero origin.
+                                <strong>Safety Rule:</strong> "Set Origin" defines where (0°, 0°) is in physical space. Once locked, use <strong>"Go Home"</strong> to move motors back to (0°, 0°). Disabling motor drivers allows manual hand-positioning and unlocks zero for recalibration.
                             </div>
                         </div>
                     </div>
@@ -559,6 +583,12 @@
                             <span class="badge" id="liveRunStateBadge">IDLE</span>
                         </div>
 
+                        <!-- Unconfirmed Zero Origin Pre-Flight Warning Banner -->
+                        <div id="execZeroWarningBanner" class="alert-banner warning hidden" style="margin-bottom:12px; padding:10px 14px; border-radius:6px; background:#451a03; border:1px solid #b45309; color:#fef3c7; font-size:0.85rem; display:flex; justify-content:space-between; align-items:center;">
+                            <span>⚠️ <strong>Coordinate Zero Origin Unconfirmed:</strong> Movement is locked for hardware safety.</span>
+                            <button class="btn btn-xs btn-accent" onclick="goToStep(1)">Calibrate in Step 1 →</button>
+                        </div>
+
                         <!-- Compact Pre-Flight Checklist -->
                         <div class="checklist-compact">
                             <div class="chk-pill" id="chkZeroRef" title="Coordinate Zero Origin"><span class="chk-icon">⏳</span> Zero Origin</div>
@@ -753,6 +783,10 @@
                             <span class="hud-pill" id="lblDarkroomZoomMode">Fit (100%)</span>
                         </div>
 
+                        <div class="darkroom-hud-top-center" id="darkroomHudFocusWrap">
+                            <span class="hud-pill" id="lblDarkroomFocusChange">🎯 Focus: Unchanged</span>
+                        </div>
+
                         <div class="darkroom-hud-top-right" id="darkroomHudParams">
                             <span class="hud-pill mono-sub" id="lblDarkroomParams">-- | -- | -- | --</span>
                         </div>
@@ -888,7 +922,7 @@
                                 <div class="dpad-grid-sm">
                                     <button class="btn dpad-btn-sm dpad-up" onclick="moveRelative(0, getStepSize())" title="Tilt Up">▲</button>
                                     <button class="btn dpad-btn-sm dpad-left" onclick="moveRelative(-getStepSize(), 0)" title="Pan Left">◄</button>
-                                    <button class="btn dpad-btn-sm dpad-center" onclick="moveAbsolute(0, 0)" title="Return to Origin (0°, 0°)">🏠</button>
+                                    <button class="btn dpad-btn-sm dpad-center" onclick="goHome()" title="Return to Origin (0°, 0°)">🏠</button>
                                     <button class="btn dpad-btn-sm dpad-right" onclick="moveRelative(getStepSize(), 0)" title="Pan Right">►</button>
                                     <button class="btn dpad-btn-sm dpad-down" onclick="moveRelative(0, -getStepSize())" title="Tilt Down">▼</button>
                                 </div>
@@ -902,10 +936,10 @@
                                 <button class="segment" data-step="15.0" onclick="setStepSize(15.0)">15°</button>
                             </div>
 
-                            <!-- Quick Origin & Driver Actions -->
+                            <!-- Quick Go Home & Driver Actions -->
                             <div class="btn-row-sm">
-                                <button class="btn btn-accent btn-xs flex-1" onclick="confirmZeroReference()" title="Lock current position as 0,0 origin">
-                                    🎯 0,0 Origin
+                                <button class="btn btn-accent btn-xs flex-1" onclick="goHome()" title="Move motors back to Origin (0°, 0°)">
+                                    🏠 Go Home
                                 </button>
                                 <button class="btn btn-secondary btn-xs flex-1" id="btnDriverToggle" onclick="toggleDrivers()">
                                     Disable
@@ -1030,7 +1064,7 @@
                         <button class="btn-dpad-mini" onclick="moveRelative(0, getStepSize())" title="Tilt Up (↑)">▲</button>
                         <div></div>
                         <button class="btn-dpad-mini" onclick="moveRelative(-getStepSize(), 0)" title="Pan Left (←)">◀</button>
-                        <button class="btn-dpad-mini btn-dpad-center" onclick="confirmZeroReference()" title="Set Current Position as Origin (0°,0°)">🎯</button>
+                        <button class="btn-dpad-mini btn-dpad-center" onclick="goHome()" title="Return to Origin (0°,0°)">🏠</button>
                         <button class="btn-dpad-mini" onclick="moveRelative(getStepSize(), 0)" title="Pan Right (→)">▶</button>
                         <div></div>
                         <button class="btn-dpad-mini" onclick="moveRelative(0, -getStepSize())" title="Tilt Down (↓)">▼</button>
@@ -1084,6 +1118,29 @@
             </div>
         </div>
     </div>
+
+    <!-- Recalibrate Origin Confirmation Modal -->
+    <div id="recalibrateModal" class="modal hidden">
+        <div class="modal-content card" style="max-width: 440px;">
+            <div class="modal-header-row">
+                <h3 style="margin: 0;">⚠️ Recalibrate Coordinate Zero</h3>
+                <span class="modal-close" onclick="closeRecalibrateModal()">&times;</span>
+            </div>
+            <p style="font-size: 0.9rem; color: #cbd5e1; margin: 12px 0;">
+                The rig origin is currently confirmed. Recalibrating will redefine the <strong>current physical position</strong> as <strong>(0.00°, 0.00°)</strong> and update all software tilt limits.
+            </p>
+            <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 16px;">
+                Are you sure your camera is physically leveled and centered?
+            </p>
+            <div class="btn-row">
+                <button class="btn btn-secondary flex-1" onclick="closeRecalibrateModal()">Cancel</button>
+                <button class="btn btn-accent flex-1" onclick="executeRecalibrateZero()">🎯 Confirm & Set (0°,0°)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
     <script src="app.js?v=20260926_01"></script>
 </body>

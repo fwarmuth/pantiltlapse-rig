@@ -28,6 +28,7 @@ class FakeCameraManager:
         self.latest_photo_path: str | None = None
         self.last_capture_time: float = 0.0
         self.focus_position: float = 50.0
+        self._pending_focus_actions: list[str] = []
 
     @property
     def is_manual_mode(self) -> bool:
@@ -284,6 +285,36 @@ class FakeCameraManager:
             preview_file = os.path.splitext(file_path)[0] + "_preview.jpg"
             img.save(preview_file, format="JPEG", quality=80)
             return preview_file
+
+    async def step_focus(self, direction: str, step_size: int = 1) -> dict[str, Any]:
+        """Simulate discrete manual focus step ('near' or 'far', 1..3)."""
+        if not self.is_connected:
+            return {"status": "ERROR", "message": "Fake camera is disconnected"}
+        direction = direction.lower()
+        if direction not in ("near", "far"):
+            return {"status": "ERROR", "message": "Direction must be 'near' or 'far'"}
+        step_size = max(1, min(3, int(step_size)))
+        self._pending_focus_actions.append(f"{direction.capitalize()} {step_size}")
+        return {
+            "status": "OK",
+            "widget": "manualfocusdrive",
+            "direction": direction,
+            "step_size": step_size,
+            "applied_value": f"{direction.capitalize()} {step_size}",
+            "available_choices": ["Near 1", "Near 2", "Near 3", "None", "Far 1", "Far 2", "Far 3"],
+            "fake": True,
+        }
+
+    def consume_pending_focus_change(self) -> dict[str, Any]:
+        """Consume and summarize all focus commands executed since the prior snapshot."""
+        actions = list(self._pending_focus_actions)
+        self._pending_focus_actions.clear()
+        if not actions:
+            return {"actions": [], "summary": "Unchanged", "has_change": False}
+        from collections import Counter
+        counts = Counter(actions)
+        summary = ", ".join(f"{k} (x{v})" if v > 1 else k for k, v in counts.items())
+        return {"actions": actions, "summary": summary, "has_change": True}
 
     def get_status(self) -> dict[str, Any]:
         return {

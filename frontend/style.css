@@ -2938,5 +2938,122 @@ body {
     }
 }
 
+/* Toast Notifications */
+.toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+    max-width: 380px;
+}
 
+.toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    background: #1e293b;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-md);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+    color: #f8fafc;
+    font-size: 0.88rem;
+    line-height: 1.4;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    animation: toastSlideIn 0.25s ease-out forwards;
+}
 
+.toast.toast-success {
+    background: #064e3b;
+    border-color: #059669;
+    color: #a7f3d0;
+}
+
+.toast.toast-warning {
+    background: #78350f;
+    border-color: #d97706;
+    color: #fde68a;
+}
+
+.toast.toast-error {
+    background: #881337;
+    border-color: #e11d48;
+    color: #fecdd3;
+}
+
+.toast.toast-info {
+    background: #0c4a6e;
+    border-color: #0284c7;
+    color: #bae6fd;
+}
+
+@keyframes toastSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(12px) scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Locked Origin Banner */
+.locked-origin-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: rgba(6, 78, 59, 0.35);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    border-radius: var(--radius-md);
+}
+
+.locked-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+
+.locked-info strong {
+    font-size: 0.95rem;
+}
+
+/* Focus Change Highlighting & HUD Overlay */
+.darkroom-hud-top-center {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    pointer-events: none;
+}
+
+.thumb-focus-tag {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-top: 3px;
+    width: fit-content;
+    white-space: nowrap;
+}
+
+.thumb-focus-tag.changed {
+    background: rgba(56, 189, 248, 0.18);
+    color: #38bdf8;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    box-shadow: 0 0 6px rgba(56, 189, 248, 0.2);
+}
+
+.thumb-focus-tag.unchanged {
+    background: rgba(148, 163, 184, 0.1);
+    color: #94a3b8;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}

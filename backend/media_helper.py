@@ -223,9 +223,14 @@ async def create_test_shot_artifact(
         preview_str = res_data.get("camera_preview_path")
         preview_path = Path(preview_str) if preview_str else (orig_path if ext in (".jpg", ".jpeg", ".svg") else None)
 
+        focus_change = None
+        if hasattr(camera_mgr, "consume_pending_focus_change"):
+            focus_change = camera_mgr.consume_pending_focus_change()
+
         extra_meta = {
             "shot_id": str(shot_id),
             "plan_id": str(plan_id),
+            "focus_change": focus_change,
         }
 
         pub_res = await publish_media_artifact(
