@@ -29,7 +29,16 @@
             "problemMatcher": []
         },
         {
-            "label": "Backend: Run FastAPI Server (uv run)",
+            "label": "Backend: Run Simulation Server (Fake Hardware)",
+            "type": "shell",
+            "command": "SIMULATION=true uv run python main.py",
+            "options": {
+                "cwd": "${workspaceFolder}/backend"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Backend: Run FastAPI Server (Live Hardware)",
             "type": "shell",
             "command": "uv run python main.py",
             "options": {

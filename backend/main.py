@@ -23,6 +23,7 @@ from domain.studio_state import AppStateManager
 from domain.trajectory import sample_trajectory
 from dry_run_engine import DryRunEngine
 from fake_camera_manager import FakeCameraManager
+from fake_serial_manager import FakeSerialManager
 from media_helper import generate_resized_preview_sync
 from preview_controller import PreviewController
 from serial_manager import SerialManager
@@ -37,15 +38,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("CameraCommander.Backend")
 
 # Hardware & Engine Managers Initialization
-serial_mgr = SerialManager(
-    port=os.getenv("SERIAL_PORT", "/dev/ttyUSB0"),
-    baudrate=int(os.getenv("SERIAL_BAUD", "9600")),
-)
+is_simulation = os.getenv("SIMULATION", "false").lower() == "true"
+use_fake_serial = os.getenv("FAKE_SERIAL", "false").lower() == "true" or is_simulation
+use_fake_camera = os.getenv("FAKE_CAMERA", "false").lower() == "true" or is_simulation
 
-use_fake_camera = os.getenv("FAKE_CAMERA", "false").lower() == "true"
+if use_fake_serial:
+    logger.info("Initializing application with FakeSerialManager (SIMULATION=true)")
+    serial_mgr = FakeSerialManager()
+else:
+    serial_mgr = SerialManager(
+        port=os.getenv("SERIAL_PORT", "/dev/ttyUSB0"),
+        baudrate=int(os.getenv("SERIAL_BAUD", "9600")),
+    )
+
 capture_dir = os.path.join(os.path.dirname(__file__), "..", "output", "captures")
 if use_fake_camera:
-    logger.info("Initializing application with FakeCameraManager (FAKE_CAMERA=true)")
+    logger.info("Initializing application with FakeCameraManager (SIMULATION=true)")
     camera_mgr = FakeCameraManager(capture_dir=capture_dir)
 else:
     logger.info("Initializing application with real CameraManager (gphoto2)")
@@ -1053,7 +1061,7 @@ async def get_timelapse_capture_file(filename: str):
         raise HTTPException(status_code=404, detail="No active or recent time-lapse capture directory")
     capture_dir_path = Path(timelapse_engine.capture_dir).resolve()
     file_path = (capture_dir_path / filename).resolve()
-    if capture_dir_path not in file_path.parents and file_path != capture_dir_path:
+    if not str(file_path).startswith(str(capture_dir_path)):
         raise HTTPException(status_code=403, detail="Forbidden file path")
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail=f"Capture file '{filename}' not found")

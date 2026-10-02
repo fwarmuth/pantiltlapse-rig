@@ -2,14 +2,36 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Backend Server (Simulation / Fake Camera)",
+            "name": "Backend Server (Full Simulation: Mock Serial & Camera)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/backend/main.py",
             "cwd": "${workspaceFolder}/backend",
             "env": {
+                "SIMULATION": "true",
+                "FAKE_SERIAL": "true",
                 "FAKE_CAMERA": "true",
-                "SERIAL_PORT": "/dev/ttyUSB1",
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "serverReadyAction": {
+                "action": "openExternally",
+                "pattern": "Uvicorn running on http://(?:[0-9.]+|localhost):([0-9]+)",
+                "uriFormat": "http://localhost:%s"
+            }
+        },
+        {
+            "name": "Backend Server (Mock Camera, Real Hardware Serial)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/backend/main.py",
+            "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "SIMULATION": "false",
+                "FAKE_CAMERA": "true",
+                "FAKE_SERIAL": "false",
+                "SERIAL_PORT": "/dev/ttyUSB0",
                 "SERIAL_BAUD": "9600",
                 "PYTHONPATH": "${workspaceFolder}/backend"
             },
@@ -22,13 +44,35 @@
             }
         },
         {
-            "name": "Backend Server (Live Hardware)",
+            "name": "Backend Server (Mock Serial, Real Physical Camera)",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/backend/main.py",
             "cwd": "${workspaceFolder}/backend",
             "env": {
+                "SIMULATION": "false",
                 "FAKE_CAMERA": "false",
+                "FAKE_SERIAL": "true",
+                "PYTHONPATH": "${workspaceFolder}/backend"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "serverReadyAction": {
+                "action": "openExternally",
+                "pattern": "Uvicorn running on http://(?:[0-9.]+|localhost):([0-9]+)",
+                "uriFormat": "http://localhost:%s"
+            }
+        },
+        {
+            "name": "Backend Server (Live Hardware: Real Camera & Serial)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/backend/main.py",
+            "cwd": "${workspaceFolder}/backend",
+            "env": {
+                "SIMULATION": "false",
+                "FAKE_CAMERA": "false",
+                "FAKE_SERIAL": "false",
                 "SERIAL_PORT": "/dev/ttyUSB0",
                 "SERIAL_BAUD": "9600",
                 "PYTHONPATH": "${workspaceFolder}/backend"
@@ -52,6 +96,19 @@
                 "SERIAL_BAUD": "9600",
                 "PYTHONPATH": "${workspaceFolder}/backend"
             },
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Run Pytest (All Tests)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "backend/tests",
+                "-v"
+            ],
+            "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": false
         }
