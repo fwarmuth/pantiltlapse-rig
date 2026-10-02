@@ -65,12 +65,44 @@ def test_timelapse_captures_are_isolated_per_run(tmp_path):
         second_calls = camera.calls[2:]
         assert all(target_dir for _, target_dir in first_calls + second_calls)
         assert first_calls[0][1] != second_calls[0][1]
-        assert first_calls[0][0].startswith(f"tl_{first['run_id']}_")
-        assert second_calls[0][0].startswith(f"tl_{second['run_id']}_")
+        assert first_calls[0][0] == "0001.jpg"
+        assert first_calls[1][0] == "0002.jpg"
+        assert second_calls[0][0] == "0001.jpg"
+        assert second_calls[1][0] == "0002.jpg"
         assert sorted(Path(first_calls[0][1]).iterdir())
         assert sorted(Path(second_calls[0][1]).iterdir())
 
     asyncio.run(run())
+
+
+def test_timelapse_plan_name_directory_naming(tmp_path):
+    async def run():
+        rig_mgr = RigManager(storage_dir=tmp_path / "rig")
+        rig_mgr.confirm_reference()
+        camera = RecordingCamera(tmp_path / "captures")
+        engine = TimelapseEngine(RecordingSerial(), camera, rig_mgr, OperationCoordinator())
+        config = TimelapseConfig(
+            plan_name="Milky Way East",
+            total_shots=2,
+            interval_s=1.0,
+            settle_time_s=0.0
+        )
+
+        res = await engine.start(config)
+        await engine._task
+
+        assert res["status"] == "OK"
+        run_id = res["run_id"]
+        assert "Milky_Way_East" in run_id
+        assert run_id.startswith("timelapse_Milky_Way_East_")
+        assert engine.capture_dir is not None
+        assert "timelapse_Milky_Way_East_" in engine.capture_dir
+        assert len(camera.calls) == 2
+        assert camera.calls[0][0] == "0001.jpg"
+        assert camera.calls[1][0] == "0002.jpg"
+
+    asyncio.run(run())
+
 
 
 def test_explicit_poses_must_cover_all_shots():

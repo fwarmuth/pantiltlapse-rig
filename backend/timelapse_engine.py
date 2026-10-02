@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 import math
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ class TimelapseConfig(BaseModel):
     capture_photo: bool = Field(default=True, description="Trigger photo capture on each step")
     easing: str = Field(default="ease_in_out", description="Motion profile: 'linear', 'ease_in_out', or 's_curve'")
     plan_id: str | None = Field(default=None, description="Optional associated plan UUID")
+    plan_name: str | None = Field(default=None, description="Optional associated human-readable plan name")
     poses: list[dict[str, float]] | None = Field(default=None, description="Explicit sampled trajectory poses")
 
     @model_validator(mode="after")
@@ -87,7 +89,7 @@ class TimelapseEngine:
             return {"status": "ERROR", "message": f"Operation lock busy: '{active}' active"}
 
         try:
-            self.run_id, self.capture_dir = self._create_capture_storage()
+            self.run_id, self.capture_dir = self._create_capture_storage(config)
         except Exception as exc:
             await self.coordinator.release("RECORDING")
             logger.error("Unable to create isolated capture directory: %s", exc)
@@ -116,25 +118,41 @@ class TimelapseEngine:
         self._task = asyncio.create_task(self._run_loop(config, self._cancel_complete, self._run_started))
         return {"status": "OK", "state": self.state, "run_id": self.run_id}
 
-    def _create_capture_storage(self) -> tuple[str, str | None]:
-        """Allocate a unique run identity and, when supported, an isolated capture directory."""
-        run_id = uuid4().hex
+    def _create_capture_storage(self, config: TimelapseConfig | None = None) -> tuple[str, str | None]:
+        """Allocate a unique, human-readable run identity and an isolated capture directory."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        plan_title = config.plan_name if config else None
+
+        if plan_title:
+            clean_name = re.sub(r"[^\w\-_]+", "_", plan_title.strip())
+            clean_name = re.sub(r"_+", "_", clean_name).strip("_")
+            dir_name = f"timelapse_{clean_name}_{timestamp}"
+        else:
+            dir_name = f"timelapse_{timestamp}"
+
         camera_capture_dir = getattr(self.camera_mgr, "capture_dir", None)
         if not camera_capture_dir:
             # Test doubles and older camera adapters may not expose storage plumbing;
             # run-qualified filenames still prevent collisions for those adapters.
-            return run_id, None
+            return dir_name, None
 
         base_dir = Path(camera_capture_dir).resolve()
-        run_dir = base_dir / f"timelapse_{run_id}"
+        run_dir = base_dir / dir_name
+        if run_dir.exists():
+            dir_name = f"{dir_name}_{uuid4().hex[:6]}"
+            run_dir = base_dir / dir_name
+
         run_dir.mkdir(parents=True, exist_ok=False)
-        return run_id, str(run_dir)
+        return dir_name, str(run_dir)
 
     def _capture_filename(self, shot_index: int) -> str:
-        """Return a stable, run-qualified filename reused by capture retries."""
+        """Return a sequential, ffmpeg-friendly filename (e.g. 0001.jpg)."""
         if self.run_id is None:
             raise RuntimeError("Cannot capture without an active run identity")
-        return f"tl_{self.run_id}_{shot_index + 1:04d}.jpg"
+        if self.capture_dir is None:
+            # Fallback for adapters without isolated directories to avoid collisions
+            return f"tl_{self.run_id}_{shot_index + 1:04d}.jpg"
+        return f"{shot_index + 1:04d}.jpg"
 
     async def _trigger_capture(self, filename: str) -> dict[str, Any]:
         """Capture into this run's isolated directory and drain cancellation safely."""
@@ -180,6 +198,7 @@ class TimelapseEngine:
         self._pause_event.set()
         logger.info("Time-lapse sequence RESUMED.")
         return {"status": "OK", "state": self.state}
+
 
     async def cancel(self) -> dict[str, Any]:
         """Cancel active time-lapse sequence."""
