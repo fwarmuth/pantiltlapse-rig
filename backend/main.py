@@ -53,7 +53,7 @@ else:
 
 plan_store = PlanStore()
 app_state_mgr = AppStateManager()
-rig_mgr = RigManager(tilt_min_deg=0.0, tilt_max_deg=80.0)
+rig_mgr = RigManager(tilt_min_deg=-80.0, tilt_max_deg=80.0)
 
 coordinator = OperationCoordinator()
 timelapse_engine = TimelapseEngine(
@@ -126,7 +126,7 @@ class DriverRequest(BaseModel):
 
 
 class RigLimitsRequest(BaseModel):
-    tilt_min_deg: float = Field(default=0.0, description="Minimum allowable tilt angle in degrees")
+    tilt_min_deg: float = Field(default=-80.0, description="Minimum allowable tilt angle in degrees")
     tilt_max_deg: float = Field(default=80.0, description="Maximum allowable tilt angle in degrees")
 
 

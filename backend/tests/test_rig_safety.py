@@ -79,3 +79,40 @@ async def test_sse_events_stream_json_serialization():
     assert "rig" in data
     assert "reference" in data
     assert "coordinate_reference_id" in data["rig"]
+
+
+def test_negative_tilt_and_unconfirmed_jogging(monkeypatch):
+    async def mock_send_command(cmd: str, timeout=None):
+        if cmd.startswith("M "):
+            return {"status": "OK", "response": "DONE"}
+        if cmd == "e":
+            return {"status": "OK", "response": "OK DRIVERS ON"}
+        return {"status": "OK", "response": "STATUS 0.00 0.00 1"}
+    monkeypatch.setattr(serial_mgr, "_send_command_unlocked", mock_send_command)
+    monkeypatch.setattr(serial_mgr, "send_command", mock_send_command)
+
+    with TestClient(app) as client:
+        serial_mgr.is_connected = True
+        rig_mgr.reference.confirmed = False
+
+        # 1. Unconfirmed relative jog downwards (negative tilt) should succeed (allowing operator to level rig)
+        resp = client.post("/api/motors/move", json={"pan": 0.0, "tilt": -10.0, "relative": True})
+        assert resp.status_code == 200
+
+        # 2. Update rig limits to allow negative tilt down to -80°
+        resp = client.post("/api/rig/limits", json={"tilt_min_deg": -80.0, "tilt_max_deg": 80.0})
+        assert resp.status_code == 200
+        assert resp.json()["snapshot"]["tilt_min_deg"] == -80.0
+
+        # 3. Confirm zero reference
+        resp = client.post("/api/rig/confirm-zero")
+        assert resp.status_code == 200
+
+        # 4. Confirmed move to negative tilt (e.g. -30.0°) should succeed within [-80, 80]
+        resp = client.post("/api/motors/move", json={"pan": 0.0, "tilt": -30.0, "relative": False})
+        assert resp.status_code == 200
+
+        # 5. Confirmed move beyond min (e.g. -85.0°) should be rejected with HTTP 422
+        resp = client.post("/api/motors/move", json={"pan": 0.0, "tilt": -85.0, "relative": False})
+        assert resp.status_code == 422
+

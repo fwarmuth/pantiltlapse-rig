@@ -161,7 +161,7 @@ class RigSnapshot(BaseModel):
     Default tilt min = 0.0° (zero reference at mechanical bottom), tilt max = 80.0°.
     """
     coordinate_reference_id: UUID = Field(default_factory=uuid4, description="Coordinate system session ID")
-    tilt_min_deg: float = Field(default=0.0, description="Minimum allowable tilt angle in degrees")
+    tilt_min_deg: float = Field(default=-80.0, description="Minimum allowable tilt angle in degrees")
     tilt_max_deg: float = Field(default=80.0, description="Maximum allowable tilt angle in degrees")
 
     @model_validator(mode="after")

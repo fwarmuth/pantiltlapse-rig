@@ -94,7 +94,7 @@ def test_invalid_schedule():
 
 def test_rig_snapshot_defaults_and_validation():
     rig = RigSnapshot()
-    assert rig.tilt_min_deg == 0.0
+    assert rig.tilt_min_deg == -80.0
     assert rig.tilt_max_deg == 80.0
 
     with pytest.raises(ValidationError):

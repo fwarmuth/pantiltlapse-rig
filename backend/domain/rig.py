@@ -38,7 +38,7 @@ class RigManager:
 
     def __init__(
         self,
-        tilt_min_deg: float = 0.0,
+        tilt_min_deg: float = -80.0,
         tilt_max_deg: float = 80.0,
         storage_dir: str | Path = "output",
     ):
@@ -135,12 +135,15 @@ class RigManager:
 
         target_tilt = (current_tilt + tilt) if relative else tilt
 
-        if target_tilt < self.snapshot.tilt_min_deg or target_tilt > self.snapshot.tilt_max_deg:
-            msg = (
-                f"Target tilt {target_tilt:.2f}° violates rig bounds "
-                f"[{self.snapshot.tilt_min_deg:.1f}°, {self.snapshot.tilt_max_deg:.1f}°]"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"status": "ERROR", "message": msg},
-            )
+        # When the coordinate reference is confirmed, enforce safety bounds.
+        # If unconfirmed and moving relatively, the operator is actively jogging to find/align the physical origin.
+        if self.reference.confirmed:
+            if target_tilt < self.snapshot.tilt_min_deg or target_tilt > self.snapshot.tilt_max_deg:
+                msg = (
+                    f"Target tilt {target_tilt:.2f}° violates rig bounds "
+                    f"[{self.snapshot.tilt_min_deg:.1f}°, {self.snapshot.tilt_max_deg:.1f}°]"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"status": "ERROR", "message": msg},
+                )

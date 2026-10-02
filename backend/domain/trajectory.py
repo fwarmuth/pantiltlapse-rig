@@ -104,10 +104,10 @@ def sample_trajectory(
     """
     Generate deterministic pose samples for independent Pan and Tilt tracks across total_shots.
     Supports linear and cubic Hermite interpolation per track segment.
-    Validates targets against rig_limits (defaulting to 0.0° min, 80.0° max tilt).
+    Validates targets against rig_limits (defaulting to -80.0° min, 80.0° max tilt).
     """
     if rig_limits is None:
-        rig_limits = RigSnapshot(tilt_min_deg=0.0, tilt_max_deg=80.0)
+        rig_limits = RigSnapshot(tilt_min_deg=-80.0, tilt_max_deg=80.0)
 
     total_shots = schedule.total_shots
     samples: list[TrajectorySample] = []
