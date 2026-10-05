@@ -1048,6 +1048,26 @@ async def cancel_timelapse():
     return await timelapse_engine.cancel()
 
 
+class TimelapseAdjustRequest(BaseModel):
+    poses: list[dict[str, float]] | None = Field(default=None, description="Updated full trajectory poses")
+    camera_settings: list[dict[str, str]] | None = Field(default=None, description="Updated full camera settings")
+
+
+@app.patch("/api/timelapse/adjust")
+async def adjust_timelapse(req: TimelapseAdjustRequest):
+    """Hot-update future trajectory poses and/or camera settings during an active run."""
+    res = await timelapse_engine.adjust_active_run(
+        poses=req.poses,
+        camera_settings=req.camera_settings,
+    )
+    if res.get("status") != "OK":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=res,
+        )
+    return res
+
+
 @app.get("/api/timelapse/captures")
 async def get_timelapse_captures():
     """Return ordered list of captured photos for the active or latest time-lapse run."""

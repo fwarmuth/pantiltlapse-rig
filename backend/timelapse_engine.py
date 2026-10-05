@@ -26,12 +26,17 @@ class TimelapseConfig(BaseModel):
     plan_id: str | None = Field(default=None, description="Optional associated plan UUID")
     plan_name: str | None = Field(default=None, description="Optional associated human-readable plan name")
     poses: list[dict[str, float]] | None = Field(default=None, description="Explicit sampled trajectory poses")
+    camera_settings: list[dict[str, str]] | None = Field(
+        default=None, description="Explicit per-shot camera exposure settings"
+    )
 
     @model_validator(mode="after")
     def validate_explicit_pose_count(self) -> "TimelapseConfig":
         """Reject an explicit trajectory that cannot cover every configured shot."""
         if self.poses is not None and len(self.poses) != self.total_shots:
             raise ValueError("poses length must match total_shots when poses are provided")
+        if self.camera_settings is not None and len(self.camera_settings) != self.total_shots:
+            raise ValueError("camera_settings length must match total_shots when provided")
         return self
 
 
@@ -199,6 +204,41 @@ class TimelapseEngine:
         logger.info("Time-lapse sequence RESUMED.")
         return {"status": "OK", "state": self.state}
 
+    async def adjust_active_run(
+        self,
+        poses: list[dict[str, float]] | None = None,
+        camera_settings: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Hot-update future trajectory poses and/or camera settings during an active run."""
+        if self.state not in ("RUNNING", "PAUSED") or not self.config:
+            return {"status": "ERROR", "message": "No active time-lapse sequence to adjust"}
+
+        if poses is not None:
+            if len(poses) != self.total_shots:
+                return {
+                    "status": "ERROR",
+                    "message": f"poses length {len(poses)} must match total_shots {self.total_shots}",
+                }
+            # Validate remaining targets against rig limits
+            for p in poses[self.current_shot:]:
+                self.rig_mgr.validate_move(pan=p.get("pan", 0.0), tilt=p.get("tilt", 0.0))
+            self.config.poses = poses
+
+        if camera_settings is not None:
+            if len(camera_settings) != self.total_shots:
+                return {
+                    "status": "ERROR",
+                    "message": f"camera_settings length {len(camera_settings)} must match total_shots {self.total_shots}",
+                }
+            self.config.camera_settings = camera_settings
+
+        logger.info(
+            f"Active time-lapse adjusted at shot {self.current_shot + 1}/{self.total_shots} "
+            f"(poses={'updated' if poses else 'unchanged'}, camera={'updated' if camera_settings else 'unchanged'})"
+        )
+        return {"status": "OK", "current_shot": self.current_shot}
+
+
 
     async def cancel(self) -> dict[str, Any]:
         """Cancel active time-lapse sequence."""
@@ -270,11 +310,12 @@ class TimelapseEngine:
                     break
 
                 step_start_time = time.time()
+                cur_config = self.config or config
 
                 # Calculate target pose from explicit trajectory poses or fallback to easing profile
-                if config.poses and len(config.poses) == total:
-                    target_pan = float(config.poses[k].get("pan", 0.0))
-                    target_tilt = float(config.poses[k].get("tilt", 0.0))
+                if cur_config.poses and len(cur_config.poses) == total:
+                    target_pan = float(cur_config.poses[k].get("pan", 0.0))
+                    target_tilt = float(cur_config.poses[k].get("tilt", 0.0))
                     profile_label = "trajectory"
                 else:
                     raw_ratio = k / (total - 1) if total > 1 else 0.0
@@ -336,7 +377,17 @@ class TimelapseEngine:
                 if self._cancel_flag:
                     break
 
-                # Step 2: Settle Delay Pause
+                # Step 2: Settle Delay Pause & Camera Parameter Application
+                if cur_config.camera_settings and k < len(cur_config.camera_settings):
+                    shot_cam = cur_config.camera_settings[k]
+                    for param_key in ("iso", "shutter_speed", "aperture", "white_balance"):
+                        val = shot_cam.get(param_key)
+                        if val and hasattr(self.camera_mgr, "set_config"):
+                            try:
+                                await self.camera_mgr.set_config(param_key, str(val))
+                            except Exception as cam_err:
+                                logger.warning(f"Shot {k + 1}: Failed to apply camera {param_key}={val}: {cam_err}")
+
                 if config.settle_time_s > 0:
                     await asyncio.sleep(config.settle_time_s)
 
