@@ -60,6 +60,12 @@ def test_post_camera_config_validation():
         assert resp_invalid.status_code == 422
         assert "invalid" in resp_invalid.json()["detail"]["message"].lower()
 
+        # Test batch configuration setting
+        resp_batch = client.post("/api/camera/config", json={"iso": "1600", "shutter_speed": "1/125"})
+        assert resp_batch.status_code == 200
+        assert main.camera_mgr.iso == "1600"
+        assert main.camera_mgr.shutter_speed == "1/125"
+
 
 def test_focus_stepping_and_autofocus():
     with TestClient(app) as client:

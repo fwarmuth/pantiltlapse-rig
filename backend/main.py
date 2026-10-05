@@ -139,8 +139,12 @@ class RigLimitsRequest(BaseModel):
 
 
 class CameraConfigRequest(BaseModel):
-    param: str = Field(description="Parameter key: 'iso', 'shutter_speed', 'aperture', or 'white_balance'")
-    value: str = Field(description="Parameter target value, e.g. '400', '1/125'")
+    param: str | None = Field(default=None, description="Parameter key: 'iso', 'shutter_speed', 'aperture', or 'white_balance'")
+    value: str | None = Field(default=None, description="Parameter target value, e.g. '400', '1/125'")
+    iso: str | None = Field(default=None, description="Batch ISO setting")
+    shutter_speed: str | None = Field(default=None, description="Batch shutter speed setting")
+    aperture: str | None = Field(default=None, description="Batch aperture setting")
+    white_balance: str | None = Field(default=None, description="Batch white balance setting")
 
 
 def _require_serial_connected():
@@ -393,24 +397,48 @@ async def set_camera_config(req: CameraConfigRequest):
             detail={"status": "ERROR", "message": "Camera is disconnected"},
         )
 
+    # Collect parameters to apply
+    params_to_set: dict[str, str] = {}
+    if req.param and req.value is not None:
+        params_to_set[req.param] = str(req.value)
+    if req.iso is not None:
+        params_to_set["iso"] = str(req.iso)
+    if req.shutter_speed is not None:
+        params_to_set["shutter_speed"] = str(req.shutter_speed)
+    if req.aperture is not None:
+        params_to_set["aperture"] = str(req.aperture)
+    if req.white_balance is not None:
+        params_to_set["white_balance"] = str(req.white_balance)
+
+    if not params_to_set:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"status": "ERROR", "message": "No configuration parameters provided to update"},
+        )
+
     # Validate against supported camera choices
     try:
         choices = await camera_mgr.get_config_choices()
-        valid_options = choices.get(req.param, [])
-        if valid_options and req.value not in valid_options:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "status": "ERROR",
-                    "message": f"Invalid {req.param} value '{req.value}'. Supported options: {valid_options}",
-                },
-            )
+        for p_key, p_val in params_to_set.items():
+            valid_options = choices.get(p_key, [])
+            if valid_options and p_val not in valid_options:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "status": "ERROR",
+                        "message": f"Invalid {p_key} value '{p_val}'. Supported options: {valid_options}",
+                    },
+                )
     except HTTPException:
         raise
     except Exception as e:
         logger.warning(f"Could not validate choice against camera choices: {e}")
 
-    return await camera_mgr.set_config(req.param, req.value)
+    last_res = {"status": "OK"}
+    for p_key, p_val in params_to_set.items():
+        last_res = await camera_mgr.set_config(p_key, p_val)
+
+    return last_res
 
 
 @app.post("/api/camera/restart")

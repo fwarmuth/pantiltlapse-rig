@@ -1565,8 +1565,8 @@ class TimelineStudioApp {
 
   async triggerExposureWithCountdown({ iso = null, shutter = null, label = "Snapshot" } = {}) {
     // Determine active target settings
-    const activeIso = iso || this.liveState.camera.iso || "400";
-    const activeShutter = shutter || this.liveState.camera.shutter_speed || "1/125";
+    const activeIso = iso || this.liveState.camera?.iso || this.dom.defaultIsoSelect?.value || this.plan.defaults.iso || "400";
+    const activeShutter = shutter || this.liveState.camera?.shutter_speed || this.dom.defaultShutterSelect?.value || this.plan.defaults.shutter_speed || "1/125";
     const expSeconds = Math.max(0.1, this.parseShutterSeconds(activeShutter));
 
     // Disable snapshot trigger buttons during exposure
@@ -1583,7 +1583,7 @@ class TimelineStudioApp {
     if (overlay) {
       overlay.style.display = "flex";
       title.textContent = `📸 Exposing ${label}...`;
-      details.textContent = `ISO ${activeIso} • ${activeShutter}s${this.liveState.camera.aperture ? ' • f/' + this.liveState.camera.aperture : ''}`;
+      details.textContent = `ISO ${activeIso} • ${activeShutter}s${this.liveState.camera?.aperture ? ' • f/' + this.liveState.camera.aperture : ''}`;
       fill.style.width = "0%";
       timer.textContent = `0.0s / ${expSeconds.toFixed(1)}s`;
     }
@@ -1614,53 +1614,66 @@ class TimelineStudioApp {
       let prevIso = null;
       let prevShutter = null;
 
-      // If specific ISO or shutter requested (e.g. Star Snap), set config first
-      if (iso || shutter) {
-        prevIso = this.liveState.camera.iso;
-        prevShutter = this.liveState.camera.shutter_speed;
+      // If specific ISO or shutter requested (e.g. Star Snap), apply config
+      const needsIsoChange = iso && iso !== this.liveState.camera?.iso;
+      const needsShutterChange = shutter && shutter !== this.liveState.camera?.shutter_speed;
+
+      if (needsIsoChange || needsShutterChange) {
+        prevIso = this.liveState.camera?.iso;
+        prevShutter = this.liveState.camera?.shutter_speed;
         if (title) title.textContent = `⚙ Setting ${label} Profile (ISO ${activeIso}, ${activeShutter}s)...`;
 
         const configBody = {};
-        if (iso) configBody.iso = String(iso);
-        if (shutter) configBody.shutter_speed = String(shutter);
+        if (needsIsoChange) configBody.iso = String(iso);
+        if (needsShutterChange) configBody.shutter_speed = String(shutter);
 
         try {
-          await fetch("/api/camera/config", {
+          const confRes = await fetch("/api/camera/config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(configBody)
           });
+          if (!confRes.ok) {
+            console.warn("Camera config change rejected:", await confRes.text());
+          }
         } catch (confErr) {
           console.warn("Could not apply transient camera config:", confErr);
         }
-
-        if (title) title.textContent = `📸 Exposing ${label}...`;
-        startTime = Date.now();
       }
+
+      if (title) title.textContent = `📸 Exposing ${label}...`;
+      startTime = Date.now();
 
       // Trigger actual camera shutter
       const res = await fetch("/api/camera/trigger", { method: "POST" });
       const data = await res.json();
 
       // Restore camera settings if this was a transient shot
-      if (prevIso && prevShutter) {
+      if (prevIso || prevShutter) {
         try {
-          await fetch("/api/camera/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ iso: prevIso, shutter_speed: prevShutter })
-          });
+          const restoreBody = {};
+          if (prevIso && prevIso !== iso) restoreBody.iso = String(prevIso);
+          if (prevShutter && prevShutter !== shutter) restoreBody.shutter_speed = String(prevShutter);
+          if (Object.keys(restoreBody).length > 0) {
+            await fetch("/api/camera/config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(restoreBody)
+            });
+          }
         } catch (_) {}
       }
 
       if (data.status === "OK") {
-        if (title) title.textContent = "📥 Decoding preview image...";
+        if (title) title.textContent = "📥 Loading photo preview...";
 
-        // Preload image before showing
         const imgUrl = this.getPreviewUrl(true);
         const tempImg = new Image();
 
-        tempImg.onload = () => {
+        let finished = false;
+        const renderPhoto = () => {
+          if (finished) return;
+          finished = true;
           cleanup();
           this.dom.previewImage.src = imgUrl;
           this.dom.previewImage.style.display = "block";
@@ -1674,13 +1687,18 @@ class TimelineStudioApp {
           this.showToast(`${label} captured (${activeIso}, ${activeShutter}s)!`, "success");
         };
 
+        const loadTimeout = setTimeout(() => {
+          renderPhoto();
+        }, 3500);
+
+        tempImg.onload = () => {
+          clearTimeout(loadTimeout);
+          renderPhoto();
+        };
+
         tempImg.onerror = () => {
-          cleanup();
-          // Fall back to showing previewImage directly
-          this.dom.previewImage.src = imgUrl;
-          this.dom.previewImage.style.display = "block";
-          this.dom.viewportPlaceholder.style.display = "none";
-          this.showToast(`${label} captured, preview loading...`, "success");
+          clearTimeout(loadTimeout);
+          renderPhoto();
         };
 
         tempImg.src = imgUrl;
@@ -1697,11 +1715,15 @@ class TimelineStudioApp {
   async takeStarSnap() {
     let starIso = "12800";
     if (this.cameraChoices.iso?.length && !this.cameraChoices.iso.includes("12800")) {
-      starIso = this.cameraChoices.iso.includes("6400") ? "6400" : this.cameraChoices.iso[this.cameraChoices.iso.length - 1];
+      starIso = this.cameraChoices.iso.includes("6400")
+        ? "6400"
+        : (this.cameraChoices.iso.includes("3200") ? "3200" : this.cameraChoices.iso[this.cameraChoices.iso.length - 1]);
     }
     let starShutter = "2.5";
     if (this.cameraChoices.shutter_speed?.length && !this.cameraChoices.shutter_speed.includes("2.5")) {
-      starShutter = this.cameraChoices.shutter_speed.includes("2") ? "2" : "1";
+      starShutter = this.cameraChoices.shutter_speed.includes("2")
+        ? "2"
+        : (this.cameraChoices.shutter_speed.includes("1") ? "1" : "1/2");
     }
 
     await this.triggerExposureWithCountdown({
@@ -1712,7 +1734,11 @@ class TimelineStudioApp {
   }
 
   async takeSnapshot() {
+    const activeIso = this.liveState.camera?.iso || this.dom.defaultIsoSelect?.value || this.plan.defaults.iso || "100";
+    const activeShutter = this.liveState.camera?.shutter_speed || this.dom.defaultShutterSelect?.value || this.plan.defaults.shutter_speed || "1/250";
     await this.triggerExposureWithCountdown({
+      iso: activeIso,
+      shutter: activeShutter,
       label: "Snapshot"
     });
   }
@@ -1901,11 +1927,14 @@ class TimelineStudioApp {
   showToast(message, type = "info") {
     const toast = document.createElement("div");
     toast.className = `toast ${type}`;
-    toast.textContent = message;
+    toast.style.cursor = "pointer";
+    toast.title = "Click to dismiss";
+    toast.innerHTML = `<span>${message}</span><span style="margin-left: 10px; opacity: 0.6; font-size: 10px;">✕</span>`;
+    toast.onclick = () => toast.remove();
     this.dom.toastContainer.appendChild(toast);
     setTimeout(() => {
-      toast.remove();
-    }, 3500);
+      if (toast.parentNode) toast.remove();
+    }, 2800);
   }
 }
 
@@ -1943,19 +1972,24 @@ window.closeRecalibrateModal = function() {
 
 window.executeRecalibrateZero = async function() {
   window.closeRecalibrateModal();
+  const banner = document.getElementById("execZeroWarningBanner");
+  if (banner) banner.style.display = "none";
   try {
     const res = await fetch("/api/rig/confirm-zero", { method: "POST" });
     const data = await res.json();
     if (data.status === "OK") {
+      if (banner) banner.style.display = "none";
       if (window.app) {
-        window.app.showToast("Zero reference confirmed (0°, 0°)", "success");
+        window.app.showToast("Zero reference confirmed (0.00°, 0.00°)", "success");
         const ref = data.reference || { confirmed: true, reference_confirmed: true };
         window.app.handleLiveEvent({ reference: ref, motors: data.motors });
       }
     } else {
+      if (banner) banner.style.display = "flex";
       if (window.app) window.app.showToast(`Zero confirmation failed: ${data.message || "Unknown error"}`, "error");
     }
   } catch (e) {
+    if (banner) banner.style.display = "flex";
     if (window.app) window.app.showToast(`Zero error: ${e}`, "error");
   }
 };

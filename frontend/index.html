@@ -59,15 +59,21 @@
   </header>
 
   <!-- Zero Reference Warning Banner -->
-  <div id="execZeroWarningBanner" class="alert-banner warning hidden" style="display: none;">
-    <span>⚠️ Coordinate origin unconfirmed. Level camera and confirm zero before starting time-lapse.</span>
-    <button class="btn btn-xs" onclick="openRecalibrateModal()">Confirm Zero</button>
+  <div id="execZeroWarningBanner" class="alert-banner warning" style="display: none;">
+    <span>⚠️ <strong>Coordinate Origin Unconfirmed:</strong> Calibrate and lock (0.00°, 0.00°) before running automated trajectories.</span>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <button class="btn btn-xs btn-primary" onclick="openRecalibrateModal()">Confirm Zero (0°, 0°)</button>
+      <button class="btn btn-xs" onclick="document.getElementById('execZeroWarningBanner').style.display='none'" title="Dismiss banner">✕</button>
+    </div>
   </div>
 
   <!-- Shutter vs Interval Safety Alert Banner -->
-  <div id="intervalWarningBanner" class="alert-banner warning hidden" style="display: none;">
-    <span id="intervalWarningText">⚠️ Shutter speed + settle + 3s buffer exceeds interval!</span>
-    <button class="btn btn-xs" id="btnAutoAdjustInterval">Auto-Adjust Interval</button>
+  <div id="intervalWarningBanner" class="alert-banner warning" style="display: none;">
+    <span id="intervalWarningText">⚠️ Sequence Timing Alert: Longest shutter speed + settle + download buffer exceeds shot interval!</span>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <button class="btn btn-xs btn-primary" id="btnAutoAdjustInterval">Auto-Adjust Interval</button>
+      <button class="btn btn-xs" onclick="document.getElementById('intervalWarningBanner').style.display='none'" title="Dismiss alert">✕</button>
+    </div>
   </div>
 
   <!-- Main 2-Column Workspace -->
@@ -355,6 +361,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261005_05"></script>
+  <script src="app.js?v=20261005_06"></script>
 </body>
 </html>
