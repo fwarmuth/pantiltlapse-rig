@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -525,18 +526,9 @@ async def trigger_camera_shot():
     return await camera_mgr.trigger_capture()
 
 
-@app.get("/api/camera/preview/latest")
-async def get_latest_preview(
-    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
-    tier: str | None = Query(None, description="Alias for quality tier: 'low', 'balanced', or 'full'"),
-):
-    """
-    Serve latest snapshot image in one of 3 tiers:
-    - 'low' (default): 1024px compressed JPEG (~50-80KB) for fast loading over Wi-Fi.
-    - 'balanced': 1920px Full HD JPEG (~250-400KB) for crisp composition inspection.
-    - 'full': Original uncompressed native resolution (RAW/full-res JPEG) for star pinpoints and Focus Loupe.
-    """
-    selected_tier = (tier or quality or "low").strip().lower()
+async def _serve_tiered_image(orig_path: Path, quality_tier: str | None = None) -> FileResponse:
+    """Serve any captured image in low (1024px), balanced (1920px), or full resolution."""
+    selected_tier = (quality_tier or "low").strip().lower()
     if selected_tier in ("fast", "draft"):
         selected_tier = "low"
     elif selected_tier in ("medium", "standard"):
@@ -544,10 +536,6 @@ async def get_latest_preview(
     elif selected_tier in ("native", "original", "high"):
         selected_tier = "full"
 
-    if not camera_mgr.latest_photo_path or not os.path.exists(camera_mgr.latest_photo_path):
-        raise HTTPException(status_code=404, detail="No photo captured yet")
-
-    orig_path = Path(camera_mgr.latest_photo_path)
     if orig_path.suffix.lower() == ".svg" or selected_tier == "full":
         media_type = "image/svg+xml" if orig_path.suffix.lower() == ".svg" else "image/jpeg"
         return FileResponse(orig_path, media_type=media_type)
@@ -572,6 +560,99 @@ async def get_latest_preview(
         return FileResponse(target_preview, media_type="image/jpeg")
 
     return FileResponse(orig_path, media_type="image/jpeg")
+
+
+@app.get("/api/camera/preview/latest")
+async def get_latest_preview(
+    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
+    tier: str | None = Query(None, description="Alias for quality tier: 'low', 'balanced', or 'full'"),
+):
+    """
+    Serve latest snapshot image in one of 3 tiers:
+    - 'low' (default): 1024px compressed JPEG (~50-80KB) for fast loading over Wi-Fi.
+    - 'balanced': 1920px Full HD JPEG (~250-400KB) for crisp composition inspection.
+    - 'full': Original uncompressed native resolution (RAW/full-res JPEG) for star pinpoints and Focus Loupe.
+    """
+    if not camera_mgr.latest_photo_path or not os.path.exists(camera_mgr.latest_photo_path):
+        raise HTTPException(status_code=404, detail="No photo captured yet")
+
+    return await _serve_tiered_image(Path(camera_mgr.latest_photo_path), tier or quality or "low")
+
+
+@app.get("/api/camera/test-shots")
+async def list_test_shots():
+    """Return chronological history of test shots (Star Snaps and Snapshots), newest first."""
+    capture_dir_path = Path(camera_mgr.capture_dir).resolve()
+    if not capture_dir_path.exists():
+        return {"status": "OK", "count": 0, "test_shots": []}
+
+    shots = []
+    try:
+        for entry in capture_dir_path.iterdir():
+            if entry.is_file() and entry.name.lower().startswith("capture_") and entry.suffix.lower() in (".jpg", ".jpeg", ".cr2", ".cr3", ".svg"):
+                stat = entry.stat()
+                mtime = stat.st_mtime
+                size_mb = stat.st_size / (1024 * 1024)
+                size_human = f"{size_mb:.1f} MB" if size_mb >= 1.0 else f"{stat.st_size / 1024:.0f} KB"
+                dt = datetime.fromtimestamp(mtime, timezone.utc)
+                shots.append({
+                    "filename": entry.name,
+                    "timestamp": mtime,
+                    "formatted_time": dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    "time_display": dt.strftime("%H:%M:%S"),
+                    "date_display": dt.strftime("%Y-%m-%d"),
+                    "size_bytes": stat.st_size,
+                    "size_human": size_human,
+                    "url": f"/api/camera/test-shots/{entry.name}",
+                })
+        shots.sort(key=lambda x: x["timestamp"], reverse=True)
+    except Exception as e:
+        logger.error(f"Error reading test shots from '{capture_dir_path}': {e}")
+        return {"status": "ERROR", "message": str(e), "test_shots": []}
+
+    return {"status": "OK", "count": len(shots), "test_shots": shots}
+
+
+@app.get("/api/camera/test-shots/{filename}")
+async def get_test_shot_file(
+    filename: str,
+    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
+    tier: str | None = Query(None, description="Alias for quality tier: 'low', 'balanced', or 'full'"),
+):
+    """Serve specific test shot image file supporting quality tiers."""
+    safe_name = os.path.basename(filename)
+    capture_dir_path = Path(camera_mgr.capture_dir).resolve()
+    target = (capture_dir_path / safe_name).resolve()
+
+    if not str(target).startswith(str(capture_dir_path)) or not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"Test shot '{filename}' not found")
+
+    return await _serve_tiered_image(target, tier or quality or "low")
+
+
+@app.delete("/api/camera/test-shots/{filename}")
+async def delete_test_shot_file(filename: str):
+    """Delete a test shot and its cached thumbnails."""
+    _require_camera_control_idle("delete test shot")
+    safe_name = os.path.basename(filename)
+    capture_dir_path = Path(camera_mgr.capture_dir).resolve()
+    target = (capture_dir_path / safe_name).resolve()
+
+    if not str(target).startswith(str(capture_dir_path)) or not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"Test shot '{filename}' not found")
+
+    try:
+        target.unlink()
+        cache_dir = capture_dir_path / ".previews"
+        if cache_dir.exists():
+            for p in cache_dir.glob(f"{target.stem}_*.*"):
+                try:
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        return {"status": "OK", "deleted": safe_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete test shot: {e}")
 
 
 # --- Enhanced Live View API Endpoints ---

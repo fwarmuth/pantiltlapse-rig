@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>pantiltlapse - Single-Screen Timeline Studio</title>
-  <link rel="stylesheet" href="style.css?v=20261005_02">
+  <link rel="stylesheet" href="style.css?v=20261005_03">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -81,12 +81,28 @@
 
     <!-- Left Column: Viewport & Focus Station -->
     <section class="preview-pane">
+      <!-- Viewport Mode Tabs: Timelapse vs Test Shots -->
+      <div class="viewport-tabs-header">
+        <div class="viewport-tabs">
+          <button class="viewport-tab active" id="tabBtnTimelapse" type="button" title="View live stream framing and timelapse playback">
+            <span class="tab-icon">🎬</span> Timelapse
+          </button>
+          <button class="viewport-tab" id="tabBtnTestShots" type="button" title="Browse past test shots, star snaps, and focus calibration frames">
+            <span class="tab-icon">🧪</span> Test Shots <span class="tab-badge" id="testShotsCountBadge">0</span>
+          </button>
+        </div>
+        <div class="viewport-tabs-actions" id="testShotsHeaderActions" style="display: none;">
+          <button class="btn btn-xs" id="btnRefreshTestShots" title="Refresh Test Shots History">🔄 Refresh</button>
+          <button class="btn btn-xs btn-danger" id="btnDeleteSelectedTestShot" title="Delete Selected Test Shot">🗑 Delete</button>
+        </div>
+      </div>
+
       <div class="viewport-container" id="viewportContainer">
         <img id="previewImage" class="preview-media-frame" src="/api/camera/preview/latest" alt="Camera View" style="display: none;">
         <div id="loupeOverlay" class="loupe-overlay"></div>
         <div id="viewportPlaceholder" class="viewport-placeholder">
           <span class="icon">📷</span>
-          <span>No feed. Switch to "Live Stream" or take a "Star Snap".</span>
+          <span id="viewportPlaceholderText">No feed. Switch to "Live Stream" or take a "Star Snap".</span>
         </div>
 
         <!-- Live Exposure Countdown & Progress Modal Overlay -->
@@ -109,6 +125,9 @@
           <div class="overlay-pill" id="latestPhotoPill" style="display: none; background: rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.4); color: #6ee7b7;">
             <span class="icon">📷</span> <span id="latestPhotoText">Photo Ready</span>
           </div>
+          <div class="overlay-pill" id="testShotMetaPill" style="display: none; background: rgba(56, 189, 248, 0.2); border-color: rgba(56, 189, 248, 0.4); color: #38bdf8;">
+            <span class="icon">🧪</span> <span id="testShotMetaText">Test Shot</span>
+          </div>
         </div>
 
         <div class="viewport-overlay-bottom">
@@ -118,42 +137,78 @@
         </div>
       </div>
 
-      <!-- Focus Station Toolbar (Night/Star Long-Exposure Focus Assist) -->
-      <div class="viewport-focus-bar">
-        <div class="focus-cluster">
-          <span class="focus-label">Focus:</span>
-          <button class="btn btn-xs" id="btnAutoFocus" title="Trigger Autofocus Lock">🎯 AF Lock</button>
-          <button class="btn btn-xs" id="btnFocusFar3" title="Far Coarse (3 steps)">‹‹ Far 3</button>
-          <button class="btn btn-xs" id="btnFocusFar1" title="Far Fine (1 step)">‹ Far 1</button>
-          <button class="btn btn-xs" id="btnFocusNear1" title="Near Fine (1 step)">Near 1 ›</button>
-          <button class="btn btn-xs" id="btnFocusNear3" title="Near Coarse (3 steps)">Near 3 ››</button>
-        </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <div class="quality-tier-control" title="Preview image quality tier for faster loading over Wi-Fi">
-            <span class="focus-label">Tier:</span>
-            <div class="segmented-group" id="qualityTierGroup">
-              <button class="btn-segmented active" data-tier="low" id="btnTierLow" title="Low quality (1024px fast JPEG, default)">Low</button>
-              <button class="btn-segmented" data-tier="balanced" id="btnTierBalanced" title="Balanced quality (1920px Full HD)">Balanced</button>
-              <button class="btn-segmented" data-tier="full" id="btnTierFull" title="Full native camera resolution (best for Focus Loupe)">Full</button>
-            </div>
+      <!-- Tab Content 1: Timelapse Controls Wrapper -->
+      <div id="timelapseControlsWrapper">
+        <!-- Focus Station Toolbar (Night/Star Long-Exposure Focus Assist) -->
+        <div class="viewport-focus-bar">
+          <div class="focus-cluster">
+            <span class="focus-label">Focus:</span>
+            <button class="btn btn-xs" id="btnAutoFocus" title="Trigger Autofocus Lock">🎯 AF Lock</button>
+            <button class="btn btn-xs" id="btnFocusFar3" title="Far Coarse (3 steps)">‹‹ Far 3</button>
+            <button class="btn btn-xs" id="btnFocusFar1" title="Far Fine (1 step)">‹ Far 1</button>
+            <button class="btn btn-xs" id="btnFocusNear1" title="Near Fine (1 step)">Near 1 ›</button>
+            <button class="btn btn-xs" id="btnFocusNear3" title="Near Coarse (3 steps)">Near 3 ››</button>
           </div>
-          <button class="btn btn-xs" id="btnToggleLoupe" title="Toggle 5x Focus Loupe to inspect star sharpness">🔍 5x Loupe</button>
-          <button class="btn btn-xs btn-primary" id="btnStarSnap" title="Fast high-gain test shot (2s @ ISO 12800) to inspect stars in the dark">⚡ Star Snap</button>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <div class="quality-tier-control" title="Preview image quality tier for faster loading over Wi-Fi">
+              <span class="focus-label">Tier:</span>
+              <div class="segmented-group" id="qualityTierGroup">
+                <button class="btn-segmented active" data-tier="low" id="btnTierLow" title="Low quality (1024px fast JPEG, default)">Low</button>
+                <button class="btn-segmented" data-tier="balanced" id="btnTierBalanced" title="Balanced quality (1920px Full HD)">Balanced</button>
+                <button class="btn-segmented" data-tier="full" id="btnTierFull" title="Full native camera resolution (best for Focus Loupe)">Full</button>
+              </div>
+            </div>
+            <button class="btn btn-xs" id="btnToggleLoupe" title="Toggle 5x Focus Loupe to inspect star sharpness">🔍 5x Loupe</button>
+            <button class="btn btn-xs btn-primary" id="btnStarSnap" title="Fast high-gain test shot (2s @ ISO 12800) to inspect stars in the dark">⚡ Star Snap</button>
+          </div>
+        </div>
+
+        <!-- Viewport Action Bar -->
+        <div class="preview-controls-bar">
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-sm" id="btnToggleLiveView">🎥 Live Stream: OFF</button>
+            <button class="btn btn-sm" id="btnTakeSnapshot">📸 Take Snapshot</button>
+            <button class="btn btn-sm" id="btnMoveToPlayheadPose" title="Command physical rig to move to current playhead framing">🎯 Move Rig Here</button>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span id="liveRigFeedback" style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">
+              Rig: (0.0°, 0.0°)
+            </span>
+            <button class="btn btn-sm" id="btnRestartCam" title="Reset USB Camera connection">🔄 Cam</button>
+          </div>
         </div>
       </div>
 
-      <!-- Viewport Action Bar -->
-      <div class="preview-controls-bar">
-        <div style="display: flex; gap: 8px;">
-          <button class="btn btn-sm" id="btnToggleLiveView">🎥 Live Stream: OFF</button>
-          <button class="btn btn-sm" id="btnTakeSnapshot">📸 Take Snapshot</button>
-          <button class="btn btn-sm" id="btnMoveToPlayheadPose" title="Command physical rig to move to current playhead framing">🎯 Move Rig Here</button>
+      <!-- Tab Content 2: Test Shots History & Inspection Wrapper -->
+      <div id="testShotsControlsWrapper" style="display: none;">
+        <!-- Test Shots Inspector Toolbar -->
+        <div class="viewport-focus-bar test-shots-bar">
+          <div style="display: flex; gap: 8px; align-items: center; overflow: hidden;">
+            <span class="focus-label">Viewing:</span>
+            <span id="selectedShotLabel" style="font-family: var(--font-mono); font-size: 11px; color: #38bdf8; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+              No shot selected
+            </span>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
+            <div class="quality-tier-control" title="Preview image quality tier for faster loading over Wi-Fi">
+              <span class="focus-label">Tier:</span>
+              <div class="segmented-group" id="qualityTierGroupTestShots">
+                <button class="btn-segmented active" data-tier="low" title="Low quality (1024px fast JPEG, default)">Low</button>
+                <button class="btn-segmented" data-tier="balanced" title="Balanced quality (1920px Full HD)">Balanced</button>
+                <button class="btn-segmented" data-tier="full" title="Full native camera resolution (best for Focus Loupe)">Full</button>
+              </div>
+            </div>
+            <button class="btn btn-xs" id="btnToggleLoupeTestShots" title="Toggle 5x Focus Loupe to inspect star sharpness">🔍 5x Loupe</button>
+            <button class="btn btn-xs btn-primary" id="btnStarSnapTestShots" title="Take a new Star Snap">⚡ Star Snap</button>
+            <button class="btn btn-xs" id="btnTakeSnapshotTestShots" title="Take a new Snapshot">📸 Take Snapshot</button>
+          </div>
         </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <span id="liveRigFeedback" style="font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">
-            Rig: (0.0°, 0.0°)
-          </span>
-          <button class="btn btn-sm" id="btnRestartCam" title="Reset USB Camera connection">🔄 Cam</button>
+
+        <!-- History Filmstrip Gallery -->
+        <div class="test-shots-filmstrip-container">
+          <div class="test-shots-filmstrip" id="testShotsFilmstrip">
+            <div class="test-shots-empty">No test shots recorded yet.</div>
+          </div>
         </div>
       </div>
     </section>
@@ -361,6 +416,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261005_06"></script>
+  <script src="app.js?v=20261005_07"></script>
 </body>
 </html>

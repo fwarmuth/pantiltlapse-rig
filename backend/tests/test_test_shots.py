@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -107,3 +109,38 @@ def test_test_shot_cleanup_on_camera_failure(tmp_path):
     if test_shots_dir.exists():
         tmp_dirs = [d for d in test_shots_dir.iterdir() if d.name.startswith(".tmp_")]
         assert len(tmp_dirs) == 0
+
+
+def test_camera_test_shots_history_and_tiered_files(tmp_path):
+    import main
+    capture_dir = Path(main.camera_mgr.capture_dir)
+    capture_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create dummy capture files
+    sample_file_1 = capture_dir / "capture_20261001_120000.jpg"
+    sample_file_1.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xdb\x00C\x00\xff\xc0\x00\x11\x08\x00\x10\x00\x10\x03\x01\x11\x00\x02\x11\x01\x03\x11\x01\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\n\x0b\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00?\x00\xbf\x00\xff\xd9")
+
+    sample_file_2 = capture_dir / "capture_20261001_120100.jpg"
+    sample_file_2.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9")
+
+    with TestClient(app) as client:
+        # 1. List test shots
+        resp = client.get("/api/camera/test-shots")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "OK"
+        assert data["count"] >= 2
+        filenames = [s["filename"] for s in data["test_shots"]]
+        assert "capture_20261001_120100.jpg" in filenames
+        assert "capture_20261001_120000.jpg" in filenames
+
+        # 2. Get specific test shot file
+        resp_file = client.get("/api/camera/test-shots/capture_20261001_120100.jpg?quality=full")
+        assert resp_file.status_code == 200
+        assert len(resp_file.content) > 0
+
+        # 3. Delete test shot file
+        resp_del = client.delete("/api/camera/test-shots/capture_20261001_120000.jpg")
+        assert resp_del.status_code == 200
+        assert resp_del.json()["deleted"] == "capture_20261001_120000.jpg"
+        assert not sample_file_1.exists()

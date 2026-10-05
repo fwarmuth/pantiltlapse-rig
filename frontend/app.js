@@ -90,11 +90,17 @@ class TimelineStudioApp {
     this.isDragging = false;
     this.pendingOffsetChange = null;
 
+    // Viewport Mode Tabs & Test Shots
+    this.activeViewportTab = "timelapse";
+    this.testShots = [];
+    this.selectedTestShot = null;
+
     this.initDOM();
     this.bindEvents();
     this.initCanvas();
     this.fetchCameraChoices();
     this.fetchInitialRigStatus();
+    this.fetchTestShots();
     this.initSSE();
     this.updateScheduleCalculations();
     this.checkShutterIntervalSafety();
@@ -130,6 +136,23 @@ class TimelineStudioApp {
       btnAutoAdjustInterval: document.getElementById("btnAutoAdjustInterval"),
 
       // Viewport & Loupe
+      tabBtnTimelapse: document.getElementById("tabBtnTimelapse"),
+      tabBtnTestShots: document.getElementById("tabBtnTestShots"),
+      testShotsCountBadge: document.getElementById("testShotsCountBadge"),
+      testShotsHeaderActions: document.getElementById("testShotsHeaderActions"),
+      btnRefreshTestShots: document.getElementById("btnRefreshTestShots"),
+      btnDeleteSelectedTestShot: document.getElementById("btnDeleteSelectedTestShot"),
+      timelapseControlsWrapper: document.getElementById("timelapseControlsWrapper"),
+      testShotsControlsWrapper: document.getElementById("testShotsControlsWrapper"),
+      testShotsFilmstrip: document.getElementById("testShotsFilmstrip"),
+      selectedShotLabel: document.getElementById("selectedShotLabel"),
+      testShotMetaPill: document.getElementById("testShotMetaPill"),
+      testShotMetaText: document.getElementById("testShotMetaText"),
+      viewportPlaceholderText: document.getElementById("viewportPlaceholderText"),
+      btnStarSnapTestShots: document.getElementById("btnStarSnapTestShots"),
+      btnTakeSnapshotTestShots: document.getElementById("btnTakeSnapshotTestShots"),
+      btnToggleLoupeTestShots: document.getElementById("btnToggleLoupeTestShots"),
+
       viewportContainer: document.getElementById("viewportContainer"),
       previewImage: document.getElementById("previewImage"),
       loupeOverlay: document.getElementById("loupeOverlay"),
@@ -314,6 +337,29 @@ class TimelineStudioApp {
       this.dom.btnToggleCurveGraph.textContent = this.viewMode === "curve" ? "📊 Track View" : "📈 Curve Editor";
       this.renderTimeline();
     });
+
+    // Viewport Mode Tabs
+    if (this.dom.tabBtnTimelapse) {
+      this.dom.tabBtnTimelapse.addEventListener("click", () => this.switchViewportTab("timelapse"));
+    }
+    if (this.dom.tabBtnTestShots) {
+      this.dom.tabBtnTestShots.addEventListener("click", () => this.switchViewportTab("test-shots"));
+    }
+    if (this.dom.btnRefreshTestShots) {
+      this.dom.btnRefreshTestShots.addEventListener("click", () => this.fetchTestShots(false));
+    }
+    if (this.dom.btnDeleteSelectedTestShot) {
+      this.dom.btnDeleteSelectedTestShot.addEventListener("click", () => this.deleteSelectedTestShot());
+    }
+    if (this.dom.btnStarSnapTestShots) {
+      this.dom.btnStarSnapTestShots.addEventListener("click", () => this.takeStarSnap());
+    }
+    if (this.dom.btnTakeSnapshotTestShots) {
+      this.dom.btnTakeSnapshotTestShots.addEventListener("click", () => this.takeSnapshot());
+    }
+    if (this.dom.btnToggleLoupeTestShots) {
+      this.dom.btnToggleLoupeTestShots.addEventListener("click", () => this.toggleLoupe());
+    }
 
     // Viewport Actions
     this.dom.btnToggleLiveView.addEventListener("click", () => this.toggleLiveView());
@@ -1469,7 +1515,8 @@ class TimelineStudioApp {
 
   toggleLoupe() {
     this.isLoupeActive = !this.isLoupeActive;
-    this.dom.btnToggleLoupe.classList.toggle("btn-primary", this.isLoupeActive);
+    if (this.dom.btnToggleLoupe) this.dom.btnToggleLoupe.classList.toggle("btn-primary", this.isLoupeActive);
+    if (this.dom.btnToggleLoupeTestShots) this.dom.btnToggleLoupeTestShots.classList.toggle("btn-primary", this.isLoupeActive);
     this.dom.viewportContainer.classList.toggle("loupe-active", this.isLoupeActive);
     if (!this.isLoupeActive && this.dom.loupeOverlay) {
       this.dom.loupeOverlay.style.display = "none";
@@ -1479,6 +1526,187 @@ class TimelineStudioApp {
       this.showToast(`5x Loupe ON: Hover over viewport to inspect star focus${tip}`);
     } else {
       this.showToast("5x Loupe OFF");
+    }
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /* Viewport Mode Tabbing & Test Shots History                                 */
+  /* -------------------------------------------------------------------------- */
+  switchViewportTab(tabName) {
+    if (tabName !== "timelapse" && tabName !== "test-shots") return;
+    this.activeViewportTab = tabName;
+
+    const isTimelapse = tabName === "timelapse";
+
+    if (this.dom.tabBtnTimelapse) this.dom.tabBtnTimelapse.classList.toggle("active", isTimelapse);
+    if (this.dom.tabBtnTestShots) this.dom.tabBtnTestShots.classList.toggle("active", !isTimelapse);
+
+    if (this.dom.timelapseControlsWrapper) {
+      this.dom.timelapseControlsWrapper.style.display = isTimelapse ? "block" : "none";
+    }
+    if (this.dom.testShotsControlsWrapper) {
+      this.dom.testShotsControlsWrapper.style.display = isTimelapse ? "none" : "block";
+    }
+    if (this.dom.testShotsHeaderActions) {
+      this.dom.testShotsHeaderActions.style.display = isTimelapse ? "none" : "flex";
+    }
+
+    if (isTimelapse) {
+      // Restore timelapse viewport state
+      if (this.dom.testShotMetaPill) this.dom.testShotMetaPill.style.display = "none";
+      if (this.dom.shotCounterOverlay) this.dom.shotCounterOverlay.style.display = "block";
+      if (this.dom.timingOverlay) this.dom.timingOverlay.style.display = "block";
+      if (this.dom.interpolatedPoseOverlay) this.dom.interpolatedPoseOverlay.style.display = "block";
+      if (this.isLiveViewActive) {
+        this.dom.previewImage.src = `/api/camera/preview/stream?t=${Date.now()}`;
+        this.dom.previewImage.style.display = "block";
+        this.dom.viewportPlaceholder.style.display = "none";
+      } else {
+        this.dom.previewImage.src = this.getPreviewUrl(true);
+      }
+    } else {
+      // Switch to Test Shots mode
+      if (this.isLiveViewActive) {
+        this.toggleLiveView(); // Stop live view stream when entering history
+      }
+      if (this.dom.shotCounterOverlay) this.dom.shotCounterOverlay.style.display = "none";
+      if (this.dom.timingOverlay) this.dom.timingOverlay.style.display = "none";
+      if (this.dom.interpolatedPoseOverlay) this.dom.interpolatedPoseOverlay.style.display = "none";
+      if (this.dom.latestPhotoPill) this.dom.latestPhotoPill.style.display = "none";
+
+      this.fetchTestShots(true);
+    }
+  }
+
+  async fetchTestShots(autoSelect = false) {
+    try {
+      const res = await fetch("/api/camera/test-shots");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      this.testShots = data.test_shots || [];
+
+      if (this.dom.testShotsCountBadge) {
+        this.dom.testShotsCountBadge.textContent = this.testShots.length;
+      }
+
+      this.renderTestShotsFilmstrip();
+
+      if (autoSelect || !this.selectedTestShot) {
+        if (this.testShots.length > 0) {
+          this.selectTestShot(this.testShots[0].filename);
+        } else {
+          this.selectedTestShot = null;
+          if (this.dom.selectedShotLabel) this.dom.selectedShotLabel.textContent = "No test shots found";
+          if (this.dom.testShotMetaPill) this.dom.testShotMetaPill.style.display = "none";
+          if (this.activeViewportTab === "test-shots") {
+            this.dom.previewImage.style.display = "none";
+            this.dom.viewportPlaceholder.style.display = "flex";
+            if (this.dom.viewportPlaceholderText) {
+              this.dom.viewportPlaceholderText.textContent = "No test shots recorded yet. Take a Star Snap or Snapshot.";
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch test shots:", e);
+      if (this.dom.testShotsFilmstrip) {
+        this.dom.testShotsFilmstrip.innerHTML = `<div class="test-shots-empty">Could not load test shots: ${e.message || e}</div>`;
+      }
+    }
+  }
+
+  renderTestShotsFilmstrip() {
+    const container = this.dom.testShotsFilmstrip;
+    if (!container) return;
+
+    if (!this.testShots || this.testShots.length === 0) {
+      container.innerHTML = `<div class="test-shots-empty">No test shots recorded yet. Capture a Star Snap or Snapshot above.</div>`;
+      return;
+    }
+
+    container.innerHTML = "";
+    this.testShots.forEach((shot) => {
+      const card = document.createElement("div");
+      card.className = `test-shot-card ${shot.filename === this.selectedTestShot ? "active" : ""}`;
+      card.title = `Click to inspect ${shot.filename} (${shot.size_human})`;
+
+      // Low tier URL for thumbnail
+      const thumbUrl = `/api/camera/test-shots/${shot.filename}?quality=low`;
+
+      card.innerHTML = `
+        <div class="test-shot-thumb-wrap">
+          <img class="test-shot-thumb" src="${thumbUrl}" alt="${shot.filename}" loading="lazy" onerror="this.style.opacity='0.2'">
+        </div>
+        <div class="test-shot-info">
+          <div class="test-shot-time">${shot.time_display || shot.filename}</div>
+          <div class="test-shot-meta">
+            <span>${shot.date_display || ""}</span>
+            <span>${shot.size_human}</span>
+          </div>
+        </div>
+      `;
+
+      card.addEventListener("click", () => {
+        this.selectTestShot(shot.filename);
+      });
+
+      container.appendChild(card);
+    });
+  }
+
+  selectTestShot(filename) {
+    this.selectedTestShot = filename;
+    const shot = this.testShots.find((s) => s.filename === filename);
+    if (!shot) return;
+
+    // Highlight active card in filmstrip
+    if (this.dom.testShotsFilmstrip) {
+      const cards = this.dom.testShotsFilmstrip.querySelectorAll(".test-shot-card");
+      cards.forEach((c, idx) => {
+        const s = this.testShots[idx];
+        c.classList.toggle("active", s && s.filename === filename);
+      });
+    }
+
+    // Update label & pill
+    if (this.dom.selectedShotLabel) {
+      this.dom.selectedShotLabel.textContent = `${shot.filename} (${shot.size_human})`;
+    }
+    if (this.dom.testShotMetaPill) {
+      this.dom.testShotMetaPill.style.display = "flex";
+      this.dom.testShotMetaText.textContent = `Test Shot: ${shot.time_display || ""} • ${shot.size_human}`;
+    }
+
+    // Load photo in viewport
+    const imgUrl = `/api/camera/test-shots/${filename}?quality=${this.imageTier}&t=${Date.now()}`;
+    this.dom.previewImage.src = imgUrl;
+    this.dom.previewImage.style.display = "block";
+    this.dom.viewportPlaceholder.style.display = "none";
+  }
+
+  async deleteSelectedTestShot() {
+    if (!this.selectedTestShot) {
+      this.showToast("No test shot selected to delete", "warning");
+      return;
+    }
+
+    const filename = this.selectedTestShot;
+    if (!confirm(`Delete test shot '${filename}'? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/camera/test-shots/${filename}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.status === "OK") {
+        this.showToast(`Deleted ${filename}`, "success");
+        this.selectedTestShot = null;
+        await this.fetchTestShots(true);
+      } else {
+        this.showToast(`Delete failed: ${data.message || "Unknown error"}`, "error");
+      }
+    } catch (e) {
+      this.showToast(`Delete error: ${e}`, "error");
     }
   }
 
@@ -1509,6 +1737,10 @@ class TimelineStudioApp {
   }
 
   getPreviewUrl(bustCache = false) {
+    if (this.activeViewportTab === "test-shots" && this.selectedTestShot) {
+      const base = `/api/camera/test-shots/${this.selectedTestShot}?quality=${this.imageTier}`;
+      return bustCache ? `${base}&t=${Date.now()}` : base;
+    }
     const base = `/api/camera/preview/latest?quality=${this.imageTier}`;
     return bustCache ? `${base}&t=${Date.now()}` : base;
   }
@@ -1665,6 +1897,7 @@ class TimelineStudioApp {
       }
 
       if (data.status === "OK") {
+        this.fetchTestShots(this.activeViewportTab === "test-shots");
         if (title) title.textContent = "📥 Loading photo preview...";
 
         const imgUrl = this.getPreviewUrl(true);
