@@ -83,10 +83,26 @@
           <span>No feed. Switch to "Live Stream" or take a "Star Snap".</span>
         </div>
 
+        <!-- Live Exposure Countdown & Progress Modal Overlay -->
+        <div id="exposureCountdownOverlay" class="exposure-countdown-overlay" style="display: none;">
+          <div class="exposure-card">
+            <div class="exposure-spinner"></div>
+            <div class="exposure-title" id="exposureTitle">📸 Exposing Snapshot...</div>
+            <div class="exposure-timer" id="exposureTimer">0.0s / 2.5s</div>
+            <div class="exposure-progress-bar">
+              <div class="exposure-progress-fill" id="exposureProgressFill" style="width: 0%;"></div>
+            </div>
+            <div class="exposure-details" id="exposureDetails">ISO 12800 • 2.5s • f/4.5</div>
+          </div>
+        </div>
+
         <!-- Overlays -->
         <div class="viewport-overlay-top">
           <div class="overlay-pill" id="shotCounterOverlay">Shot 1 / 240</div>
           <div class="overlay-pill" id="timingOverlay">ETA: 20m 00s</div>
+          <div class="overlay-pill" id="latestPhotoPill" style="display: none; background: rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.4); color: #6ee7b7;">
+            <span class="icon">📷</span> <span id="latestPhotoText">Photo Ready</span>
+          </div>
         </div>
 
         <div class="viewport-overlay-bottom">
@@ -339,6 +355,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261005_04"></script>
+  <script src="app.js?v=20261005_05"></script>
 </body>
 </html>

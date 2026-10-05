@@ -47,7 +47,28 @@ class CameraManager:
         """Return True if camera physical dial is in Manual mode ('Manual' or 'M')."""
         return self.exposure_mode.strip().lower() in ("manual", "m")
 
+    def _rehydrate_latest_photo(self):
+        """Find most recent photo file in capture directory if latest_photo_path is empty."""
+        if not self.latest_photo_path and os.path.exists(self.capture_dir):
+            try:
+                candidate_files = []
+                for root, _, files in os.walk(self.capture_dir):
+                    if os.path.basename(root).startswith("."):
+                        continue
+                    for f in files:
+                        if f.lower().endswith((".jpg", ".jpeg", ".cr2", ".cr3")):
+                            full_path = os.path.join(root, f)
+                            candidate_files.append((os.path.getmtime(full_path), full_path))
+                if candidate_files:
+                    candidate_files.sort(key=lambda x: x[0], reverse=True)
+                    self.latest_photo_path = candidate_files[0][1]
+                    self.last_capture_time = candidate_files[0][0]
+                    logger.info(f"Rehydrated latest photo path on startup: '{self.latest_photo_path}'")
+            except Exception as e:
+                logger.debug(f"Could not rehydrate latest photo path: {e}")
+
     async def initialize(self) -> bool:
+        self._rehydrate_latest_photo()
         if not HAS_GPHOTO2:
             logger.error("python-gphoto2 package is not installed. CameraManager unavailable.")
             self.is_connected = False

@@ -137,6 +137,13 @@ class TimelineStudioApp {
       shotCounterOverlay: document.getElementById("shotCounterOverlay"),
       timingOverlay: document.getElementById("timingOverlay"),
       interpolatedPoseOverlay: document.getElementById("interpolatedPoseOverlay"),
+      exposureCountdownOverlay: document.getElementById("exposureCountdownOverlay"),
+      exposureTitle: document.getElementById("exposureTitle"),
+      exposureTimer: document.getElementById("exposureTimer"),
+      exposureProgressFill: document.getElementById("exposureProgressFill"),
+      exposureDetails: document.getElementById("exposureDetails"),
+      latestPhotoPill: document.getElementById("latestPhotoPill"),
+      latestPhotoText: document.getElementById("latestPhotoText"),
       btnToggleLiveView: document.getElementById("btnToggleLiveView"),
       btnTakeSnapshot: document.getElementById("btnTakeSnapshot"),
       btnMoveToPlayheadPose: document.getElementById("btnMoveToPlayheadPose"),
@@ -417,6 +424,24 @@ class TimelineStudioApp {
       }
     } catch (e) {
       console.warn("Could not fetch initial rig status:", e);
+    }
+
+    try {
+      const camRes = await fetch("/api/camera/status");
+      if (camRes.ok) {
+        const camData = await camRes.json();
+        if (camData.has_latest_photo && !this.isLiveViewActive) {
+          this.dom.previewImage.src = this.getPreviewUrl(true);
+          this.dom.previewImage.style.display = "block";
+          this.dom.viewportPlaceholder.style.display = "none";
+          if (this.dom.latestPhotoPill) {
+            this.dom.latestPhotoPill.style.display = "flex";
+            this.dom.latestPhotoText.textContent = camData.latest_photo_filename || "Last Photo";
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch initial camera status:", e);
     }
   }
 
@@ -1524,40 +1549,172 @@ class TimelineStudioApp {
     loupe.style.backgroundPosition = `-${mouseX * zoomFactor - 70}px -${mouseY * zoomFactor - 70}px`;
   }
 
-  async takeStarSnap() {
-    this.showToast("Capturing fast high-gain Star Snap (ISO 12800, 2.5s)...");
+  parseShutterSeconds(shutterStr) {
+    if (!shutterStr) return 1.0;
+    const s = String(shutterStr).trim().toLowerCase();
+    if (s === "bulb") return 30.0;
+    if (s.includes("/")) {
+      const parts = s.split("/");
+      const num = parseFloat(parts[0]);
+      const den = parseFloat(parts[1]);
+      if (den && den > 0) return num / den;
+    }
+    const val = parseFloat(s);
+    return isNaN(val) || val <= 0 ? 1.0 : val;
+  }
+
+  async triggerExposureWithCountdown({ iso = null, shutter = null, label = "Snapshot" } = {}) {
+    // Determine active target settings
+    const activeIso = iso || this.liveState.camera.iso || "400";
+    const activeShutter = shutter || this.liveState.camera.shutter_speed || "1/125";
+    const expSeconds = Math.max(0.1, this.parseShutterSeconds(activeShutter));
+
+    // Disable snapshot trigger buttons during exposure
+    if (this.dom.btnTakeSnapshot) this.dom.btnTakeSnapshot.disabled = true;
+    if (this.dom.btnStarSnap) this.dom.btnStarSnap.disabled = true;
+
+    // Show exposure countdown overlay
+    const overlay = this.dom.exposureCountdownOverlay;
+    const title = this.dom.exposureTitle;
+    const timer = this.dom.exposureTimer;
+    const fill = this.dom.exposureProgressFill;
+    const details = this.dom.exposureDetails;
+
+    if (overlay) {
+      overlay.style.display = "flex";
+      title.textContent = `📸 Exposing ${label}...`;
+      details.textContent = `ISO ${activeIso} • ${activeShutter}s${this.liveState.camera.aperture ? ' • f/' + this.liveState.camera.aperture : ''}`;
+      fill.style.width = "0%";
+      timer.textContent = `0.0s / ${expSeconds.toFixed(1)}s`;
+    }
+
+    let startTime = Date.now();
+    const countdownInterval = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      if (elapsed <= expSeconds) {
+        const pct = Math.min(100, (elapsed / expSeconds) * 100);
+        if (fill) fill.style.width = `${pct.toFixed(1)}%`;
+        if (timer) timer.textContent = `${elapsed.toFixed(1)}s / ${expSeconds.toFixed(1)}s`;
+      } else {
+        if (fill) fill.style.width = "100%";
+        if (title) title.textContent = `📥 Transferring photo from camera...`;
+        const transferSec = (elapsed - expSeconds).toFixed(1);
+        if (timer) timer.textContent = `Shutter closed (${expSeconds.toFixed(1)}s) • Downloading +${transferSec}s`;
+      }
+    }, 100);
+
+    const cleanup = () => {
+      clearInterval(countdownInterval);
+      if (overlay) overlay.style.display = "none";
+      if (this.dom.btnTakeSnapshot) this.dom.btnTakeSnapshot.disabled = false;
+      if (this.dom.btnStarSnap) this.dom.btnStarSnap.disabled = false;
+    };
+
     try {
+      let prevIso = null;
+      let prevShutter = null;
+
+      // If specific ISO or shutter requested (e.g. Star Snap), set config first
+      if (iso || shutter) {
+        prevIso = this.liveState.camera.iso;
+        prevShutter = this.liveState.camera.shutter_speed;
+        if (title) title.textContent = `⚙ Setting ${label} Profile (ISO ${activeIso}, ${activeShutter}s)...`;
+
+        const configBody = {};
+        if (iso) configBody.iso = String(iso);
+        if (shutter) configBody.shutter_speed = String(shutter);
+
+        try {
+          await fetch("/api/camera/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(configBody)
+          });
+        } catch (confErr) {
+          console.warn("Could not apply transient camera config:", confErr);
+        }
+
+        if (title) title.textContent = `📸 Exposing ${label}...`;
+        startTime = Date.now();
+      }
+
+      // Trigger actual camera shutter
       const res = await fetch("/api/camera/trigger", { method: "POST" });
       const data = await res.json();
+
+      // Restore camera settings if this was a transient shot
+      if (prevIso && prevShutter) {
+        try {
+          await fetch("/api/camera/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ iso: prevIso, shutter_speed: prevShutter })
+          });
+        } catch (_) {}
+      }
+
       if (data.status === "OK") {
-        this.dom.previewImage.src = this.getPreviewUrl(true);
-        this.dom.previewImage.style.display = "block";
-        this.dom.viewportPlaceholder.style.display = "none";
-        this.showToast("Star Snap captured! Inspect sharpness with 5x Loupe", "success");
+        if (title) title.textContent = "📥 Decoding preview image...";
+
+        // Preload image before showing
+        const imgUrl = this.getPreviewUrl(true);
+        const tempImg = new Image();
+
+        tempImg.onload = () => {
+          cleanup();
+          this.dom.previewImage.src = imgUrl;
+          this.dom.previewImage.style.display = "block";
+          this.dom.viewportPlaceholder.style.display = "none";
+
+          const nowStr = new Date().toLocaleTimeString();
+          if (this.dom.latestPhotoPill) {
+            this.dom.latestPhotoPill.style.display = "flex";
+            this.dom.latestPhotoText.textContent = `${label} (${activeIso}, ${activeShutter}s) @ ${nowStr}`;
+          }
+          this.showToast(`${label} captured (${activeIso}, ${activeShutter}s)!`, "success");
+        };
+
+        tempImg.onerror = () => {
+          cleanup();
+          // Fall back to showing previewImage directly
+          this.dom.previewImage.src = imgUrl;
+          this.dom.previewImage.style.display = "block";
+          this.dom.viewportPlaceholder.style.display = "none";
+          this.showToast(`${label} captured, preview loading...`, "success");
+        };
+
+        tempImg.src = imgUrl;
       } else {
-        this.showToast(`Star Snap failed: ${data.message}`, "error");
+        cleanup();
+        this.showToast(`${label} failed: ${data.message || "Unknown error"}`, "error");
       }
     } catch (e) {
-      this.showToast(`Star Snap error: ${e}`, "error");
+      cleanup();
+      this.showToast(`${label} error: ${e}`, "error");
     }
   }
 
-  async takeSnapshot() {
-    this.showToast("Capturing snapshot exposure...");
-    try {
-      const res = await fetch("/api/camera/trigger", { method: "POST" });
-      const data = await res.json();
-      if (data.status === "OK") {
-        this.dom.previewImage.src = this.getPreviewUrl(true);
-        this.dom.previewImage.style.display = "block";
-        this.dom.viewportPlaceholder.style.display = "none";
-        this.showToast("Snapshot captured", "success");
-      } else {
-        this.showToast(`Snapshot: ${data.message}`, "error");
-      }
-    } catch (e) {
-      this.showToast(`Snapshot error: ${e}`, "error");
+  async takeStarSnap() {
+    let starIso = "12800";
+    if (this.cameraChoices.iso?.length && !this.cameraChoices.iso.includes("12800")) {
+      starIso = this.cameraChoices.iso.includes("6400") ? "6400" : this.cameraChoices.iso[this.cameraChoices.iso.length - 1];
     }
+    let starShutter = "2.5";
+    if (this.cameraChoices.shutter_speed?.length && !this.cameraChoices.shutter_speed.includes("2.5")) {
+      starShutter = this.cameraChoices.shutter_speed.includes("2") ? "2" : "1";
+    }
+
+    await this.triggerExposureWithCountdown({
+      iso: starIso,
+      shutter: starShutter,
+      label: "Star Snap"
+    });
+  }
+
+  async takeSnapshot() {
+    await this.triggerExposureWithCountdown({
+      label: "Snapshot"
+    });
   }
 
   async toggleLiveView() {

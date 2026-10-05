@@ -34,7 +34,27 @@ class FakeCameraManager:
     def is_manual_mode(self) -> bool:
         return True
 
+    def _rehydrate_latest_photo(self):
+        """Find most recent photo file in capture directory if latest_photo_path is empty."""
+        if not self.latest_photo_path and os.path.exists(self.capture_dir):
+            try:
+                candidate_files = []
+                for root, _, files in os.walk(self.capture_dir):
+                    if os.path.basename(root).startswith("."):
+                        continue
+                    for f in files:
+                        if f.lower().endswith((".jpg", ".jpeg", ".svg")):
+                            full_path = os.path.join(root, f)
+                            candidate_files.append((os.path.getmtime(full_path), full_path))
+                if candidate_files:
+                    candidate_files.sort(key=lambda x: x[0], reverse=True)
+                    self.latest_photo_path = candidate_files[0][1]
+                    self.last_capture_time = candidate_files[0][0]
+            except Exception:
+                pass
+
     async def initialize(self) -> bool:
+        self._rehydrate_latest_photo()
         logger.info("Initializing FakeCameraManager...")
         self.is_connected = True
         self.model = "Fake Camera (Simulation)"
