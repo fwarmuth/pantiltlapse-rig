@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from domain.models import RigSnapshot
 
@@ -27,6 +27,11 @@ class CoordinateReferenceState(BaseModel):
     )
     confirmed_at: datetime | None = Field(default=None, description="UTC timestamp when reference was confirmed")
     invalidation_reason: str | None = Field(default="Backend startup", description="Reason for reference generation")
+
+    @computed_field
+    @property
+    def reference_confirmed(self) -> bool:
+        return self.confirmed
 
 
 class RigManager:

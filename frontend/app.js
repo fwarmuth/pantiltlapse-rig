@@ -94,6 +94,7 @@ class TimelineStudioApp {
     this.bindEvents();
     this.initCanvas();
     this.fetchCameraChoices();
+    this.fetchInitialRigStatus();
     this.initSSE();
     this.updateScheduleCalculations();
     this.checkShutterIntervalSafety();
@@ -405,6 +406,20 @@ class TimelineStudioApp {
     this.updateInspectorUI();
   }
 
+  async fetchInitialRigStatus() {
+    try {
+      const res = await fetch("/api/rig/status");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.reference) {
+          this.handleLiveEvent({ reference: data.reference });
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch initial rig status:", e);
+    }
+  }
+
   populateSelectOptions() {
     const fill = (selectElem, items, defaultVal) => {
       selectElem.innerHTML = "";
@@ -463,7 +478,9 @@ class TimelineStudioApp {
     }
 
     if (data.reference) {
-      const isZero = data.reference.reference_confirmed;
+      const isZero = !!(data.reference.confirmed || data.reference.reference_confirmed);
+      this.liveState.rig.reference_confirmed = isZero;
+      this.liveState.rig.zero_state = isZero ? "OK" : "UNCONFIRMED";
       this.dom.zeroRefBadge.className = `status-badge ${isZero ? "connected" : "warning"}`;
       this.dom.zeroRefText.textContent = isZero ? "ZERO: OK (0°, 0°)" : "ZERO: UNCONFIRMED";
       if (this.dom.execZeroWarningBanner) {
@@ -1773,9 +1790,13 @@ window.executeRecalibrateZero = async function() {
     const res = await fetch("/api/rig/confirm-zero", { method: "POST" });
     const data = await res.json();
     if (data.status === "OK") {
-      if (window.app) window.app.showToast("Zero reference confirmed (0°, 0°)", "success");
+      if (window.app) {
+        window.app.showToast("Zero reference confirmed (0°, 0°)", "success");
+        const ref = data.reference || { confirmed: true, reference_confirmed: true };
+        window.app.handleLiveEvent({ reference: ref, motors: data.motors });
+      }
     } else {
-      if (window.app) window.app.showToast(`Zero confirmation failed: ${data.message}`, "error");
+      if (window.app) window.app.showToast(`Zero confirmation failed: ${data.message || "Unknown error"}`, "error");
     }
   } catch (e) {
     if (window.app) window.app.showToast(`Zero error: ${e}`, "error");
