@@ -326,13 +326,16 @@ class CameraManager:
             pass
         try:
             count = root.count_children()
-            for i in range(count):
+        except Exception:
+            return None
+        for i in range(count):
+            try:
                 child = root.get_child(i)
                 found = self._find_widget_recursive(child, target_name)
                 if found is not None:
                     return found
-        except Exception:
-            pass
+            except Exception:
+                pass
         return None
 
     def _find_focus_widget(self, root: Any) -> tuple[Any | None, str | None]:
@@ -439,6 +442,25 @@ class CameraManager:
                                     matched = True
                                     break
 
+                    # Check / ensure viewfinder (Live View) on Canon EOS cameras.
+                    # Canon PTP firmware ignores manualfocusdrive if the reflex mirror is down.
+                    vf_widget = None
+                    vf_needed_restore = False
+                    if hasattr(self._camera, "get_single_config") and hasattr(self._camera, "set_single_config"):
+                        try:
+                            vf = self._camera.get_single_config("viewfinder")
+                            if vf is not None:
+                                curr_vf = vf.get_value()
+                                if curr_vf == 0 or str(curr_vf) == "0":
+                                    logger.info("Enabling Canon viewfinder (Live View) for manual focus drive...")
+                                    vf.set_value(1)
+                                    self._camera.set_single_config("viewfinder", vf)
+                                    vf_widget = vf
+                                    vf_needed_restore = True
+                                    time.sleep(0.2)  # Allow reflex mirror to lift and AF motor circuit to activate
+                        except Exception as e:
+                            logger.info(f"Viewfinder pre-step handling exception: {e}")
+
                     try:
                         widget.set_value(target_val)
                     except Exception:
@@ -468,6 +490,15 @@ class CameraManager:
                                 pass
                     except Exception:
                         time.sleep(settle_sec)
+
+                    # Restore viewfinder to standby if we temporarily lifted the mirror
+                    if vf_needed_restore and vf_widget is not None:
+                        try:
+                            vf_widget.set_value(0)
+                            self._camera.set_single_config("viewfinder", vf_widget)
+                            logger.info("Restored Canon viewfinder to standby (0)")
+                        except Exception as e:
+                            logger.info(f"Viewfinder post-step restore handling exception: {e}")
 
                     # Note: Do NOT set manualfocusdrive="None".
                     # In Canon PTP, manualfocusdrive is an action trigger that automatically resets.
@@ -580,6 +611,23 @@ class CameraManager:
         async with self._lock:
             def _set():
                 try:
+                    if hasattr(self._camera, "get_single_config") and hasattr(self._camera, "set_single_config"):
+                        try:
+                            widget = self._camera.get_single_config(name)
+                            if widget is not None:
+                                try:
+                                    widget.set_value(value)
+                                except Exception:
+                                    try:
+                                        widget.set_value(int(value))
+                                    except Exception:
+                                        widget.set_value(str(value))
+                                self._camera.set_single_config(name, widget)
+                                logger.info(f"Debug raw widget set via single_config: '{name}' = {value}")
+                                return {"status": "OK", "widget": name, "value": value}
+                        except Exception:
+                            pass
+
                     config = self._camera.get_config()
                     widget = self._find_widget_recursive(config, name)
                     if not widget:
