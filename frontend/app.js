@@ -67,6 +67,7 @@ class TimelineStudioApp {
     // Viewport & Loupe State
     this.isLiveViewActive = false;
     this.isLoupeActive = false;
+    this.imageTier = localStorage.getItem("pantiltlapse_image_quality") || "low";
 
     // Camera Choices
     this.cameraChoices = {
@@ -320,6 +321,15 @@ class TimelineStudioApp {
     this.dom.btnFocusNear3.addEventListener("click", () => this.stepFocus("near", 3));
     this.dom.btnToggleLoupe.addEventListener("click", () => this.toggleLoupe());
     this.dom.btnStarSnap.addEventListener("click", () => this.takeStarSnap());
+
+    // Quality Tier Switcher (Low, Balanced, Full)
+    const tierButtons = document.querySelectorAll(".btn-segmented[data-tier]");
+    tierButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.setImageTier(btn.dataset.tier);
+      });
+    });
+    this.updateQualityTierButtons();
 
     // Execution Controls
     this.dom.btnStartTimelapse.addEventListener("click", () => this.startTimelapse());
@@ -1422,7 +1432,51 @@ class TimelineStudioApp {
     if (!this.isLoupeActive && this.dom.loupeOverlay) {
       this.dom.loupeOverlay.style.display = "none";
     }
-    this.showToast(this.isLoupeActive ? "5x Loupe ON: Hover over viewport to inspect star focus" : "5x Loupe OFF");
+    if (this.isLoupeActive) {
+      const tip = this.imageTier !== "full" ? " (Tip: select 'Full' tier for pin-sharp star inspection)" : "";
+      this.showToast(`5x Loupe ON: Hover over viewport to inspect star focus${tip}`);
+    } else {
+      this.showToast("5x Loupe OFF");
+    }
+  }
+
+  updateQualityTierButtons() {
+    document.querySelectorAll(".btn-segmented[data-tier]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.tier === this.imageTier);
+    });
+  }
+
+  setImageTier(tier) {
+    if (!["low", "balanced", "full"].includes(tier)) return;
+    this.imageTier = tier;
+    localStorage.setItem("pantiltlapse_image_quality", tier);
+    this.updateQualityTierButtons();
+
+    const tierLabels = {
+      low: "Low (1024px, fastest over Wi-Fi)",
+      balanced: "Balanced (1080p, crisp framing)",
+      full: "Full Native Sensor Resolution (best for Loupe)",
+    };
+
+    this.showToast(`Preview quality: ${tierLabels[tier]}`);
+
+    // If an image is currently visible in the viewport and not streaming, reload it in the requested tier
+    if (!this.isLiveViewActive && this.dom.previewImage && this.dom.previewImage.style.display !== "none") {
+      this.reloadPreviewImage();
+    }
+  }
+
+  getPreviewUrl(bustCache = false) {
+    const base = `/api/camera/preview/latest?quality=${this.imageTier}`;
+    return bustCache ? `${base}&t=${Date.now()}` : base;
+  }
+
+  reloadPreviewImage() {
+    if (!this.dom.previewImage || this.isLiveViewActive) return;
+    if (this.imageTier === "full") {
+      this.showToast("Loading full-resolution image from camera...");
+    }
+    this.dom.previewImage.src = this.getPreviewUrl(true);
   }
 
   onViewportMouseMove(e) {
@@ -1459,7 +1513,7 @@ class TimelineStudioApp {
       const res = await fetch("/api/camera/trigger", { method: "POST" });
       const data = await res.json();
       if (data.status === "OK") {
-        this.dom.previewImage.src = `/api/camera/preview/latest?t=${Date.now()}`;
+        this.dom.previewImage.src = this.getPreviewUrl(true);
         this.dom.previewImage.style.display = "block";
         this.dom.viewportPlaceholder.style.display = "none";
         this.showToast("Star Snap captured! Inspect sharpness with 5x Loupe", "success");
@@ -1477,7 +1531,7 @@ class TimelineStudioApp {
       const res = await fetch("/api/camera/trigger", { method: "POST" });
       const data = await res.json();
       if (data.status === "OK") {
-        this.dom.previewImage.src = `/api/camera/preview/latest?t=${Date.now()}`;
+        this.dom.previewImage.src = this.getPreviewUrl(true);
         this.dom.previewImage.style.display = "block";
         this.dom.viewportPlaceholder.style.display = "none";
         this.showToast("Snapshot captured", "success");
@@ -1500,7 +1554,7 @@ class TimelineStudioApp {
     } else {
       this.dom.btnToggleLiveView.textContent = "🎥 Live Stream: OFF";
       this.dom.btnToggleLiveView.classList.remove("btn-primary");
-      this.dom.previewImage.src = "/api/camera/preview/latest";
+      this.dom.previewImage.src = this.getPreviewUrl(true);
     }
   }
 

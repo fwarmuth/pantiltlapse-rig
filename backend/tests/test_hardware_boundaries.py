@@ -77,10 +77,13 @@ def test_reconnect_motors_endpoint():
     with TestClient(app) as client:
         # Mock port to non-existent port to test failed reconnect handling
         original_port = serial_mgr.port
+        original_fallbacks = list(serial_mgr.fallback_ports)
         serial_mgr.port = "/dev/nonexistent_tty_device_5678"
+        serial_mgr.fallback_ports = []
         try:
             resp = client.post("/api/motors/reconnect")
             assert resp.status_code == 503
             assert serial_mgr.is_connected is False
         finally:
             serial_mgr.port = original_port
+            serial_mgr.fallback_ports = original_fallbacks

@@ -9,7 +9,7 @@ from typing import Any
 from uuid import UUID
 
 import dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -498,11 +498,52 @@ async def trigger_camera_shot():
 
 
 @app.get("/api/camera/preview/latest")
-async def get_latest_preview():
-    if camera_mgr.latest_photo_path and os.path.exists(camera_mgr.latest_photo_path):
-        media_type = "image/svg+xml" if camera_mgr.latest_photo_path.endswith(".svg") else "image/jpeg"
-        return FileResponse(camera_mgr.latest_photo_path, media_type=media_type)
-    raise HTTPException(status_code=404, detail="No photo captured yet")
+async def get_latest_preview(
+    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
+    tier: str | None = Query(None, description="Alias for quality tier: 'low', 'balanced', or 'full'"),
+):
+    """
+    Serve latest snapshot image in one of 3 tiers:
+    - 'low' (default): 1024px compressed JPEG (~50-80KB) for fast loading over Wi-Fi.
+    - 'balanced': 1920px Full HD JPEG (~250-400KB) for crisp composition inspection.
+    - 'full': Original uncompressed native resolution (RAW/full-res JPEG) for star pinpoints and Focus Loupe.
+    """
+    selected_tier = (tier or quality or "low").strip().lower()
+    if selected_tier in ("fast", "draft"):
+        selected_tier = "low"
+    elif selected_tier in ("medium", "standard"):
+        selected_tier = "balanced"
+    elif selected_tier in ("native", "original", "high"):
+        selected_tier = "full"
+
+    if not camera_mgr.latest_photo_path or not os.path.exists(camera_mgr.latest_photo_path):
+        raise HTTPException(status_code=404, detail="No photo captured yet")
+
+    orig_path = Path(camera_mgr.latest_photo_path)
+    if orig_path.suffix.lower() == ".svg" or selected_tier == "full":
+        media_type = "image/svg+xml" if orig_path.suffix.lower() == ".svg" else "image/jpeg"
+        return FileResponse(orig_path, media_type=media_type)
+
+    cache_dir = orig_path.parent / ".previews"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if selected_tier == "low":
+        target_preview = cache_dir / f"{orig_path.stem}_low.jpg"
+        if not target_preview.exists() or target_preview.stat().st_mtime < orig_path.stat().st_mtime:
+            ok = await asyncio.to_thread(generate_resized_preview_sync, orig_path, target_preview, 1024, 70)
+            if not ok or not target_preview.exists():
+                return FileResponse(orig_path, media_type="image/jpeg")
+        return FileResponse(target_preview, media_type="image/jpeg")
+
+    elif selected_tier == "balanced":
+        target_preview = cache_dir / f"{orig_path.stem}_balanced.jpg"
+        if not target_preview.exists() or target_preview.stat().st_mtime < orig_path.stat().st_mtime:
+            ok = await asyncio.to_thread(generate_resized_preview_sync, orig_path, target_preview, 1920, 80)
+            if not ok or not target_preview.exists():
+                return FileResponse(orig_path, media_type="image/jpeg")
+        return FileResponse(target_preview, media_type="image/jpeg")
+
+    return FileResponse(orig_path, media_type="image/jpeg")
 
 
 # --- Enhanced Live View API Endpoints ---

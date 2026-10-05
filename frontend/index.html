@@ -106,7 +106,15 @@
           <button class="btn btn-xs" id="btnFocusNear1" title="Near Fine (1 step)">Near 1 ›</button>
           <button class="btn btn-xs" id="btnFocusNear3" title="Near Coarse (3 steps)">Near 3 ››</button>
         </div>
-        <div style="display: flex; gap: 6px; align-items: center;">
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <div class="quality-tier-control" title="Preview image quality tier for faster loading over Wi-Fi">
+            <span class="focus-label">Tier:</span>
+            <div class="segmented-group" id="qualityTierGroup">
+              <button class="btn-segmented active" data-tier="low" id="btnTierLow" title="Low quality (1024px fast JPEG, default)">Low</button>
+              <button class="btn-segmented" data-tier="balanced" id="btnTierBalanced" title="Balanced quality (1920px Full HD)">Balanced</button>
+              <button class="btn-segmented" data-tier="full" id="btnTierFull" title="Full native camera resolution (best for Focus Loupe)">Full</button>
+            </div>
+          </div>
           <button class="btn btn-xs" id="btnToggleLoupe" title="Toggle 5x Focus Loupe to inspect star sharpness">🔍 5x Loupe</button>
           <button class="btn btn-xs btn-primary" id="btnStarSnap" title="Fast high-gain test shot (2s @ ISO 12800) to inspect stars in the dark">⚡ Star Snap</button>
         </div>
@@ -331,6 +339,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261005_02"></script>
+  <script src="app.js?v=20261005_03"></script>
 </body>
 </html>
