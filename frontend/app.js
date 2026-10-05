@@ -189,15 +189,19 @@ class TimelineStudioApp {
       calcRunTime: document.getElementById("calcRunTime"),
       calcClipLength: document.getElementById("calcClipLength"),
 
-      // Key Trigger Inspector
+      // Key Trigger Inspector & Direct Angles
       inspectorTrackTitle: document.getElementById("inspectorTrackTitle"),
       keyTriggerCard: document.getElementById("keyTriggerCard"),
       keyCardTitle: document.getElementById("keyCardTitle"),
       btnToggleKeyTrigger: document.getElementById("btnToggleKeyTrigger"),
+      keyAnglesPanel: document.getElementById("keyAnglesPanel"),
+      keyPanInput: document.getElementById("keyPanInput"),
+      panKeyIndicator: document.getElementById("panKeyIndicator"),
+      keyTiltInput: document.getElementById("keyTiltInput"),
+      tiltKeyIndicator: document.getElementById("tiltKeyIndicator"),
+      btnDriveRigToPose: document.getElementById("btnDriveRigToPose"),
+      parameterValueContainer: document.getElementById("parameterValueContainer"),
       lblParameterValue: document.getElementById("lblParameterValue"),
-      numericValueGroup: document.getElementById("numericValueGroup"),
-      keyNumericInput: document.getElementById("keyNumericInput"),
-      numericInputUnit: document.getElementById("numericInputUnit"),
       discreteValueGroup: document.getElementById("discreteValueGroup"),
       keyDiscreteSelect: document.getElementById("keyDiscreteSelect"),
       easingContainer: document.getElementById("easingContainer"),
@@ -270,22 +274,9 @@ class TimelineStudioApp {
     this.dom.defaultWbSelect.addEventListener("change", (e) => updateDefault("white_balance", e.target.value));
     this.dom.btnSyncFromCam.addEventListener("click", () => this.syncFromCameraSettings());
 
-    // Key Trigger Value Input Events
-    this.dom.keyNumericInput.addEventListener("input", (e) => {
-      const track = this.plan.tracks[this.activeTrackId];
-      if (!track || track.type !== "continuous") return;
-      let key = this.getKeyTriggerAtShot(track, this.playhead);
-      if (!key) {
-        this.addKeyTriggerAtPlayhead();
-        key = this.getKeyTriggerAtShot(track, this.playhead);
-      }
-      if (key) {
-        key.value = parseFloat(e.target.value) || 0.0;
-        this.renderTimeline();
-        this.updateOverlays();
-        this.checkLiveRamping(this.activeTrackId, key.value);
-      }
-    });
+    // Direct Keyframe Angle Input Events (Software Only - No Motor Movement)
+    this.dom.keyPanInput.addEventListener("input", (e) => this.setKeyAngle("pan", e.target.value));
+    this.dom.keyTiltInput.addEventListener("input", (e) => this.setKeyAngle("tilt", e.target.value));
 
     this.dom.keyDiscreteSelect.addEventListener("change", (e) => {
       const paramKey = this.activeTrackId;
@@ -892,16 +883,31 @@ class TimelineStudioApp {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    const track = this.plan.tracks[this.activeTrackId];
+    const rulerH = 28;
+    const rowH = 44;
 
-    // Check click on keypoints
-    if (track) {
-      for (const key of track.keyframes) {
+    // In tracks view, activate track when clicked anywhere on its row
+    if (this.viewMode === "tracks" && mouseY >= rulerH) {
+      const activeTracks = Object.values(this.plan.tracks);
+      const trackIdx = Math.floor((mouseY - rulerH) / rowH);
+      if (trackIdx >= 0 && trackIdx < activeTracks.length) {
+        this.activeTrackId = activeTracks[trackIdx].id;
+      }
+    }
+
+    // Check click on keypoints across all tracks (in tracks view) or active track (in curve view)
+    const tracksToCheck = this.viewMode === "tracks"
+      ? Object.values(this.plan.tracks)
+      : [this.plan.tracks[this.activeTrackId]].filter(Boolean);
+
+    for (const tr of tracksToCheck) {
+      for (const key of tr.keyframes) {
         const kx = this.shotToX(key.shotIndex);
         if (Math.abs(mouseX - kx) < 12) {
+          this.activeTrackId = tr.id;
           this.selectedKeyId = key.id;
           this.setPlayhead(key.shotIndex);
-          this.dragTarget = { type: "key", trackId: track.id, id: key.id };
+          this.dragTarget = { type: "key", trackId: tr.id, id: key.id };
           this.isDragging = true;
           this.updateInspectorUI();
           this.renderTimeline();
@@ -922,6 +928,7 @@ class TimelineStudioApp {
 
     const rect = this.canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
     const targetShot = this.xToShot(mouseX);
 
     if (this.dragTarget.type === "playhead") {
@@ -932,6 +939,26 @@ class TimelineStudioApp {
         const key = track.keyframes.find((k) => k.id === this.dragTarget.id);
         if (key) {
           key.shotIndex = Math.max(1, Math.min(this.plan.totalShots, targetShot));
+          // If in curve mode on a continuous track, also drag angle vertically
+          if (this.viewMode === "curve" && track.type === "continuous") {
+            const rulerH = 28;
+            const graphY = rulerH;
+            const graphH = this.canvasHeight - rulerH;
+            let minVal = -10;
+            let maxVal = 40;
+            if (track.keyframes.length > 0) {
+              minVal = Math.min(...track.keyframes.map((k) => k.value));
+              maxVal = Math.max(...track.keyframes.map((k) => k.value));
+            }
+            const padding = Math.max(5, (maxVal - minVal) * 0.2);
+            minVal -= padding;
+            maxVal += padding;
+            const valRange = maxVal - minVal || 1;
+            const fraction = (graphY + graphH - 20 - mouseY) / (graphH - 40);
+            let rawVal = minVal + fraction * valRange;
+            if (track.id === "tilt") rawVal = Math.max(-80, Math.min(80, rawVal));
+            key.value = Number(rawVal.toFixed(1));
+          }
           track.keyframes.sort((a, b) => a.shotIndex - b.shotIndex);
           this.setPlayhead(key.shotIndex);
           this.updateInspectorUI();
@@ -1190,6 +1217,87 @@ class TimelineStudioApp {
     }
   }
 
+  addKeyTriggerAtPlayheadForTrack(trackId) {
+    const track = this.plan.tracks[trackId];
+    if (!track) return null;
+
+    const existing = this.getKeyTriggerAtShot(track, this.playhead);
+    if (existing) {
+      this.selectedKeyId = existing.id;
+      return existing;
+    }
+
+    const curVal = this.evaluateTrackAtShot(track, this.playhead);
+    const newKey = {
+      id: `${track.id}-${Date.now()}`,
+      shotIndex: this.playhead,
+      value: track.type === "continuous" ? Number(curVal.toFixed(1)) : curVal,
+      mode: "auto",
+      inTangent: [-15, 0],
+      outTangent: [15, 0]
+    };
+
+    track.keyframes.push(newKey);
+    track.keyframes.sort((a, b) => a.shotIndex - b.shotIndex);
+    this.selectedKeyId = newKey.id;
+    return newKey;
+  }
+
+  setKeyAngle(axis, val) {
+    const track = this.plan.tracks[axis];
+    if (!track) return;
+
+    let key = this.getKeyTriggerAtShot(track, this.playhead);
+    if (!key) {
+      key = this.addKeyTriggerAtPlayheadForTrack(axis);
+    }
+
+    let num = parseFloat(val);
+    if (isNaN(num)) num = 0.0;
+    if (axis === "tilt") {
+      num = Math.max(-80, Math.min(80, num));
+    }
+
+    if (key) {
+      key.value = Number(num.toFixed(1));
+    }
+
+    this.updateInspectorUI();
+    this.updateOverlays();
+    this.renderTimeline();
+    this.checkLiveRamping(axis, key ? key.value : num);
+  }
+
+  nudgeKeyAngle(axis, delta) {
+    const track = this.plan.tracks[axis];
+    if (!track) return;
+
+    let key = this.getKeyTriggerAtShot(track, this.playhead);
+    const curVal = key ? key.value : this.evaluateTrackAtShot(track, this.playhead);
+    const newVal = Number((curVal + delta).toFixed(1));
+    this.setKeyAngle(axis, newVal);
+  }
+
+  async moveRigToCurrentPose() {
+    const pan = this.evaluateTrackAtShot(this.plan.tracks.pan, this.playhead);
+    const tilt = this.evaluateTrackAtShot(this.plan.tracks.tilt, this.playhead);
+    try {
+      this.showToast(`Slewing rig to Pan ${Number(pan).toFixed(1)}°, Tilt ${Number(tilt).toFixed(1)}°...`, "info");
+      const res = await fetch("/api/motors/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pan: Number(Number(pan).toFixed(1)), tilt: Number(Number(tilt).toFixed(1)), relative: false })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail?.message || err.detail || "Move failed");
+      }
+      this.showToast(`Rig slewed to pose: Pan ${Number(pan).toFixed(1)}°, Tilt ${Number(tilt).toFixed(1)}°`, "success");
+    } catch (e) {
+      this.showToast(`Move error: ${e.message || e}`, "error");
+    }
+  }
+
   /* -------------------------------------------------------------------------- */
   /* Inspector Synchronization & Auto-Synced Live Jogging                       */
   /* -------------------------------------------------------------------------- */
@@ -1200,32 +1308,48 @@ class TimelineStudioApp {
     this.dom.inspectorTrackTitle.textContent = `📍 Key Trigger: ${track.label}`;
     const key = this.getKeyTriggerAtShot(track, this.playhead);
 
-    if (track.type === "continuous") {
-      this.dom.numericValueGroup.style.display = "flex";
-      this.dom.discreteValueGroup.style.display = "none";
-      this.dom.easingContainer.style.display = "block";
-      this.dom.lblParameterValue.textContent = `Target ${track.label}`;
-      this.dom.numericInputUnit.textContent = "deg";
+    // Update Direct Pan & Tilt Angle Inputs (Software)
+    const panKey = this.getKeyTriggerAtShot(this.plan.tracks.pan, this.playhead);
+    const panVal = panKey ? panKey.value : this.evaluateTrackAtShot(this.plan.tracks.pan, this.playhead);
+    if (this.dom.keyPanInput) {
+      this.dom.keyPanInput.value = Number(panVal).toFixed(1);
+    }
+    if (this.dom.panKeyIndicator) {
+      this.dom.panKeyIndicator.textContent = panKey ? "Key" : "Interpolated";
+      this.dom.panKeyIndicator.style.color = panKey ? "#06b6d4" : "var(--text-dim)";
+    }
 
-      const val = key ? key.value : this.evaluateTrackAtShot(track, this.playhead);
-      this.dom.keyNumericInput.value = Number(val).toFixed(1);
-      this.dom.keyEasingSelect.value = key?.mode || "auto";
+    const tiltKey = this.getKeyTriggerAtShot(this.plan.tracks.tilt, this.playhead);
+    const tiltVal = tiltKey ? tiltKey.value : this.evaluateTrackAtShot(this.plan.tracks.tilt, this.playhead);
+    if (this.dom.keyTiltInput) {
+      this.dom.keyTiltInput.value = Number(tiltVal).toFixed(1);
+    }
+    if (this.dom.tiltKeyIndicator) {
+      this.dom.tiltKeyIndicator.textContent = tiltKey ? "Key" : "Interpolated";
+      this.dom.tiltKeyIndicator.style.color = tiltKey ? "#f97316" : "var(--text-dim)";
+    }
+
+    if (track.type === "continuous") {
+      if (this.dom.parameterValueContainer) this.dom.parameterValueContainer.style.display = "none";
+      if (this.dom.easingContainer) this.dom.easingContainer.style.display = "block";
+      if (this.dom.keyEasingSelect) this.dom.keyEasingSelect.value = key?.mode || "auto";
     } else {
-      this.dom.numericValueGroup.style.display = "none";
-      this.dom.discreteValueGroup.style.display = "block";
-      this.dom.easingContainer.style.display = "none";
-      this.dom.lblParameterValue.textContent = `Target ${track.label} (Hold Step)`;
+      if (this.dom.parameterValueContainer) this.dom.parameterValueContainer.style.display = "block";
+      if (this.dom.easingContainer) this.dom.easingContainer.style.display = "none";
+      if (this.dom.lblParameterValue) this.dom.lblParameterValue.textContent = `Target ${track.label} (Hold Step)`;
 
       const choices = this.cameraChoices[track.id] || [];
-      this.dom.keyDiscreteSelect.innerHTML = "";
-      choices.forEach((c) => {
-        const opt = document.createElement("option");
-        opt.value = c;
-        opt.textContent = c;
-        this.dom.keyDiscreteSelect.appendChild(opt);
-      });
-      const val = key ? key.value : this.evaluateTrackAtShot(track, this.playhead);
-      this.dom.keyDiscreteSelect.value = val;
+      if (this.dom.keyDiscreteSelect) {
+        this.dom.keyDiscreteSelect.innerHTML = "";
+        choices.forEach((c) => {
+          const opt = document.createElement("option");
+          opt.value = c;
+          opt.textContent = c;
+          this.dom.keyDiscreteSelect.appendChild(opt);
+        });
+        const val = key ? key.value : this.evaluateTrackAtShot(track, this.playhead);
+        this.dom.keyDiscreteSelect.value = val;
+      }
     }
 
     if (key) {

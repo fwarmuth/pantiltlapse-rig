@@ -736,6 +736,35 @@ body {
   pointer-events: none;
 }
 
+.key-angles-panel {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 10px;
+  margin-top: 10px;
+}
+
+.btn-group-nudges {
+  display: flex;
+  gap: 2px;
+}
+
+.btn-group-nudges .btn {
+  padding: 3px 5px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+
+.btn-group-nudges .btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-light);
+  border-color: var(--border-medium);
+}
+
+
 input[type="text"],
 input[type="number"],
 select {

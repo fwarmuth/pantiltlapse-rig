@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>pantiltlapse - Single-Screen Timeline Studio</title>
-  <link rel="stylesheet" href="style.css?v=20261005_03">
+  <link rel="stylesheet" href="style.css?v=20261005_04">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -263,14 +263,63 @@
           <button class="btn btn-sm" id="btnToggleKeyTrigger">Remove Key</button>
         </div>
 
-        <!-- Parameter Value (Dynamic per selected track) -->
-        <div class="form-row" id="parameterValueContainer">
-          <label class="form-label" id="lblParameterValue">Target Pan Angle</label>
-          <div class="input-group" id="numericValueGroup">
-            <input type="number" id="keyNumericInput" step="0.5" value="0.0">
-            <span class="input-group-unit" id="numericInputUnit">deg</span>
+        <!-- Direct Keyframe Angles (Pan & Tilt) - Software Only (No Motor Move) -->
+        <div class="key-angles-panel" id="keyAnglesPanel">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label class="form-label" style="margin-bottom: 0;">Keyframe Angles</label>
+            <span style="font-size: 10px; color: var(--text-dim);">Direct Edit • Software Only</span>
           </div>
-          <div id="discreteValueGroup" style="display: none;">
+
+          <!-- Pan Angle Input & Software Nudges -->
+          <div class="form-row" style="margin-bottom: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
+              <span style="font-size: 11px; font-weight: 600; color: #06b6d4;">Pan Angle</span>
+              <span id="panKeyIndicator" style="font-size: 10px; color: var(--text-dim);">Key</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <div class="input-group" style="flex: 1;">
+                <input type="number" id="keyPanInput" step="0.5" value="0.0">
+                <span class="input-group-unit">°</span>
+              </div>
+              <div class="btn-group-nudges">
+                <button class="btn btn-xs" onclick="app.nudgeKeyAngle('pan', -5)" title="Pan -5° in software">-5°</button>
+                <button class="btn btn-xs" onclick="app.nudgeKeyAngle('pan', -1)" title="Pan -1° in software">-1°</button>
+                <button class="btn btn-xs" onclick="app.nudgeKeyAngle('pan', 1)" title="Pan +1° in software">+1°</button>
+                <button class="btn btn-xs" onclick="app.nudgeKeyAngle('pan', 5)" title="Pan +5° in software">+5°</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tilt Angle Input & Software Nudges -->
+          <div class="form-row" style="margin-bottom: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
+              <span style="font-size: 11px; font-weight: 600; color: #f97316;">Tilt Angle</span>
+              <span id="tiltKeyIndicator" style="font-size: 10px; color: var(--text-dim);">Key</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <div class="input-group" style="flex: 1;">
+                <input type="number" id="keyTiltInput" step="0.5" min="-80" max="80" value="0.0">
+                <span class="input-group-unit">°</span>
+              </div>
+              <div class="btn-group-nudges">
+                <button class="btn btn-xs" onclick="app.nudgeKeyAngle('tilt', -2)" title="Tilt -2° in software">-2°</button>
+                <button class="btn btn-xs" onclick="app.nudgeKeyAngle('tilt', -1)" title="Tilt -1° in software">-1°</button>
+                <button class="btn btn-xs" onclick="app.nudgeKeyAngle('tilt', 1)" title="Tilt +1° in software">+1°</button>
+                <button class="btn btn-xs" onclick="app.nudgeKeyAngle('tilt', 2)" title="Tilt +2° in software">+2°</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Optional Move Rig to Pose Button -->
+          <button class="btn btn-sm btn-block" id="btnDriveRigToPose" style="margin-top: 4px; font-size: 11px; width: 100%;" onclick="app.moveRigToCurrentPose()" title="Physically slew rig motors to this exact Pan/Tilt pose">
+            🚗 Preview Pose on Rig (Move Motors)
+          </button>
+        </div>
+
+        <!-- Camera Parameter Discrete Step (When ISO/Shutter/Aperture/WB track selected) -->
+        <div class="form-row" id="parameterValueContainer" style="display: none; margin-top: 10px;">
+          <label class="form-label" id="lblParameterValue">Target Camera Setting (Hold Step)</label>
+          <div id="discreteValueGroup">
             <select id="keyDiscreteSelect"></select>
           </div>
         </div>
@@ -286,17 +335,17 @@
           </select>
         </div>
 
-        <!-- Auto-Synced Physical Jogging (Framing Station) -->
-        <div class="form-row" style="margin-top: 12px;">
+        <!-- Physical Jogging Station (Drives Motors) -->
+        <div class="form-row" style="margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <label class="form-label" style="margin-bottom: 0;">Auto-Synced Live Jog</label>
-            <span style="font-size: 10px; color: var(--text-dim);">Updates active keypoint</span>
+            <label class="form-label" style="margin-bottom: 0;">Physical Rig Jog</label>
+            <span style="font-size: 10px; color: var(--accent-amber);">Drives Motors</span>
           </div>
           <div class="jog-grid">
-            <button class="btn btn-sm" onclick="app.jogMotor(-5, 0)">Pan -5°</button>
-            <button class="btn btn-sm" onclick="app.jogMotor(5, 0)">Pan +5°</button>
-            <button class="btn btn-sm" onclick="app.jogMotor(0, -2)">Tilt -2°</button>
-            <button class="btn btn-sm" onclick="app.jogMotor(0, 2)">Tilt +2°</button>
+            <button class="btn btn-sm" onclick="app.jogMotor(-5, 0)">Jog Pan -5°</button>
+            <button class="btn btn-sm" onclick="app.jogMotor(5, 0)">Jog Pan +5°</button>
+            <button class="btn btn-sm" onclick="app.jogMotor(0, -2)">Jog Tilt -2°</button>
+            <button class="btn btn-sm" onclick="app.jogMotor(0, 2)">Jog Tilt +2°</button>
           </div>
         </div>
       </div>
@@ -416,6 +465,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261005_07"></script>
+  <script src="app.js?v=20261005_08"></script>
 </body>
 </html>
