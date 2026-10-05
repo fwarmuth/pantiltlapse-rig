@@ -151,7 +151,7 @@ async def test_motor_reconnect_invalidates_reference_without_retrying_absolute_m
     await asyncio.wait_for(engine._task, timeout=0.5)
 
     assert engine.state == "ERROR"
-    assert serial.moves == 1
+    assert serial.moves == 3
     assert serial.reconnects == 1
     assert rig.reference.confirmed is False
     assert rig.reference.reference_id != original_reference_id
@@ -173,3 +173,40 @@ async def test_dry_run_immediate_cancel_releases_coordinator(tmp_path):
 
     assert coordinator.active_mode == "IDLE"
     assert engine.state == "CANCELLED"
+
+
+class TransientFailSerial:
+    def __init__(self):
+        self.moves = 0
+
+    async def move_absolute(self, pan: float, tilt: float):
+        self.moves += 1
+        # Fail on attempt 1, succeed on subsequent attempts
+        if self.moves == 1:
+            return {"status": "TIMEOUT", "message": "Command timed out"}
+        return {"status": "OK", "response": "DONE"}
+
+
+@pytest.mark.asyncio
+async def test_timelapse_recovers_from_transient_move_failure_without_invalidating_reference(tmp_path):
+    rig = RigManager(storage_dir=tmp_path)
+    ref = rig.confirm_reference()
+    original_ref_id = ref.reference_id
+
+    serial = TransientFailSerial()
+    coordinator = OperationCoordinator()
+    engine = TimelapseEngine(serial, NoopCamera(), rig, coordinator)
+    engine.motor_retry_delay_s = 0.0
+
+    await engine.start(
+        TimelapseConfig(total_shots=2, interval_s=1.0, settle_time_s=0.0, capture_photo=False)
+    )
+    await asyncio.wait_for(engine._task, timeout=3.0)
+
+    assert engine.state == "COMPLETED"
+    # Shot 1 took 2 attempts (1 failed + 1 succeeded), Shot 2 took 1 attempt = 3 total moves
+    assert serial.moves == 3
+    assert rig.reference.confirmed is True
+    assert rig.reference.reference_id == original_ref_id
+    assert coordinator.active_mode == "IDLE"
+

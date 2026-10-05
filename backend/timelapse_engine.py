@@ -287,17 +287,34 @@ class TimelapseEngine:
                     f"Shot {k + 1}/{total} [{profile_label}]: Moving to ({target_pan:.2f}°, {target_tilt:.2f}°)..."
                 )
 
-                # Step 1: Move Motors (with automatic recovery for transient USB disconnects)
-                move_res = await self.serial_mgr.move_absolute(target_pan, target_tilt)
+                # Step 1: Move Motors (with automatic retries for transient communication glitches)
+                move_res = None
+                for move_attempt in range(1, 4):
+                    move_res = await self.serial_mgr.move_absolute(target_pan, target_tilt)
+                    if move_res.get("status") == "OK":
+                        break
+
+                    if move_attempt < 3:
+                        logger.warning(
+                            f"Shot {k + 1} motor move attempt {move_attempt}/3 failed ({move_res.get('message')}). "
+                            f"Retrying move in {self.motor_retry_delay_s}s..."
+                        )
+                        if self.motor_retry_delay_s > 0:
+                            await asyncio.sleep(self.motor_retry_delay_s)
+                    if self._cancel_flag:
+                        break
+
+                # If all direct move retries failed, attempt serial reconnect recovery
                 if move_res.get("status") != "OK" and hasattr(self.serial_mgr, "reconnect"):
                     logger.warning(
-                        f"Shot {k + 1} motor move failed ({move_res.get('message')}). "
+                        f"Shot {k + 1} motor move failed after 3 attempts ({move_res.get('message')}). "
                         "Invalidating the coordinate reference before serial reconnection."
                     )
                     self.rig_mgr.invalidate_reference("Motor controller reconnect attempted during time-lapse")
                     reconnected = False
                     for attempt in range(1, 6):
-                        await asyncio.sleep(self.motor_retry_delay_s)
+                        if self.motor_retry_delay_s > 0:
+                            await asyncio.sleep(self.motor_retry_delay_s)
                         logger.info(f"Serial reconnection attempt {attempt}/5...")
                         if await self.serial_mgr.reconnect():
                             reconnected = True

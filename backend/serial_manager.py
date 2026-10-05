@@ -113,18 +113,28 @@ class SerialManager:
 
     async def _flush_input_buffer(self):
         """Drain any stale boot banner lines from serial reader."""
+        await self._drain_unread_lines(timeout=0.15, max_lines=20)
+
+    async def _drain_unread_lines(self, timeout: float = 0.02, max_lines: int = 20):
+        """Drain any lingering unread lines from the serial reader buffer to prevent desync."""
         if not self._reader:
             return
-        for _ in range(20):
+        for _ in range(max_lines):
             try:
-                line = await asyncio.wait_for(self._reader.readline(), timeout=0.15)
-                if not line:
+                line_bytes = await asyncio.wait_for(self._reader.readline(), timeout=timeout)
+                if not line_bytes:
                     break
-                logger.debug(f"Flushed boot line: {line.decode('ascii', errors='replace').strip()}")
+                decoded = line_bytes.decode("ascii", errors="replace").strip()
+                if decoded:
+                    logger.debug(f"Drained unread serial line: '{decoded}'")
+                    self._parse_response(decoded)
             except asyncio.TimeoutError:
                 break
+            except Exception as e:
+                logger.debug(f"Exception while draining serial buffer: {e}")
+                break
 
-    async def _send_command_unlocked(self, cmd_clean: str, timeout: float | None = 2.0) -> dict[str, Any]:
+    async def _send_command_unlocked(self, cmd_clean: str, timeout: float | None = 3.0) -> dict[str, Any]:
         """Low-level sender without acquiring self._lock (caller must hold self._lock or be initializing)."""
         if not self._writer or not self._reader:
             self.is_connected = False
@@ -132,21 +142,40 @@ class SerialManager:
             return {"status": "ERROR", "message": "Not connected"}
 
         try:
+            # Drain any stale unread lines before writing the new command
+            await self._drain_unread_lines()
+
             msg = f"{cmd_clean}\n"
             self._writer.write(msg.encode("ascii"))
             await self._writer.drain()
 
-            # Read response line from hardware with optional timeout
-            if timeout is not None:
-                response_bytes = await asyncio.wait_for(self._reader.readline(), timeout=timeout)
-            else:
-                response_bytes = await self._reader.readline()
+            deadline = (asyncio.get_running_loop().time() + timeout) if timeout is not None else None
 
-            response = response_bytes.decode("ascii", errors="replace").strip()
-            self._parse_response(response)
-            if not response or response.startswith("ERR"):
-                return {"status": "ERROR", "message": response or "Empty response from motor controller"}
-            return {"status": "OK", "response": response}
+            while True:
+                if deadline is not None:
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        logger.warning(f"Serial command '{cmd_clean}' timed out waiting for response ({timeout}s)")
+                        return {"status": "TIMEOUT", "message": f"Serial command '{cmd_clean}' timed out"}
+                    response_bytes = await asyncio.wait_for(self._reader.readline(), timeout=remaining)
+                else:
+                    response_bytes = await self._reader.readline()
+
+                response = response_bytes.decode("ascii", errors="replace").strip()
+                if not response:
+                    continue
+
+                self._parse_response(response)
+
+                # For move commands ('M ...'), absorb intermediate/queued STATUS lines and keep waiting for DONE
+                if cmd_clean.startswith("M ") and response.startswith("STATUS"):
+                    logger.debug(f"Absorbed queued/intermediate status during move: '{response}'")
+                    continue
+
+                if response.startswith("ERR"):
+                    return {"status": "ERROR", "message": response}
+
+                return {"status": "OK", "response": response}
         except asyncio.TimeoutError:
             logger.warning(f"Serial command '{cmd_clean}' timed out waiting for response ({timeout}s)")
             return {"status": "TIMEOUT", "message": f"Serial command '{cmd_clean}' timed out"}
@@ -156,7 +185,7 @@ class SerialManager:
             self.state = "ERROR"
             return {"status": "ERROR", "message": str(e)}
 
-    async def send_command(self, cmd_str: str, timeout: float | None = 2.0) -> dict[str, Any]:
+    async def send_command(self, cmd_str: str, timeout: float | None = 3.0) -> dict[str, Any]:
         """Send ASCII command string to motor controller (e.g. 'M 10.0 5.0' or 'S'). Strictly serialized via Lock."""
         if not self.is_connected:
             return {"status": "ERROR", "message": "Serial motor controller disconnected"}
@@ -196,12 +225,12 @@ class SerialManager:
         """Run a complete move transaction while retaining a cancellable command task."""
         async with self._lock:
             self.state = "MOVING"
-            res = await self._send_command_unlocked(f"M {pan:.2f} {tilt:.2f}", timeout=60.0)
+            cmd_clean = f"M {pan:.2f} {tilt:.2f}"
+            res = await self._send_command_unlocked(cmd_clean, timeout=60.0)
             if res.get("status") == "OK" and res.get("response") == "DONE":
                 self.current_pan = pan
                 self.current_tilt = tilt
                 self.state = "IDLE"
-                await self._send_command_unlocked("S", timeout=2.0)
             else:
                 if res.get("status") == "OK":
                     res = {

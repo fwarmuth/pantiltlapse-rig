@@ -91,3 +91,70 @@ async def test_move_is_rejected_while_stop_transaction_is_active():
 
     assert result == {"status": "ERROR", "message": "Emergency stop in progress"}
     assert writer.commands == []
+
+
+@pytest.mark.asyncio
+async def test_move_absolute_tolerates_and_absorbs_stray_status_line():
+    manager = SerialManager(fallback_ports=[])
+    reader = asyncio.StreamReader()
+
+    class StatusThenDoneWriter:
+        def __init__(self, r: asyncio.StreamReader):
+            self.reader = r
+            self.commands: list[str] = []
+
+        def write(self, data: bytes):
+            cmd = data.decode("ascii").strip()
+            self.commands.append(cmd)
+            if cmd.startswith("M "):
+                # Simulate the firmware sending a late STATUS line before DONE
+                self.reader.feed_data(b"STATUS 19.463 12.041 1\nDONE\n")
+
+        async def drain(self):
+            await asyncio.sleep(0)
+
+    writer = StatusThenDoneWriter(reader)
+    manager._reader = reader
+    manager._writer = writer
+    manager.is_connected = True
+    manager.state = "IDLE"
+
+    res = await manager.move_absolute(20.15, 12.25)
+    assert res == {"status": "OK", "response": "DONE"}
+    assert manager.current_pan == 20.15
+    assert manager.current_tilt == 12.25
+    assert manager.state == "IDLE"
+
+
+@pytest.mark.asyncio
+async def test_move_absolute_drains_prior_unread_bytes():
+    manager = SerialManager(fallback_ports=[])
+    reader = asyncio.StreamReader()
+
+    # Pre-populate reader with a stale response from a prior timed-out command
+    reader.feed_data(b"STATUS 15.000 5.000 1\n")
+
+    class SimpleDoneWriter:
+        def __init__(self, r: asyncio.StreamReader):
+            self.reader = r
+            self.commands: list[str] = []
+
+        def write(self, data: bytes):
+            cmd = data.decode("ascii").strip()
+            self.commands.append(cmd)
+            if cmd.startswith("M "):
+                self.reader.feed_data(b"DONE\n")
+
+        async def drain(self):
+            await asyncio.sleep(0)
+
+    writer = SimpleDoneWriter(reader)
+    manager._reader = reader
+    manager._writer = writer
+    manager.is_connected = True
+    manager.state = "IDLE"
+
+    res = await manager.move_absolute(10.0, 5.0)
+    assert res == {"status": "OK", "response": "DONE"}
+    assert manager.current_pan == 10.0
+    assert manager.current_tilt == 5.0
