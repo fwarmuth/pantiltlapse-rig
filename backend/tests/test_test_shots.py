@@ -139,8 +139,22 @@ def test_camera_test_shots_history_and_tiered_files(tmp_path):
         assert resp_file.status_code == 200
         assert len(resp_file.content) > 0
 
-        # 3. Delete test shot file
+        # 3. Delete single test shot file
         resp_del = client.delete("/api/camera/test-shots/capture_20261001_120000.jpg")
         assert resp_del.status_code == 200
         assert resp_del.json()["deleted"] == "capture_20261001_120000.jpg"
         assert not sample_file_1.exists()
+
+        # 4. Delete all remaining test shots
+        resp_del_all = client.delete("/api/camera/test-shots")
+        assert resp_del_all.status_code == 200
+        del_data = resp_del_all.json()
+        assert del_data["status"] == "OK"
+        assert del_data["count"] >= 1
+        assert "capture_20261001_120100.jpg" in del_data["deleted"]
+        assert not sample_file_2.exists()
+
+        # 5. Verify list is now empty
+        resp_empty = client.get("/api/camera/test-shots")
+        assert resp_empty.status_code == 200
+        assert resp_empty.json()["count"] == 0

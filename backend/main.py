@@ -630,6 +630,42 @@ async def get_test_shot_file(
     return await _serve_tiered_image(target, tier or quality or "low")
 
 
+@app.delete("/api/camera/test-shots")
+async def delete_all_test_shots():
+    """Delete all test shots (capture_*.* in capture_dir) and their cached thumbnails."""
+    _require_camera_control_idle("delete all test shots")
+    capture_dir_path = Path(camera_mgr.capture_dir).resolve()
+    if not capture_dir_path.exists():
+        return {"status": "OK", "count": 0, "deleted": []}
+
+    deleted = []
+    cache_dir = capture_dir_path / ".previews"
+
+    try:
+        for entry in list(capture_dir_path.iterdir()):
+            if entry.is_file() and entry.name.lower().startswith("capture_") and entry.suffix.lower() in (".jpg", ".jpeg", ".cr2", ".cr3", ".svg"):
+                try:
+                    entry.unlink(missing_ok=True)
+                    deleted.append(entry.name)
+                    if cache_dir.exists():
+                        for p in cache_dir.glob(f"{entry.stem}_*.*"):
+                            try:
+                                p.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                except Exception as file_err:
+                    logger.warning(f"Failed to delete test shot '{entry.name}': {file_err}")
+
+        # If camera_mgr.latest_photo_path was pointing to one of the deleted test shots, clear it
+        if camera_mgr.latest_photo_path and not os.path.exists(camera_mgr.latest_photo_path):
+            camera_mgr.latest_photo_path = None
+
+        return {"status": "OK", "count": len(deleted), "deleted": deleted}
+    except Exception as e:
+        logger.error(f"Error deleting all test shots: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete all test shots: {e}")
+
+
 @app.delete("/api/camera/test-shots/{filename}")
 async def delete_test_shot_file(filename: str):
     """Delete a test shot and its cached thumbnails."""

@@ -142,6 +142,8 @@ class TimelineStudioApp {
       testShotsHeaderActions: document.getElementById("testShotsHeaderActions"),
       btnRefreshTestShots: document.getElementById("btnRefreshTestShots"),
       btnDeleteSelectedTestShot: document.getElementById("btnDeleteSelectedTestShot"),
+      btnDeleteAllTestShots: document.getElementById("btnDeleteAllTestShots"),
+      btnDeleteAllTestShotsBar: document.getElementById("btnDeleteAllTestShotsBar"),
       timelapseControlsWrapper: document.getElementById("timelapseControlsWrapper"),
       testShotsControlsWrapper: document.getElementById("testShotsControlsWrapper"),
       testShotsFilmstrip: document.getElementById("testShotsFilmstrip"),
@@ -341,6 +343,12 @@ class TimelineStudioApp {
     }
     if (this.dom.btnDeleteSelectedTestShot) {
       this.dom.btnDeleteSelectedTestShot.addEventListener("click", () => this.deleteSelectedTestShot());
+    }
+    if (this.dom.btnDeleteAllTestShots) {
+      this.dom.btnDeleteAllTestShots.addEventListener("click", () => this.deleteAllTestShots());
+    }
+    if (this.dom.btnDeleteAllTestShotsBar) {
+      this.dom.btnDeleteAllTestShotsBar.addEventListener("click", () => this.deleteAllTestShots());
     }
     if (this.dom.btnStarSnapTestShots) {
       this.dom.btnStarSnapTestShots.addEventListener("click", () => this.takeStarSnap());
@@ -1831,6 +1839,34 @@ class TimelineStudioApp {
       }
     } catch (e) {
       this.showToast(`Delete error: ${e}`, "error");
+    }
+  }
+
+  async deleteAllTestShots() {
+    if (!this.testShots || this.testShots.length === 0) {
+      this.showToast("No test shots to delete", "info");
+      return;
+    }
+
+    const count = this.testShots.length;
+    if (!confirm(`Are you sure you want to delete ALL ${count} test shots? This cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/camera/test-shots", { method: "DELETE" });
+      const data = await res.json();
+      if (res.ok && data.status === "OK") {
+        this.showToast(`Deleted all ${data.count} test shots`, "success");
+        this.selectedTestShot = null;
+        this.testShots = [];
+        await this.fetchTestShots(false);
+        this.updatePreviewImage();
+      } else {
+        this.showToast(`Delete all failed: ${data.detail || data.message || "Unknown error"}`, "error");
+      }
+    } catch (e) {
+      this.showToast(`Delete all error: ${e.message || e}`, "error");
     }
   }
 
