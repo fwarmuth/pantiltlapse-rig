@@ -262,13 +262,27 @@ class TimelineStudioApp {
     this.dom.btnAutoAdjustInterval.addEventListener("click", () => this.autoAdjustInterval());
 
     // Sequence Camera Defaults
-    const updateDefault = (param, val) => {
+    const updateDefault = async (param, val) => {
       this.plan.defaults[param] = val;
       this.cleanupCameraTrack(param);
       this.checkShutterIntervalSafety();
       this.updateOverlays();
       this.renderTimeline();
       this.checkLiveRamping(param, val);
+
+      // If camera connected and not running a sequence, push setting to camera immediately
+      if (this.liveState.timelapse.state !== "RUNNING") {
+        try {
+          await fetch("/api/camera/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ [param]: String(val) })
+          });
+          if (this.liveState.camera) {
+            this.liveState.camera[param] = String(val);
+          }
+        } catch (_) {}
+      }
     };
     this.dom.defaultIsoSelect.addEventListener("change", (e) => updateDefault("iso", e.target.value));
     this.dom.defaultShutterSelect.addEventListener("change", (e) => updateDefault("shutter_speed", e.target.value));
@@ -280,7 +294,7 @@ class TimelineStudioApp {
     this.dom.keyPanInput.addEventListener("input", (e) => this.setKeyAngle("pan", e.target.value));
     this.dom.keyTiltInput.addEventListener("input", (e) => this.setKeyAngle("tilt", e.target.value));
 
-    this.dom.keyDiscreteSelect.addEventListener("change", (e) => {
+    this.dom.keyDiscreteSelect.addEventListener("change", async (e) => {
       const paramKey = this.activeTrackId;
       const val = e.target.value;
       this.ensureCameraTrack(paramKey, val);
@@ -290,6 +304,19 @@ class TimelineStudioApp {
       this.updateOverlays();
       this.checkShutterIntervalSafety();
       this.checkLiveRamping(paramKey, val);
+
+      if (this.liveState.timelapse.state !== "RUNNING") {
+        try {
+          await fetch("/api/camera/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ [paramKey]: String(val) })
+          });
+          if (this.liveState.camera) {
+            this.liveState.camera[paramKey] = String(val);
+          }
+        } catch (_) {}
+      }
     });
 
     this.dom.keyEasingSelect.addEventListener("change", (e) => {
@@ -1955,15 +1982,24 @@ class TimelineStudioApp {
     return isNaN(val) || val <= 0 ? 1.0 : val;
   }
 
-  async triggerExposureWithCountdown({ iso = null, shutter = null, label = "Snapshot" } = {}) {
-    // Determine active target settings
-    const activeIso = iso || this.liveState.camera?.iso || this.dom.defaultIsoSelect?.value || this.plan.defaults.iso || "400";
-    const activeShutter = shutter || this.liveState.camera?.shutter_speed || this.dom.defaultShutterSelect?.value || this.plan.defaults.shutter_speed || "1/125";
+  async triggerExposureWithCountdown({
+    iso = null,
+    shutter = null,
+    aperture = null,
+    whiteBalance = null,
+    label = "Snapshot",
+    restoreAfter = false
+  } = {}) {
+    // Determine active target settings from requested parameters or UI defaults
+    const activeIso = String(iso || this.dom.defaultIsoSelect?.value || this.plan.defaults.iso || "100");
+    const activeShutter = String(shutter || this.dom.defaultShutterSelect?.value || this.plan.defaults.shutter_speed || "1/250");
     const expSeconds = Math.max(0.1, this.parseShutterSeconds(activeShutter));
 
     // Disable snapshot trigger buttons during exposure
     if (this.dom.btnTakeSnapshot) this.dom.btnTakeSnapshot.disabled = true;
     if (this.dom.btnStarSnap) this.dom.btnStarSnap.disabled = true;
+    if (this.dom.btnTakeSnapshotTestShots) this.dom.btnTakeSnapshotTestShots.disabled = true;
+    if (this.dom.btnStarSnapTestShots) this.dom.btnStarSnapTestShots.disabled = true;
 
     // Show exposure countdown overlay
     const overlay = this.dom.exposureCountdownOverlay;
@@ -2000,24 +2036,30 @@ class TimelineStudioApp {
       if (overlay) overlay.style.display = "none";
       if (this.dom.btnTakeSnapshot) this.dom.btnTakeSnapshot.disabled = false;
       if (this.dom.btnStarSnap) this.dom.btnStarSnap.disabled = false;
+      if (this.dom.btnTakeSnapshotTestShots) this.dom.btnTakeSnapshotTestShots.disabled = false;
+      if (this.dom.btnStarSnapTestShots) this.dom.btnStarSnapTestShots.disabled = false;
     };
 
     try {
       let prevIso = null;
       let prevShutter = null;
 
-      // If specific ISO or shutter requested (e.g. Star Snap), apply config
-      const needsIsoChange = iso && iso !== this.liveState.camera?.iso;
-      const needsShutterChange = shutter && shutter !== this.liveState.camera?.shutter_speed;
+      // Check if camera settings need to be updated before exposure
+      const needsIsoChange = activeIso && String(activeIso) !== String(this.liveState.camera?.iso);
+      const needsShutterChange = activeShutter && String(activeShutter) !== String(this.liveState.camera?.shutter_speed);
+      const needsApertureChange = aperture && String(aperture) !== String(this.liveState.camera?.aperture);
+      const needsWbChange = whiteBalance && String(whiteBalance) !== String(this.liveState.camera?.white_balance);
 
-      if (needsIsoChange || needsShutterChange) {
+      if (needsIsoChange || needsShutterChange || needsApertureChange || needsWbChange) {
         prevIso = this.liveState.camera?.iso;
         prevShutter = this.liveState.camera?.shutter_speed;
-        if (title) title.textContent = `⚙ Setting ${label} Profile (ISO ${activeIso}, ${activeShutter}s)...`;
+        if (title) title.textContent = `⚙ Setting Camera (${activeShutter}s, ISO ${activeIso})...`;
 
         const configBody = {};
-        if (needsIsoChange) configBody.iso = String(iso);
-        if (needsShutterChange) configBody.shutter_speed = String(shutter);
+        if (needsIsoChange) configBody.iso = String(activeIso);
+        if (needsShutterChange) configBody.shutter_speed = String(activeShutter);
+        if (needsApertureChange) configBody.aperture = String(aperture);
+        if (needsWbChange) configBody.white_balance = String(whiteBalance);
 
         try {
           const confRes = await fetch("/api/camera/config", {
@@ -2027,9 +2069,16 @@ class TimelineStudioApp {
           });
           if (!confRes.ok) {
             console.warn("Camera config change rejected:", await confRes.text());
+          } else {
+            if (this.liveState.camera) {
+              if (needsIsoChange) this.liveState.camera.iso = String(activeIso);
+              if (needsShutterChange) this.liveState.camera.shutter_speed = String(activeShutter);
+              if (needsApertureChange) this.liveState.camera.aperture = String(aperture);
+              if (needsWbChange) this.liveState.camera.white_balance = String(whiteBalance);
+            }
           }
         } catch (confErr) {
-          console.warn("Could not apply transient camera config:", confErr);
+          console.warn("Could not apply camera config:", confErr);
         }
       }
 
@@ -2040,18 +2089,22 @@ class TimelineStudioApp {
       const res = await fetch("/api/camera/trigger", { method: "POST" });
       const data = await res.json();
 
-      // Restore camera settings if this was a transient shot
-      if (prevIso || prevShutter) {
+      // Restore camera settings ONLY if restoreAfter was requested (e.g. Star Snap transient test)
+      if (restoreAfter && (prevIso || prevShutter)) {
         try {
           const restoreBody = {};
-          if (prevIso && prevIso !== iso) restoreBody.iso = String(prevIso);
-          if (prevShutter && prevShutter !== shutter) restoreBody.shutter_speed = String(prevShutter);
+          if (prevIso && prevIso !== activeIso) restoreBody.iso = String(prevIso);
+          if (prevShutter && prevShutter !== activeShutter) restoreBody.shutter_speed = String(prevShutter);
           if (Object.keys(restoreBody).length > 0) {
             await fetch("/api/camera/config", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(restoreBody)
             });
+            if (this.liveState.camera) {
+              if (prevIso) this.liveState.camera.iso = String(prevIso);
+              if (prevShutter) this.liveState.camera.shutter_speed = String(prevShutter);
+            }
           }
         } catch (_) {}
       }
@@ -2122,17 +2175,38 @@ class TimelineStudioApp {
     await this.triggerExposureWithCountdown({
       iso: starIso,
       shutter: starShutter,
-      label: "Star Snap"
+      label: "Star Snap",
+      restoreAfter: true
     });
   }
 
   async takeSnapshot() {
-    const activeIso = this.liveState.camera?.iso || this.dom.defaultIsoSelect?.value || this.plan.defaults.iso || "100";
-    const activeShutter = this.liveState.camera?.shutter_speed || this.dom.defaultShutterSelect?.value || this.plan.defaults.shutter_speed || "1/250";
+    // Determine target settings from the current playhead pose/parameters (or sequence defaults)
+    const targetShutter = (this.plan.tracks.shutter_speed ? this.evaluateTrackAtShot(this.plan.tracks.shutter_speed, this.playhead) : null)
+      || this.dom.defaultShutterSelect?.value
+      || this.plan.defaults.shutter_speed
+      || "1/250";
+
+    const targetIso = (this.plan.tracks.iso ? this.evaluateTrackAtShot(this.plan.tracks.iso, this.playhead) : null)
+      || this.dom.defaultIsoSelect?.value
+      || this.plan.defaults.iso
+      || "100";
+
+    const targetAperture = (this.plan.tracks.aperture ? this.evaluateTrackAtShot(this.plan.tracks.aperture, this.playhead) : null)
+      || this.dom.defaultApertureSelect?.value
+      || this.plan.defaults.aperture;
+
+    const targetWb = (this.plan.tracks.white_balance ? this.evaluateTrackAtShot(this.plan.tracks.white_balance, this.playhead) : null)
+      || this.dom.defaultWbSelect?.value
+      || this.plan.defaults.white_balance;
+
     await this.triggerExposureWithCountdown({
-      iso: activeIso,
-      shutter: activeShutter,
-      label: "Snapshot"
+      iso: String(targetIso),
+      shutter: String(targetShutter),
+      aperture: targetAperture ? String(targetAperture) : null,
+      whiteBalance: targetWb ? String(targetWb) : null,
+      label: "Snapshot",
+      restoreAfter: false
     });
   }
 
