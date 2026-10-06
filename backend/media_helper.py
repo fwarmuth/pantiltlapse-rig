@@ -65,7 +65,9 @@ def generate_resized_preview_sync(
         except Exception:
             return False
 
+    tmp: Path | None = None
     try:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
         from PIL import Image, ImageOps
 
         with Image.open(orig_path) as im:
@@ -75,11 +77,16 @@ def generate_resized_preview_sync(
             im.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
             if im.mode not in ("RGB", "L"):
                 im = im.convert("RGB")
-            tmp = dest_path.with_suffix(".tmp")
+            tmp = dest_path.parent / f".tmp_{dest_path.stem}_{os.getpid()}_{uuid4().hex[:8]}.jpg"
             im.save(tmp, "JPEG", quality=quality, optimize=True)
             tmp.replace(dest_path)
             return True
     except Exception as e:
+        if tmp and tmp.exists():
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
         logger.warning(f"Failed to generate resized preview '{dest_path}' from '{orig_path}': {e}")
         return False
 

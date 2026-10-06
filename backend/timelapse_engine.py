@@ -444,13 +444,17 @@ class TimelapseEngine:
                         if self._cancel_flag:
                             break
 
-                    self.captured_shots.append({
+                    shot_data = {
                         "shot_index": k + 1,
                         "filename": filename,
                         "pan": target_pan,
                         "tilt": target_tilt,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    }
+                    if capture_res.get("has_raw"):
+                        shot_data["has_raw"] = True
+                        shot_data["raw_filename"] = capture_res.get("raw_filename")
+                    self.captured_shots.append(shot_data)
 
                 # Update Progress Telemetry
                 self.current_shot = k + 1
@@ -522,11 +526,19 @@ class TimelapseEngine:
         for shot in self.captured_shots:
             fn = shot["filename"]
             exists = (capture_path / fn).exists() if capture_path else False
-            results.append({
+            shot_dict = {
                 **shot,
                 "url": f"/api/timelapse/captures/{fn}",
+                "download_url": f"/api/timelapse/captures/{fn}/download",
                 "exists": exists,
-            })
+            }
+            raw_fn = shot.get("raw_filename")
+            if raw_fn:
+                raw_exists = (capture_path / raw_fn).exists() if capture_path else False
+                shot_dict["raw_url"] = f"/api/timelapse/captures/{raw_fn}"
+                shot_dict["raw_download_url"] = f"/api/timelapse/captures/{raw_fn}/download"
+                shot_dict["raw_exists"] = raw_exists
+            results.append(shot_dict)
 
         if not results and capture_path and capture_path.exists():
             for f in sorted(capture_path.iterdir()):

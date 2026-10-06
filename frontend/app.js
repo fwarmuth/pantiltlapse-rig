@@ -1972,26 +1972,28 @@ class TimelineStudioApp {
   }
 
   selectTestShot(filename) {
+    if (!filename) return;
     this.selectedTestShot = filename;
-    const shot = this.testShots.find((s) => s.filename === filename);
-    if (!shot) return;
+    const shot = this.testShots ? this.testShots.find((s) => s.filename === filename) : null;
 
     // Highlight active card in filmstrip
     if (this.dom.testShotsFilmstrip) {
       const cards = this.dom.testShotsFilmstrip.querySelectorAll(".test-shot-card");
       cards.forEach((c, idx) => {
-        const s = this.testShots[idx];
+        const s = this.testShots ? this.testShots[idx] : null;
         c.classList.toggle("active", s && s.filename === filename);
       });
     }
 
     // Update label & pill
     if (this.dom.selectedShotLabel) {
-      this.dom.selectedShotLabel.textContent = `${shot.filename} (${shot.size_human})`;
+      this.dom.selectedShotLabel.textContent = shot ? `${shot.filename} (${shot.size_human})` : filename;
     }
     if (this.dom.testShotMetaPill) {
       this.dom.testShotMetaPill.style.display = "flex";
-      this.dom.testShotMetaText.textContent = `Test Shot: ${shot.time_display || ""} • ${shot.size_human}`;
+      this.dom.testShotMetaText.textContent = shot
+        ? `Test Shot: ${shot.time_display || ""} • ${shot.size_human}`
+        : `Test Shot: ${filename}`;
     }
 
     // Load photo in viewport
@@ -2268,44 +2270,58 @@ class TimelineStudioApp {
       }
 
       if (data.status === "OK") {
-        this.fetchTestShots(this.activeViewportTab === "test-shots");
+        const capturedFile = data.filename || data.camera_filename;
+        if (capturedFile) {
+          this.selectedTestShot = capturedFile;
+        }
+
         if (title) title.textContent = "📥 Loading photo preview...";
+        await this.fetchTestShots(false);
 
-        const imgUrl = this.getPreviewUrl(true);
-        const tempImg = new Image();
+        const nowStr = new Date().toLocaleTimeString();
+        if (this.dom.latestPhotoPill) {
+          this.dom.latestPhotoPill.style.display = "flex";
+          this.dom.latestPhotoText.textContent = `${label} (${activeIso}, ${activeShutter}s) @ ${nowStr}`;
+        }
 
-        let finished = false;
-        const renderPhoto = () => {
-          if (finished) return;
-          finished = true;
+        if (this.activeViewportTab === "test-shots" && capturedFile) {
+          this.selectTestShot(capturedFile);
           cleanup();
-          this.dom.previewImage.src = imgUrl;
-          this.dom.previewImage.style.display = "block";
-          this.dom.viewportPlaceholder.style.display = "none";
-
-          const nowStr = new Date().toLocaleTimeString();
-          if (this.dom.latestPhotoPill) {
-            this.dom.latestPhotoPill.style.display = "flex";
-            this.dom.latestPhotoText.textContent = `${label} (${activeIso}, ${activeShutter}s) @ ${nowStr}`;
-          }
           this.showToast(`${label} captured (${activeIso}, ${activeShutter}s)!`, "success");
-        };
+        } else {
+          const imgUrl = this.getPreviewUrl(true);
+          const tempImg = new Image();
 
-        const loadTimeout = setTimeout(() => {
-          renderPhoto();
-        }, 3500);
+          let finished = false;
+          const renderPhoto = () => {
+            if (finished) return;
+            finished = true;
+            cleanup();
+            this.dom.previewImage.src = imgUrl;
+            this.dom.previewImage.style.display = "block";
+            this.dom.viewportPlaceholder.style.display = "none";
+            this.showToast(`${label} captured (${activeIso}, ${activeShutter}s)!`, "success");
+          };
 
-        tempImg.onload = () => {
-          clearTimeout(loadTimeout);
-          renderPhoto();
-        };
+          const loadTimeout = setTimeout(() => {
+            renderPhoto();
+          }, 3500);
 
-        tempImg.onerror = () => {
-          clearTimeout(loadTimeout);
-          renderPhoto();
-        };
+          tempImg.onload = () => {
+            clearTimeout(loadTimeout);
+            renderPhoto();
+          };
 
-        tempImg.src = imgUrl;
+          tempImg.onerror = () => {
+            clearTimeout(loadTimeout);
+            if (finished) return;
+            finished = true;
+            cleanup();
+            this.showToast(`${label} captured, but preview failed to load`, "warning");
+          };
+
+          tempImg.src = imgUrl;
+        }
       } else {
         cleanup();
         this.showToast(`${label} failed: ${data.message || "Unknown error"}`, "error");

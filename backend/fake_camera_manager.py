@@ -25,6 +25,7 @@ class FakeCameraManager:
         self.shutter_speed = "1/125"
         self.aperture = "5.6"
         self.white_balance = "Auto"
+        self.image_format = os.getenv("IMAGE_FORMAT", "RAW + L" if os.getenv("CAPTURE_RAW", "").lower() in ("true", "1", "yes") else "L")
         self.latest_photo_path: str | None = None
         self.last_capture_time: float = 0.0
         self.focus_position: float = 50.0
@@ -202,11 +203,17 @@ class FakeCameraManager:
                 "1/30", "1/15", "1/8", "1/4", "1/2", "1", "2", "4", "8", "15", "30"
             ],
             "aperture": ["f/1.4", "f/1.8", "f/2", "f/2.8", "f/3.5", "f/4", "f/5.6", "f/8", "f/11", "f/16", "f/22"],
-            "white_balance": ["Auto", "Daylight", "Cloudy", "Tungsten", "Fluorescent", "Custom"]
+            "white_balance": ["Auto", "Daylight", "Cloudy", "Tungsten", "Fluorescent", "Custom"],
+            "image_format": ["L", "cL", "M", "cM", "S1", "cS1", "S2", "S3", "RAW + L", "RAW"],
         }
 
     async def set_config(self, param: str, value: str) -> dict[str, Any]:
-        supported_params = {"iso", "shutter_speed", "aperture", "white_balance"}
+        if param == "raw":
+            param = "image_format"
+            val_bool = str(value).lower() in ("true", "1", "yes", "on")
+            value = "RAW + L" if val_bool else "L"
+
+        supported_params = {"iso", "shutter_speed", "aperture", "white_balance", "image_format"}
         if param not in supported_params:
             return {"status": "ERROR", "message": f"Unsupported parameter '{param}'"}
 
@@ -233,6 +240,17 @@ class FakeCameraManager:
         # Generate placeholders off event loop
         preview_path = await asyncio.to_thread(self._create_placeholder_files, target_file, ext)
 
+        # In RAW or RAW+L mode, also create companion .cr2 file
+        is_raw_mode = "RAW" in (self.image_format or "").upper()
+        raw_target_file = None
+        raw_filename = None
+        if is_raw_mode:
+            stem = os.path.splitext(filename)[0]
+            raw_filename = f"{stem}.cr2"
+            raw_target_file = os.path.join(dest_dir, raw_filename)
+            with open(raw_target_file, "wb") as f:
+                f.write(b"II*\x00\x10\x00\x00\x00CR2_DUMMY_RAW_SENSOR_PAYLOAD" + b"\x00" * 512)
+
         self.latest_photo_path = target_file
         self.last_capture_time = time.time()
 
@@ -254,15 +272,22 @@ class FakeCameraManager:
             "mime_type": mime_type,
             "capture_timestamp": self.last_capture_time,
             "camera_preview_path": preview_path,
+            "has_raw": bool(raw_target_file),
+            "raw_filename": raw_filename,
+            "raw_path": raw_target_file,
+            "all_files": [filename] + ([raw_filename] if raw_filename else []),
         }
 
-        logger.info(f"Fake camera captured photo: {target_file} ({mime_type})")
+        logger.info(f"Fake camera captured photo: {target_file} ({mime_type}), raw={raw_target_file}")
 
         return {
             "status": "OK",
             "fake": True,
             "filename": filename,
             "path": target_file,
+            "has_raw": bool(raw_target_file),
+            "raw_filename": raw_filename,
+            "raw_path": raw_target_file,
             "timestamp": self.last_capture_time,
             "result": result,
         }
@@ -348,6 +373,8 @@ class FakeCameraManager:
             "shutter_speed": self.shutter_speed,
             "aperture": self.aperture,
             "white_balance": self.white_balance,
+            "image_format": self.image_format,
+            "raw_enabled": "RAW" in (self.image_format or "").upper(),
             "has_latest_photo": self.latest_photo_path is not None and os.path.exists(self.latest_photo_path),
             "latest_photo_filename": os.path.basename(self.latest_photo_path) if self.latest_photo_path else None,
             "last_capture_time": self.last_capture_time,

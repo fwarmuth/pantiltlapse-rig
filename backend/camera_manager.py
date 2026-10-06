@@ -33,6 +33,7 @@ class CameraManager:
         self.shutter_speed = "1/125"
         self.aperture = "5.6"
         self.white_balance = "Auto"
+        self.image_format = os.getenv("IMAGE_FORMAT", "RAW + L" if os.getenv("CAPTURE_RAW", "").lower() in ("true", "1", "yes") else "L")
         self.focus_mode = "Unknown"
         self._pending_focus_actions: list[str] = []
         self.latest_photo_path: str | None = None
@@ -191,10 +192,16 @@ class CameraManager:
                         )
             except Exception:
                 pass
+            try:
+                w_if = self._find_widget_recursive(config, "imageformat") or self._find_widget_recursive(config, "imageformatsd")
+                if w_if is not None:
+                    self.image_format = str(w_if.get_value())
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error reading camera configs: {e}")
 
-    async def refresh_config(self) -> dict[str, str]:
+    async def refresh_config(self) -> dict[str, Any]:
         """Refresh exposure settings from active camera session."""
         if not self.is_connected or not self._camera:
             return {
@@ -203,6 +210,8 @@ class CameraManager:
                 "aperture": self.aperture,
                 "white_balance": self.white_balance,
                 "exposure_mode": self.exposure_mode,
+                "image_format": self.image_format,
+                "raw_enabled": "RAW" in (self.image_format or "").upper(),
             }
 
         async with self._lock:
@@ -214,6 +223,8 @@ class CameraManager:
             "aperture": self.aperture,
             "white_balance": self.white_balance,
             "exposure_mode": self.exposure_mode,
+            "image_format": self.image_format,
+            "raw_enabled": "RAW" in (self.image_format or "").upper(),
         }
 
     async def apply_startup_defaults(self):
@@ -270,11 +281,14 @@ class CameraManager:
                     "shutter_speed": "shutterspeed",
                     "aperture": "aperture",
                     "white_balance": "whitebalance",
+                    "image_format": "imageformat",
                 }
                 choices: dict[str, list[str]] = {}
                 for param, child_name in key_map.items():
                     try:
                         child = self._find_widget_recursive(config, child_name)
+                        if child is None and child_name == "imageformat":
+                            child = self._find_widget_recursive(config, "imageformatsd")
                         if child is not None:
                             count = child.count_choices()
                             param_choices = [str(child.get_choice(i)) for i in range(count)]
@@ -291,12 +305,18 @@ class CameraManager:
                 raise Exception(f"Failed to query camera config choices: {e}") from e
 
     async def set_config(self, param: str, value: str) -> dict[str, Any]:
-        """Set ISO, shutter speed, aperture, or white balance."""
+        """Set ISO, shutter speed, aperture, white balance, or image format (RAW/JPEG)."""
+        if param == "raw":
+            param = "image_format"
+            val_bool = str(value).lower() in ("true", "1", "yes", "on")
+            value = "RAW + L" if val_bool else "L"
+
         key_map = {
             "iso": "iso",
             "shutter_speed": "shutterspeed",
             "aperture": "aperture",
             "white_balance": "whitebalance",
+            "image_format": "imageformat",
         }
         if param not in key_map:
             return {"status": "ERROR", "message": f"Unsupported parameter '{param}'"}
@@ -746,17 +766,25 @@ class CameraManager:
                                         w.set_value("Press Full MF")
                                         self._camera.set_config(cfg)
 
-                                # Wait for GP_EVENT_FILE_ADDED event
+                                # Wait for GP_EVENT_FILE_ADDED event(s)
                                 # Dynamically scale timeout based on exposure time
                                 exp_sec = self._estimate_exposure_seconds(self.shutter_speed)
                                 max_wait = max(15.0, exp_sec * 2.5 + 8.0)
                                 context = gp.Context()
                                 start_wait = time.time()
+                                captured_events = []
                                 try:
                                     while time.time() - start_wait < max_wait:
                                         evt_type, evt_data = self._camera.wait_for_event(100, context)
                                         if evt_type == gp.GP_EVENT_FILE_ADDED:
-                                            file_path = evt_data
+                                            captured_events.append(evt_data)
+                                            # In dual RAW+JPEG mode, camera emits 2 file added events; wait up to 2.5s for companion
+                                            dual_deadline = time.time() + 2.5
+                                            while time.time() < dual_deadline:
+                                                sub_type, sub_data = self._camera.wait_for_event(100, context)
+                                                if sub_type == gp.GP_EVENT_FILE_ADDED:
+                                                    captured_events.append(sub_data)
+                                                    break
                                             break
                                 finally:
                                     # ALWAYS release the shutter button completely using 'Release'
@@ -785,36 +813,65 @@ class CameraManager:
                         logger.warning(f"Canon EOS Press Full MF capture failed: {e}")
 
                     # 2. Fallback: NEVER fallback to camera.capture if Press Full MF was attempted
-                    if file_path is None:
+                    if not captured_events:
                         if used_eos_mf:
                             raise Exception(f"Canon EOS capture timed out waiting for image event (exposure: {self.shutter_speed}s)")
-                        file_path = self._camera.capture(gp.GP_CAPTURE_IMAGE)
-
-                    cam_ext = os.path.splitext(file_path.name)[1].lower() or ".jpg"
+                        single_path = self._camera.capture(gp.GP_CAPTURE_IMAGE)
+                        captured_events.append(single_path)
 
                     if filename:
                         stem = os.path.splitext(filename)[0]
-                        save_name = f"{stem}{cam_ext}"
                     else:
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        save_name = f"capture_{timestamp}{cam_ext}"
+                        stem = f"capture_{timestamp}"
 
-                    target_file = os.path.join(dest_dir, save_name)
-                    camera_file = self._camera.file_get(file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL)
-                    camera_file.save(target_file)
+                    saved_files = []
+                    raw_exts = (".cr2", ".cr3", ".nef", ".arw", ".dng")
 
-                    try:
-                        self._camera.file_delete(file_path.folder, file_path.name)
-                    except Exception:
-                        pass
+                    for fp in captured_events:
+                        cam_ext = os.path.splitext(fp.name)[1].lower() or ".jpg"
+                        save_name = f"{stem}{cam_ext}"
+                        target_file = os.path.join(dest_dir, save_name)
+                        camera_file = self._camera.file_get(fp.folder, fp.name, gp.GP_FILE_TYPE_NORMAL)
+                        camera_file.save(target_file)
+                        try:
+                            self._camera.file_delete(fp.folder, fp.name)
+                        except Exception:
+                            pass
+                        is_raw = cam_ext in raw_exts
+                        saved_files.append((save_name, target_file, cam_ext, is_raw))
 
-                    return save_name, target_file, cam_ext
+                    # Choose primary displayable image (prefer JPEG for viewport/previews)
+                    jpg_candidates = [f for f in saved_files if not f[3]]
+                    raw_candidates = [f for f in saved_files if f[3]]
 
-                save_name, target_file, cam_ext = await asyncio.to_thread(_do_gphoto_capture)
+                    primary_file = jpg_candidates[0] if jpg_candidates else saved_files[0]
+                    raw_file = raw_candidates[0] if raw_candidates else None
+
+                    primary_save_name, primary_target_file, primary_cam_ext, _ = primary_file
+                    raw_save_name, raw_target_file, _, _ = raw_file if raw_file else (None, None, None, None)
+
+                    return (
+                        primary_save_name,
+                        primary_target_file,
+                        primary_cam_ext,
+                        raw_save_name,
+                        raw_target_file,
+                        [s[0] for s in saved_files],
+                    )
+
+                (
+                    save_name,
+                    target_file,
+                    cam_ext,
+                    raw_save_name,
+                    raw_target_file,
+                    all_file_names,
+                ) = await asyncio.to_thread(_do_gphoto_capture)
 
                 self.latest_photo_path = target_file
                 self.last_capture_time = time.time()
-                logger.info(f"Photo captured and saved to '{target_file}'")
+                logger.info(f"Photo captured: primary='{target_file}', raw='{raw_target_file}'")
 
                 mime_map = {
                     ".jpg": "image/jpeg",
@@ -833,12 +890,19 @@ class CameraManager:
                     "mime_type": mime_type,
                     "capture_timestamp": self.last_capture_time,
                     "camera_preview_path": None,
+                    "has_raw": bool(raw_target_file),
+                    "raw_filename": raw_save_name,
+                    "raw_path": raw_target_file,
+                    "all_files": all_file_names,
                 }
 
                 return {
                     "status": "OK",
                     "filename": save_name,
                     "path": target_file,
+                    "has_raw": bool(raw_target_file),
+                    "raw_filename": raw_save_name,
+                    "raw_path": raw_target_file,
                     "timestamp": self.last_capture_time,
                     "result": result,
                 }
@@ -966,6 +1030,8 @@ class CameraManager:
             "shutter_speed": self.shutter_speed,
             "aperture": self.aperture,
             "white_balance": self.white_balance,
+            "image_format": self.image_format,
+            "raw_enabled": "RAW" in (self.image_format or "").upper(),
             "has_latest_photo": self.latest_photo_path is not None and os.path.exists(self.latest_photo_path),
             "latest_photo_filename": os.path.basename(self.latest_photo_path) if self.latest_photo_path else None,
             "last_capture_time": self.last_capture_time,

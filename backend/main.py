@@ -146,6 +146,8 @@ class CameraConfigRequest(BaseModel):
     shutter_speed: str | None = Field(default=None, description="Batch shutter speed setting")
     aperture: str | None = Field(default=None, description="Batch aperture setting")
     white_balance: str | None = Field(default=None, description="Batch white balance setting")
+    raw: bool | None = Field(default=None, description="Enable (True) or disable (False) RAW+JPEG capture")
+    image_format: str | None = Field(default=None, description="Direct image format: e.g. 'RAW + L', 'RAW', 'L'")
 
 
 def _require_serial_connected():
@@ -410,6 +412,10 @@ async def set_camera_config(req: CameraConfigRequest):
         params_to_set["aperture"] = str(req.aperture)
     if req.white_balance is not None:
         params_to_set["white_balance"] = str(req.white_balance)
+    if req.image_format is not None:
+        params_to_set["image_format"] = str(req.image_format)
+    elif req.raw is not None:
+        params_to_set["image_format"] = "RAW + L" if req.raw else "L"
 
     if not params_to_set:
         raise HTTPException(
@@ -536,30 +542,54 @@ async def _serve_tiered_image(orig_path: Path, quality_tier: str | None = None) 
     elif selected_tier in ("native", "original", "high"):
         selected_tier = "full"
 
-    if orig_path.suffix.lower() == ".svg" or selected_tier == "full":
-        media_type = "image/svg+xml" if orig_path.suffix.lower() == ".svg" else "image/jpeg"
-        return FileResponse(orig_path, media_type=media_type)
+    raw_exts = (".cr2", ".cr3", ".nef", ".arw", ".dng")
+    is_raw = orig_path.suffix.lower() in raw_exts
+    media_map = {
+        ".svg": "image/svg+xml",
+        ".cr2": "image/x-canon-cr2",
+        ".cr3": "image/x-canon-cr3",
+        ".nef": "image/x-nikon-nef",
+        ".arw": "image/x-sony-arw",
+        ".dng": "image/x-adobe-dng",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }
+    raw_media_type = media_map.get(orig_path.suffix.lower(), "application/octet-stream")
+
+    if orig_path.suffix.lower() == ".svg" or (selected_tier == "full" and is_raw):
+        return FileResponse(orig_path, media_type=raw_media_type)
+    elif selected_tier == "full":
+        return FileResponse(orig_path, media_type="image/jpeg")
+
+    # If orig_path is a RAW file, find companion JPEG as source for downscaled previews
+    source_img = orig_path
+    if is_raw:
+        for ext in (".jpg", ".jpeg", ".JPG", ".JPEG"):
+            companion = orig_path.with_suffix(ext)
+            if companion.exists():
+                source_img = companion
+                break
 
     cache_dir = orig_path.parent / ".previews"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     if selected_tier == "low":
-        target_preview = cache_dir / f"{orig_path.stem}_low.jpg"
-        if not target_preview.exists() or target_preview.stat().st_mtime < orig_path.stat().st_mtime:
-            ok = await asyncio.to_thread(generate_resized_preview_sync, orig_path, target_preview, 1024, 70)
+        target_preview = cache_dir / f"{source_img.stem}_low.jpg"
+        if not target_preview.exists() or target_preview.stat().st_mtime < source_img.stat().st_mtime:
+            ok = await asyncio.to_thread(generate_resized_preview_sync, source_img, target_preview, 1024, 70)
             if not ok or not target_preview.exists():
-                return FileResponse(orig_path, media_type="image/jpeg")
+                return FileResponse(source_img, media_type="image/jpeg" if not is_raw else raw_media_type)
         return FileResponse(target_preview, media_type="image/jpeg")
 
     elif selected_tier == "balanced":
-        target_preview = cache_dir / f"{orig_path.stem}_balanced.jpg"
-        if not target_preview.exists() or target_preview.stat().st_mtime < orig_path.stat().st_mtime:
-            ok = await asyncio.to_thread(generate_resized_preview_sync, orig_path, target_preview, 1920, 80)
+        target_preview = cache_dir / f"{source_img.stem}_balanced.jpg"
+        if not target_preview.exists() or target_preview.stat().st_mtime < source_img.stat().st_mtime:
+            ok = await asyncio.to_thread(generate_resized_preview_sync, source_img, target_preview, 1920, 80)
             if not ok or not target_preview.exists():
-                return FileResponse(orig_path, media_type="image/jpeg")
+                return FileResponse(source_img, media_type="image/jpeg" if not is_raw else raw_media_type)
         return FileResponse(target_preview, media_type="image/jpeg")
 
-    return FileResponse(orig_path, media_type="image/jpeg")
+    return FileResponse(source_img, media_type="image/jpeg" if not is_raw else raw_media_type)
 
 
 @app.get("/api/camera/preview/latest")
@@ -586,25 +616,91 @@ async def list_test_shots():
     if not capture_dir_path.exists():
         return {"status": "OK", "count": 0, "test_shots": []}
 
+    raw_exts = (".cr2", ".cr3", ".nef", ".arw", ".dng")
+    raw_map: dict[str, Any] = {}
+    jpg_map: dict[str, Any] = {}
     shots = []
+
     try:
         for entry in capture_dir_path.iterdir():
-            if entry.is_file() and entry.name.lower().startswith("capture_") and entry.suffix.lower() in (".jpg", ".jpeg", ".cr2", ".cr3", ".svg"):
-                stat = entry.stat()
+            name_lower = entry.name.lower()
+            if entry.is_file() and (name_lower.startswith("capture_") or name_lower.startswith("fake_capture_")):
+                suffix = entry.suffix.lower()
+                stem_key = entry.stem.lower()
+                if suffix in raw_exts:
+                    raw_map[stem_key] = entry
+                elif suffix in (".jpg", ".jpeg", ".svg"):
+                    jpg_map[stem_key] = entry
+
+        # Build list: for each displayable photo, attach companion RAW file if present
+        for stem_key, entry in jpg_map.items():
+            stat = entry.stat()
+            mtime = stat.st_mtime
+            size_mb = stat.st_size / (1024 * 1024)
+            size_human = f"{size_mb:.1f} MB" if size_mb >= 1.0 else f"{stat.st_size / 1024:.0f} KB"
+            dt = datetime.fromtimestamp(mtime, timezone.utc)
+
+            raw_entry = raw_map.get(stem_key)
+            if raw_entry:
+                r_stat = raw_entry.stat()
+                r_mb = r_stat.st_size / (1024 * 1024)
+                raw_info = {
+                    "has_raw": True,
+                    "raw_filename": raw_entry.name,
+                    "raw_url": f"/api/camera/test-shots/{raw_entry.name}",
+                    "raw_download_url": f"/api/camera/test-shots/{raw_entry.name}/download",
+                    "raw_size_bytes": r_stat.st_size,
+                    "raw_size_human": f"{r_mb:.1f} MB" if r_mb >= 1.0 else f"{r_stat.st_size / 1024:.0f} KB",
+                }
+            else:
+                raw_info = {
+                    "has_raw": False,
+                    "raw_filename": None,
+                    "raw_url": None,
+                    "raw_download_url": None,
+                    "raw_size_bytes": 0,
+                    "raw_size_human": None,
+                }
+
+            shots.append({
+                "filename": entry.name,
+                "timestamp": mtime,
+                "formatted_time": dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "time_display": dt.strftime("%H:%M:%S"),
+                "date_display": dt.strftime("%Y-%m-%d"),
+                "size_bytes": stat.st_size,
+                "size_human": size_human,
+                "url": f"/api/camera/test-shots/{entry.name}",
+                "download_url": f"/api/camera/test-shots/{entry.name}/download",
+                **raw_info,
+            })
+
+        # Also add standalone RAW files that don't have a companion JPEG
+        for stem_key, raw_entry in raw_map.items():
+            if stem_key not in jpg_map:
+                stat = raw_entry.stat()
                 mtime = stat.st_mtime
                 size_mb = stat.st_size / (1024 * 1024)
                 size_human = f"{size_mb:.1f} MB" if size_mb >= 1.0 else f"{stat.st_size / 1024:.0f} KB"
                 dt = datetime.fromtimestamp(mtime, timezone.utc)
                 shots.append({
-                    "filename": entry.name,
+                    "filename": raw_entry.name,
                     "timestamp": mtime,
                     "formatted_time": dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
                     "time_display": dt.strftime("%H:%M:%S"),
                     "date_display": dt.strftime("%Y-%m-%d"),
                     "size_bytes": stat.st_size,
                     "size_human": size_human,
-                    "url": f"/api/camera/test-shots/{entry.name}",
+                    "url": f"/api/camera/test-shots/{raw_entry.name}",
+                    "download_url": f"/api/camera/test-shots/{raw_entry.name}/download",
+                    "has_raw": True,
+                    "raw_filename": raw_entry.name,
+                    "raw_url": f"/api/camera/test-shots/{raw_entry.name}",
+                    "raw_download_url": f"/api/camera/test-shots/{raw_entry.name}/download",
+                    "raw_size_bytes": stat.st_size,
+                    "raw_size_human": size_human,
                 })
+
         shots.sort(key=lambda x: x["timestamp"], reverse=True)
     except Exception as e:
         logger.error(f"Error reading test shots from '{capture_dir_path}': {e}")
@@ -630,9 +726,39 @@ async def get_test_shot_file(
     return await _serve_tiered_image(target, tier or quality or "low")
 
 
+@app.get("/api/camera/test-shots/{filename}/download")
+async def download_test_shot_file(filename: str):
+    """Download a test shot original file (RAW or JPEG) as a direct file download attachment."""
+    safe_name = os.path.basename(filename)
+    capture_dir_path = Path(camera_mgr.capture_dir).resolve()
+    target = (capture_dir_path / safe_name).resolve()
+
+    if not str(target).startswith(str(capture_dir_path)) or not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"Test shot '{filename}' not found")
+
+    media_map = {
+        ".svg": "image/svg+xml",
+        ".cr2": "image/x-canon-cr2",
+        ".cr3": "image/x-canon-cr3",
+        ".nef": "image/x-nikon-nef",
+        ".arw": "image/x-sony-arw",
+        ".dng": "image/x-adobe-dng",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }
+    media_type = media_map.get(target.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        target,
+        media_type=media_type,
+        filename=safe_name,
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
+
+
 @app.delete("/api/camera/test-shots")
 async def delete_all_test_shots():
     """Delete all test shots (capture_*.* in capture_dir) and their cached thumbnails."""
+    logger.info("DELETE /api/camera/test-shots requested")
     _require_camera_control_idle("delete all test shots")
     capture_dir_path = Path(camera_mgr.capture_dir).resolve()
     if not capture_dir_path.exists():
@@ -643,7 +769,8 @@ async def delete_all_test_shots():
 
     try:
         for entry in list(capture_dir_path.iterdir()):
-            if entry.is_file() and entry.name.lower().startswith("capture_") and entry.suffix.lower() in (".jpg", ".jpeg", ".cr2", ".cr3", ".svg"):
+            name_lower = entry.name.lower()
+            if entry.is_file() and (name_lower.startswith("capture_") or name_lower.startswith("fake_capture_")) and entry.suffix.lower() in (".jpg", ".jpeg", ".cr2", ".cr3", ".svg"):
                 try:
                     entry.unlink(missing_ok=True)
                     deleted.append(entry.name)
@@ -660,6 +787,7 @@ async def delete_all_test_shots():
         if camera_mgr.latest_photo_path and not os.path.exists(camera_mgr.latest_photo_path):
             camera_mgr.latest_photo_path = None
 
+        logger.info(f"DELETE /api/camera/test-shots finished, deleted {len(deleted)} files")
         return {"status": "OK", "count": len(deleted), "deleted": deleted}
     except Exception as e:
         logger.error(f"Error deleting all test shots: {e}")
@@ -668,7 +796,8 @@ async def delete_all_test_shots():
 
 @app.delete("/api/camera/test-shots/{filename}")
 async def delete_test_shot_file(filename: str):
-    """Delete a test shot and its cached thumbnails."""
+    """Delete a test shot, any companion RAW file, and its cached thumbnails."""
+    logger.info(f"DELETE /api/camera/test-shots/{filename} requested")
     _require_camera_control_idle("delete test shot")
     safe_name = os.path.basename(filename)
     capture_dir_path = Path(camera_mgr.capture_dir).resolve()
@@ -679,6 +808,14 @@ async def delete_test_shot_file(filename: str):
 
     try:
         target.unlink()
+        # Also delete companion RAW or companion JPEG if present
+        for ext in (".cr2", ".cr3", ".nef", ".arw", ".dng", ".jpg", ".jpeg"):
+            companion = capture_dir_path / f"{target.stem}{ext}"
+            if companion.exists() and companion != target:
+                try:
+                    companion.unlink(missing_ok=True)
+                except Exception:
+                    pass
         cache_dir = capture_dir_path / ".previews"
         if cache_dir.exists():
             for p in cache_dir.glob(f"{target.stem}_*.*"):
@@ -1261,18 +1398,52 @@ async def get_timelapse_captures():
 
 
 @app.get("/api/timelapse/captures/{filename}")
-async def get_timelapse_capture_file(filename: str):
-    """Serve a captured time-lapse image file."""
+async def get_timelapse_capture_file(
+    filename: str,
+    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
+    tier: str | None = Query(None, description="Alias for quality tier: 'low', 'balanced', or 'full'"),
+):
+    """Serve a captured time-lapse image file with preview tiering support."""
     if not timelapse_engine.capture_dir:
         raise HTTPException(status_code=404, detail="No active or recent time-lapse capture directory")
     capture_dir_path = Path(timelapse_engine.capture_dir).resolve()
-    file_path = (capture_dir_path / filename).resolve()
+    safe_name = os.path.basename(filename)
+    file_path = (capture_dir_path / safe_name).resolve()
     if not str(file_path).startswith(str(capture_dir_path)):
         raise HTTPException(status_code=403, detail="Forbidden file path")
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail=f"Capture file '{filename}' not found")
-    media_type = "image/svg+xml" if filename.endswith(".svg") else "image/jpeg"
-    return FileResponse(str(file_path), media_type=media_type)
+    return await _serve_tiered_image(file_path, tier or quality or "low")
+
+
+@app.get("/api/timelapse/captures/{filename}/download")
+async def download_timelapse_capture_file(filename: str):
+    """Download a time-lapse photo original file (RAW or JPEG) as a direct file download attachment."""
+    if not timelapse_engine.capture_dir:
+        raise HTTPException(status_code=404, detail="No active or recent time-lapse capture directory")
+    capture_dir_path = Path(timelapse_engine.capture_dir).resolve()
+    safe_name = os.path.basename(filename)
+    target = (capture_dir_path / safe_name).resolve()
+    if not str(target).startswith(str(capture_dir_path)) or not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"Capture file '{filename}' not found")
+
+    media_map = {
+        ".svg": "image/svg+xml",
+        ".cr2": "image/x-canon-cr2",
+        ".cr3": "image/x-canon-cr3",
+        ".nef": "image/x-nikon-nef",
+        ".arw": "image/x-sony-arw",
+        ".dng": "image/x-adobe-dng",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }
+    media_type = media_map.get(target.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        target,
+        media_type=media_type,
+        filename=safe_name,
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
 
 
 # --- Studio UI State & Reload Rehydration Endpoints ---

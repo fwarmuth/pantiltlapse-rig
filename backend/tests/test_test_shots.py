@@ -111,10 +111,13 @@ def test_test_shot_cleanup_on_camera_failure(tmp_path):
         assert len(tmp_dirs) == 0
 
 
-def test_camera_test_shots_history_and_tiered_files(tmp_path):
+def test_camera_test_shots_history_and_tiered_files(tmp_path, monkeypatch):
     import main
-    capture_dir = Path(main.camera_mgr.capture_dir)
-    capture_dir.mkdir(parents=True, exist_ok=True)
+    test_captures_dir = tmp_path / "captures"
+    test_captures_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(main.camera_mgr, "capture_dir", str(test_captures_dir))
+
+    capture_dir = test_captures_dir
 
     # Create dummy capture files
     sample_file_1 = capture_dir / "capture_20261001_120000.jpg"
