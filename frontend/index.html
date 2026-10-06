@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>pantiltlapse - Single-Screen Timeline Studio</title>
-  <link rel="stylesheet" href="style.css?v=20261005_04">
+  <link rel="stylesheet" href="style.css?v=20261006_01">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -405,6 +405,12 @@
           <input type="number" id="playheadInput" min="1" max="240" value="1">
           <span style="color: var(--text-dim);">/ <span id="totalShotsLabel">240</span></span>
         </div>
+
+        <!-- Follow Live Toggle (Active during time-lapse runs) -->
+        <button class="btn btn-xs btn-follow-live active" id="btnToggleFollowLive" style="display: none;" title="Toggle automatic tracking of live execution playhead">
+          <span id="followLiveDot" class="live-dot pulse"></span>
+          <span id="followLiveLabel">Following Live</span>
+        </button>
       </div>
 
       <div class="timeline-toolbar-center">
@@ -430,6 +436,12 @@
       </div>
 
       <div class="timeline-canvas-container" id="timelineCanvasContainer">
+        <!-- Floating Detached Live Status Pill -->
+        <div id="detachedLivePill" class="detached-live-pill" style="display: none;">
+          <span class="live-status-dot"></span>
+          <span>Editing Shot <strong id="detachedEditShot">180</strong> • Sequence running at Shot <strong id="detachedLiveShot">16</strong></span>
+          <button class="btn btn-xs btn-primary" id="btnJumpToLive" title="Snap edit playhead back to live sequence progress">⏵ Jump to Live</button>
+        </div>
         <canvas id="timelineCanvas"></canvas>
       </div>
     </div>
@@ -467,6 +479,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261005_10"></script>
+  <script src="app.js?v=20261006_01"></script>
 </body>
 </html>

@@ -95,6 +95,10 @@ class TimelineStudioApp {
     this.testShots = [];
     this.selectedTestShot = null;
 
+    // Decoupled Live Execution Tracking
+    this.followLive = true;
+    this.liveShot = 1;
+
     this.initDOM();
     this.bindEvents();
     this.initCanvas();
@@ -227,6 +231,15 @@ class TimelineStudioApp {
       btnAddKeyTrigger: document.getElementById("btnAddKeyTrigger"),
       zoomSlider: document.getElementById("zoomSlider"),
       btnToggleCurveGraph: document.getElementById("btnToggleCurveGraph"),
+      btnToggleFollowLive: document.getElementById("btnToggleFollowLive"),
+      followLiveDot: document.getElementById("followLiveDot"),
+      followLiveLabel: document.getElementById("followLiveLabel"),
+
+      // Detached Live Pill Overlay
+      detachedLivePill: document.getElementById("detachedLivePill"),
+      detachedEditShot: document.getElementById("detachedEditShot"),
+      detachedLiveShot: document.getElementById("detachedLiveShot"),
+      btnJumpToLive: document.getElementById("btnJumpToLive"),
 
       // Timeline Headers & Canvas
       timelineHeaders: document.getElementById("timelineHeaders"),
@@ -335,15 +348,29 @@ class TimelineStudioApp {
     this.dom.btnAddKeyTrigger.addEventListener("click", () => this.addKeyTriggerAtPlayhead());
 
     // Transport buttons
-    this.dom.btnFirstShot.addEventListener("click", () => this.setPlayhead(1));
-    this.dom.btnLastShot.addEventListener("click", () => this.setPlayhead(this.plan.totalShots));
+    this.dom.btnFirstShot.addEventListener("click", () => {
+      this.detachFollowLiveIfRunning();
+      this.setPlayhead(1);
+    });
+    this.dom.btnLastShot.addEventListener("click", () => {
+      this.detachFollowLiveIfRunning();
+      this.setPlayhead(this.plan.totalShots);
+    });
     this.dom.btnPrevKey.addEventListener("click", () => this.goToPrevKey());
     this.dom.btnNextKey.addEventListener("click", () => this.goToNextKey());
     this.dom.btnPlayPreview.addEventListener("click", () => this.togglePreviewPlayback());
 
     this.dom.playheadInput.addEventListener("change", (e) => {
+      this.detachFollowLiveIfRunning();
       this.setPlayhead(parseInt(e.target.value) || 1);
     });
+
+    if (this.dom.btnToggleFollowLive) {
+      this.dom.btnToggleFollowLive.addEventListener("click", () => this.toggleFollowLive());
+    }
+    if (this.dom.btnJumpToLive) {
+      this.dom.btnJumpToLive.addEventListener("click", () => this.jumpToLive());
+    }
 
     this.dom.zoomSlider.addEventListener("input", (e) => {
       this.zoom = parseFloat(e.target.value);
@@ -436,10 +463,12 @@ class TimelineStudioApp {
         this.togglePreviewPlayback();
       } else if (e.code === "ArrowLeft") {
         e.preventDefault();
+        this.detachFollowLiveIfRunning();
         if (e.shiftKey) this.goToPrevKey();
         else this.setPlayhead(this.playhead - 1);
       } else if (e.code === "ArrowRight") {
         e.preventDefault();
+        this.detachFollowLiveIfRunning();
         if (e.shiftKey) this.goToNextKey();
         else this.setPlayhead(this.playhead + 1);
       } else if (e.key === "k" || e.key === "K") {
@@ -589,20 +618,85 @@ class TimelineStudioApp {
       this.liveState.timelapse = data.timelapse;
       const tState = data.timelapse.state;
       this.dom.modeText.textContent = tState;
+
+      if (data.timelapse.current_shot > 0) {
+        this.liveShot = data.timelapse.current_shot;
+      }
+
       if (tState === "RUNNING") {
         this.dom.btnStartTimelapse.style.display = "none";
         this.dom.btnPauseTimelapse.style.display = "inline-flex";
         this.dom.btnPauseTimelapse.textContent = "⏸ Pause";
-        if (data.timelapse.current_shot > 0) {
-          this.setPlayhead(data.timelapse.current_shot, false);
+        if (this.followLive && this.liveShot > 0) {
+          this.setPlayhead(this.liveShot, false);
+        } else {
+          this.renderTimeline();
         }
       } else if (tState === "PAUSED") {
         this.dom.btnStartTimelapse.style.display = "none";
         this.dom.btnPauseTimelapse.style.display = "inline-flex";
         this.dom.btnPauseTimelapse.textContent = "▶ Resume";
+        this.renderTimeline();
       } else {
         this.dom.btnStartTimelapse.style.display = "inline-flex";
         this.dom.btnPauseTimelapse.style.display = "none";
+        this.followLive = true;
+      }
+      this.updateLiveTrackingUI();
+    }
+  }
+
+  detachFollowLiveIfRunning() {
+    const isTimelapseActive = this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED";
+    if (isTimelapseActive && this.followLive) {
+      this.followLive = false;
+      this.updateLiveTrackingUI();
+      this.renderTimeline();
+    }
+  }
+
+  toggleFollowLive() {
+    this.followLive = !this.followLive;
+    if (this.followLive && this.liveShot > 0) {
+      this.setPlayhead(this.liveShot, true);
+    }
+    this.updateLiveTrackingUI();
+    this.renderTimeline();
+  }
+
+  jumpToLive() {
+    this.followLive = true;
+    if (this.liveShot > 0) {
+      this.setPlayhead(this.liveShot, true);
+    }
+    this.updateLiveTrackingUI();
+    this.renderTimeline();
+    this.showToast(`Snapped edit playhead to live execution at Shot ${this.liveShot}`, "info");
+  }
+
+  updateLiveTrackingUI() {
+    const isTimelapseActive = this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED";
+
+    if (this.dom.btnToggleFollowLive) {
+      this.dom.btnToggleFollowLive.style.display = isTimelapseActive ? "inline-flex" : "none";
+      if (this.followLive) {
+        this.dom.btnToggleFollowLive.classList.add("active");
+        if (this.dom.followLiveDot) this.dom.followLiveDot.className = "live-dot pulse";
+        if (this.dom.followLiveLabel) this.dom.followLiveLabel.textContent = "Following Live";
+      } else {
+        this.dom.btnToggleFollowLive.classList.remove("active");
+        if (this.dom.followLiveDot) this.dom.followLiveDot.className = "live-dot";
+        if (this.dom.followLiveLabel) this.dom.followLiveLabel.textContent = "Follow: OFF";
+      }
+    }
+
+    if (this.dom.detachedLivePill) {
+      if (isTimelapseActive && !this.followLive && this.liveShot > 0) {
+        this.dom.detachedLivePill.style.display = "flex";
+        if (this.dom.detachedEditShot) this.dom.detachedEditShot.textContent = this.playhead;
+        if (this.dom.detachedLiveShot) this.dom.detachedLiveShot.textContent = this.liveShot;
+      } else {
+        this.dom.detachedLivePill.style.display = "none";
       }
     }
   }
@@ -681,9 +775,59 @@ class TimelineStudioApp {
       this.renderCurveEditorView(ctx, rulerH, w, h);
     }
 
-    // Draw Playhead
+    const isTimelapseActive = this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED";
+    const hasLiveProgress = this.liveShot > 0 && (isTimelapseActive || (this.liveState.timelapse.current_shot && this.liveState.timelapse.current_shot > 0));
+
+    // 1. Shaded progress fill for completed shots behind execution needle
+    if (hasLiveProgress) {
+      const startX = this.shotToX(1);
+      const liveX = this.shotToX(this.liveShot);
+      if (liveX > startX) {
+        ctx.fillStyle = "rgba(16, 185, 129, 0.08)";
+        ctx.fillRect(startX, rulerH, liveX - startX, h - rulerH);
+      }
+    }
+
+    // 2. Draw Live Execution Needle (Green #10b981) if active sequence
+    if (hasLiveProgress) {
+      const liveX = this.shotToX(this.liveShot);
+      ctx.save();
+      ctx.strokeStyle = "#10b981";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(liveX, 0);
+      ctx.lineTo(liveX, h);
+      ctx.stroke();
+      ctx.restore();
+
+      // Live handle badge on ruler
+      const badgeW = 30;
+      const badgeH = 14;
+      ctx.fillStyle = "#10b981";
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(liveX - badgeW / 2, 2, badgeW, badgeH, 3);
+      } else {
+        ctx.rect(liveX - badgeW / 2, 2, badgeW, badgeH);
+      }
+      ctx.fill();
+
+      ctx.save();
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "bold 9px JetBrains Mono";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("LIVE", liveX, 9);
+      ctx.restore();
+    }
+
+    // 3. Draw Edit Playhead (Red #ef4444, or Amber #f59e0b when detached)
+    const isDetached = isTimelapseActive && !this.followLive;
+    const playheadColor = isDetached ? "#f59e0b" : "#ef4444";
     const phX = this.shotToX(this.playhead);
-    ctx.strokeStyle = "#ef4444";
+
+    ctx.strokeStyle = playheadColor;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(phX, 0);
@@ -691,7 +835,7 @@ class TimelineStudioApp {
     ctx.stroke();
 
     // Playhead handle on ruler
-    ctx.fillStyle = "#ef4444";
+    ctx.fillStyle = playheadColor;
     ctx.beginPath();
     ctx.moveTo(phX - 6, 0);
     ctx.lineTo(phX + 6, 0);
@@ -700,6 +844,16 @@ class TimelineStudioApp {
     ctx.lineTo(phX - 6, rulerH - 8);
     ctx.closePath();
     ctx.fill();
+
+    if (isDetached) {
+      ctx.save();
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "bold 8px JetBrains Mono";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("EDIT", phX, 8);
+      ctx.restore();
+    }
   }
 
   renderRuler(ctx, rulerH) {
@@ -914,6 +1068,7 @@ class TimelineStudioApp {
   /* Canvas Mouse Interactions                                                  */
   /* -------------------------------------------------------------------------- */
   onCanvasMouseDown(e) {
+    this.detachFollowLiveIfRunning();
     const rect = this.canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
@@ -1231,6 +1386,7 @@ class TimelineStudioApp {
   }
 
   goToPrevKey() {
+    this.detachFollowLiveIfRunning();
     const track = this.plan.tracks[this.activeTrackId];
     if (!track) return;
     const before = track.keyframes.filter((k) => k.shotIndex < this.playhead);
@@ -1242,6 +1398,7 @@ class TimelineStudioApp {
   }
 
   goToNextKey() {
+    this.detachFollowLiveIfRunning();
     const track = this.plan.tracks[this.activeTrackId];
     if (!track) return;
     const after = track.keyframes.filter((k) => k.shotIndex > this.playhead);
@@ -1428,6 +1585,7 @@ class TimelineStudioApp {
 
     this.updateInspectorUI();
     this.updateOverlays();
+    this.updateLiveTrackingUI();
     this.renderTimeline();
   }
 
@@ -2356,8 +2514,14 @@ class TimelineStudioApp {
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      if (data.status === "OK") this.showToast("Time-lapse sequence started!", "success");
-      else this.showToast(`Start failed: ${data.message}`, "error");
+      if (data.status === "OK") {
+        this.followLive = true;
+        this.liveShot = 1;
+        this.updateLiveTrackingUI();
+        this.showToast("Time-lapse sequence started!", "success");
+      } else {
+        this.showToast(`Start failed: ${data.message}`, "error");
+      }
     } catch (e) {
       this.showToast(`Start error: ${e}`, "error");
     }
