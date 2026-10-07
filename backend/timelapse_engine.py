@@ -22,6 +22,8 @@ class TimelapseConfig(BaseModel):
     interval_s: float = Field(default=5.0, ge=1.0, description="Interval time between shots (seconds)")
     settle_time_s: float = Field(default=0.5, ge=0.0, description="Settle delay pause after move (seconds)")
     capture_photo: bool = Field(default=True, description="Trigger photo capture on each step")
+    raw: bool | None = Field(default=None, description="Enable or disable RAW+JPEG capture")
+    image_format: str | None = Field(default=None, description="Direct image format override")
     easing: str = Field(default="ease_in_out", description="Motion profile: 'linear', 'ease_in_out', or 's_curve'")
     plan_id: str | None = Field(default=None, description="Optional associated plan UUID")
     plan_name: str | None = Field(default=None, description="Optional associated human-readable plan name")
@@ -300,6 +302,18 @@ class TimelapseEngine:
         """Asynchronous execution loop for motion time-lapse."""
         run_started.set()
         try:
+            # Apply initial time-lapse image format / RAW mode if requested
+            if config.image_format and hasattr(self.camera_mgr, "set_config"):
+                try:
+                    await self.camera_mgr.set_config("image_format", config.image_format)
+                except Exception as e:
+                    logger.warning(f"Failed to set initial time-lapse image_format: {e}")
+            elif config.raw is not None and hasattr(self.camera_mgr, "set_config"):
+                try:
+                    await self.camera_mgr.set_config("raw", "true" if config.raw else "false")
+                except Exception as e:
+                    logger.warning(f"Failed to set initial time-lapse raw={config.raw}: {e}")
+
             total = config.total_shots
             for k in range(total):
                 if self._cancel_flag:
@@ -380,7 +394,7 @@ class TimelapseEngine:
                 # Step 2: Settle Delay Pause & Camera Parameter Application
                 if cur_config.camera_settings and k < len(cur_config.camera_settings):
                     shot_cam = cur_config.camera_settings[k]
-                    for param_key in ("iso", "shutter_speed", "aperture", "white_balance"):
+                    for param_key in ("iso", "shutter_speed", "aperture", "white_balance", "image_format", "raw"):
                         val = shot_cam.get(param_key)
                         if val and hasattr(self.camera_mgr, "set_config"):
                             try:

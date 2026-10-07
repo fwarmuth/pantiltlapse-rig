@@ -382,6 +382,13 @@
             <select id="defaultWbSelect"></select>
           </div>
         </div>
+        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between;">
+          <label for="chkCaptureRaw" style="font-size: 11px; font-weight: 500; color: var(--text-color); cursor: pointer; display: flex; align-items: center; gap: 6px;">
+            <input type="checkbox" id="chkCaptureRaw" style="width: 14px; height: 14px; accent-color: var(--primary-accent); cursor: pointer;">
+            <span>Capture RAW (.CR2)</span>
+          </label>
+          <span id="rawFormatBadge" class="badge" style="font-size: 10px; padding: 1px 6px;">JPEG Only</span>
+        </div>
       </div>
 
     </aside>
@@ -500,6 +507,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261007_01"></script>
+  <script src="app.js?v=20261007_02"></script>
 </body>
 </html>

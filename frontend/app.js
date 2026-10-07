@@ -25,7 +25,9 @@ class TimelineStudioApp {
         iso: "100",
         shutter_speed: "1/250",
         aperture: "4.0",
-        white_balance: "Auto"
+        white_balance: "Auto",
+        raw: false,
+        image_format: "L"
       },
       tracks: {
         pan: {
@@ -228,6 +230,8 @@ class TimelineStudioApp {
       defaultShutterSelect: document.getElementById("defaultShutterSelect"),
       defaultApertureSelect: document.getElementById("defaultApertureSelect"),
       defaultWbSelect: document.getElementById("defaultWbSelect"),
+      chkCaptureRaw: document.getElementById("chkCaptureRaw"),
+      rawFormatBadge: document.getElementById("rawFormatBadge"),
 
       // Timeline Toolbar
       btnFirstShot: document.getElementById("btnFirstShot"),
@@ -310,6 +314,9 @@ class TimelineStudioApp {
     this.dom.defaultShutterSelect.addEventListener("change", (e) => updateDefault("shutter_speed", e.target.value));
     this.dom.defaultApertureSelect.addEventListener("change", (e) => updateDefault("aperture", e.target.value));
     this.dom.defaultWbSelect.addEventListener("change", (e) => updateDefault("white_balance", e.target.value));
+    if (this.dom.chkCaptureRaw) {
+      this.dom.chkCaptureRaw.addEventListener("change", (e) => this.setRawCapture(e.target.checked));
+    }
     this.dom.btnSyncFromCam.addEventListener("click", () => this.syncFromCameraSettings());
 
     // Direct Keyframe Angle Input Events (Software Only - No Motor Movement)
@@ -553,6 +560,11 @@ class TimelineStudioApp {
       const camRes = await fetch("/api/camera/status");
       if (camRes.ok) {
         const camData = await camRes.json();
+        if (camData.raw_enabled !== undefined && this.plan.defaults.raw === undefined) {
+          this.plan.defaults.raw = Boolean(camData.raw_enabled);
+          this.plan.defaults.image_format = camData.image_format || (camData.raw_enabled ? "RAW + L" : "L");
+        }
+        this.updateRawUI();
         if (camData.has_latest_photo && !this.isLiveViewActive) {
           this.dom.previewImage.src = this.getPreviewUrl(true);
           this.dom.previewImage.style.display = "block";
@@ -2461,12 +2473,56 @@ class TimelineStudioApp {
         if (data.shutter_speed) this.plan.defaults.shutter_speed = data.shutter_speed;
         if (data.aperture) this.plan.defaults.aperture = data.aperture;
         if (data.white_balance) this.plan.defaults.white_balance = data.white_balance;
+        if (data.raw_enabled !== undefined) {
+          this.plan.defaults.raw = Boolean(data.raw_enabled);
+          this.plan.defaults.image_format = data.image_format || (data.raw_enabled ? "RAW + L" : "L");
+        }
         this.populateSelectOptions();
+        this.updateRawUI();
         this.updateOverlays();
         this.showToast("Synced camera settings as defaults", "success");
       }
     } catch (e) {
       this.showToast(`Camera sync error: ${e}`, "error");
+    }
+  }
+
+  async setRawCapture(isRaw) {
+    this.plan.defaults.raw = Boolean(isRaw);
+    this.plan.defaults.image_format = isRaw ? "RAW + L" : "L";
+    this.updateRawUI();
+
+    if (this.liveState.timelapse.state !== "RUNNING") {
+      try {
+        await fetch("/api/camera/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ raw: isRaw })
+        });
+        if (this.liveState.camera) {
+          this.liveState.camera.raw_enabled = isRaw;
+          this.liveState.camera.image_format = isRaw ? "RAW + L" : "L";
+        }
+        this.showToast(isRaw ? "RAW capture enabled (RAW + JPEG)" : "RAW capture disabled (JPEG only)", "info");
+      } catch (err) {
+        console.warn("Could not push RAW config to camera:", err);
+      }
+    }
+  }
+
+  updateRawUI() {
+    const isRaw = Boolean(this.plan.defaults?.raw);
+    if (this.dom.chkCaptureRaw) {
+      this.dom.chkCaptureRaw.checked = isRaw;
+    }
+    if (this.dom.rawFormatBadge) {
+      if (isRaw) {
+        this.dom.rawFormatBadge.textContent = "RAW + JPEG";
+        this.dom.rawFormatBadge.className = "badge badge-primary";
+      } else {
+        this.dom.rawFormatBadge.textContent = "JPEG Only";
+        this.dom.rawFormatBadge.className = "badge";
+      }
     }
   }
 
@@ -2540,6 +2596,8 @@ class TimelineStudioApp {
       interval_s: interval,
       settle_time_s: this.plan.settle_time_s,
       capture_photo: true,
+      raw: Boolean(this.plan.defaults?.raw),
+      image_format: this.plan.defaults?.image_format || (this.plan.defaults?.raw ? "RAW + L" : "L"),
       poses,
       camera_settings
     };
@@ -2666,8 +2724,10 @@ class TimelineStudioApp {
         shutter_speed: String(this.plan.defaults.shutter_speed || "1/250"),
         aperture: String(this.plan.defaults.aperture || "4.0"),
         white_balance: String(this.plan.defaults.white_balance || "Auto"),
-        camera_format: "JPEG",
+        camera_format: this.plan.defaults?.raw ? "RAW+JPEG" : "JPEG",
         extra_settings: {
+          raw: Boolean(this.plan.defaults?.raw),
+          image_format: this.plan.defaults?.image_format || (this.plan.defaults?.raw ? "RAW + L" : "L"),
           studio_plan: JSON.parse(JSON.stringify(this.plan))
         }
       }
@@ -2925,13 +2985,18 @@ class TimelineStudioApp {
       this.plan.totalShots = studioPlan.totalShots || planData.schedule?.total_shots || 240;
       this.plan.interval_s = studioPlan.interval_s || planData.schedule?.interval_s || 5.0;
       this.plan.settle_time_s = studioPlan.settle_time_s !== undefined ? studioPlan.settle_time_s : (planData.schedule?.settle_time_s || 0.5);
+      const isRaw = studioPlan.defaults?.raw !== undefined
+        ? Boolean(studioPlan.defaults.raw)
+        : (planData.acquisition?.camera_format ? planData.acquisition.camera_format.toUpperCase().includes("RAW") : false);
       this.plan.defaults = Object.assign({
-        iso: "100", shutter_speed: "1/250", aperture: "4.0", white_balance: "Auto"
+        iso: "100", shutter_speed: "1/250", aperture: "4.0", white_balance: "Auto", raw: isRaw, image_format: isRaw ? "RAW + L" : "L"
       }, studioPlan.defaults || {
         iso: planData.acquisition?.iso,
         shutter_speed: planData.acquisition?.shutter_speed,
         aperture: planData.acquisition?.aperture,
-        white_balance: planData.acquisition?.white_balance
+        white_balance: planData.acquisition?.white_balance,
+        raw: isRaw,
+        image_format: isRaw ? "RAW + L" : "L"
       });
       this.plan.tracks = JSON.parse(JSON.stringify(studioPlan.tracks || {}));
     } else if (planData.tracks) {
@@ -2940,8 +3005,9 @@ class TimelineStudioApp {
       this.plan.totalShots = planData.totalShots || 240;
       this.plan.interval_s = planData.interval_s || 5.0;
       this.plan.settle_time_s = planData.settle_time_s !== undefined ? planData.settle_time_s : 0.5;
+      const isRaw = planData.defaults?.raw !== undefined ? Boolean(planData.defaults.raw) : false;
       this.plan.defaults = Object.assign({
-        iso: "100", shutter_speed: "1/250", aperture: "4.0", white_balance: "Auto"
+        iso: "100", shutter_speed: "1/250", aperture: "4.0", white_balance: "Auto", raw: isRaw, image_format: isRaw ? "RAW + L" : "L"
       }, planData.defaults || {});
       this.plan.tracks = JSON.parse(JSON.stringify(planData.tracks || {}));
     } else if (planData.trajectory) {
@@ -2951,11 +3017,14 @@ class TimelineStudioApp {
       this.plan.totalShots = total;
       this.plan.interval_s = Math.max(1.0, parseFloat(planData.schedule?.interval_s) || 5.0);
       this.plan.settle_time_s = Math.max(0.0, parseFloat(planData.schedule?.settle_time_s) || 0.5);
+      const isRaw = planData.acquisition?.camera_format ? planData.acquisition.camera_format.toUpperCase().includes("RAW") : false;
       this.plan.defaults = {
         iso: planData.acquisition?.iso || "100",
         shutter_speed: planData.acquisition?.shutter_speed || "1/250",
         aperture: planData.acquisition?.aperture || "4.0",
-        white_balance: planData.acquisition?.white_balance || "Auto"
+        white_balance: planData.acquisition?.white_balance || "Auto",
+        raw: isRaw,
+        image_format: isRaw ? "RAW + L" : "L"
       };
 
       const convertKfs = (kfs, prefix) => {
@@ -3052,6 +3121,7 @@ class TimelineStudioApp {
     if (this.dom.defaultWbSelect && this.plan.defaults.white_balance) {
       this.dom.defaultWbSelect.value = this.plan.defaults.white_balance;
     }
+    this.updateRawUI();
 
     this.currentPlanId = planData.id || null;
     this.currentPlanRevision = planData.revision || 1;

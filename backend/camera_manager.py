@@ -257,10 +257,19 @@ class CameraManager:
                     await self.set_config("shutter_speed", candidate)
                     break
 
+            # 4. Image format / RAW: Apply CAPTURE_RAW or IMAGE_FORMAT if configured
+            target_fmt = os.getenv("IMAGE_FORMAT")
+            if not target_fmt:
+                capture_raw_env = os.getenv("CAPTURE_RAW")
+                if capture_raw_env is not None:
+                    target_fmt = "RAW + L" if capture_raw_env.lower() in ("true", "1", "yes") else "L"
+            if target_fmt:
+                await self.set_config("image_format", target_fmt)
+
             await self.refresh_config()
             logger.info(
                 f"Startup camera defaults applied: ISO={self.iso}, Shutter={self.shutter_speed}, "
-                f"Aperture={self.aperture}"
+                f"Aperture={self.aperture}, Format={self.image_format}"
             )
         except Exception as e:
             logger.warning(f"Could not apply all startup camera defaults: {e}")
@@ -779,12 +788,13 @@ class CameraManager:
                                         if evt_type == gp.GP_EVENT_FILE_ADDED:
                                             captured_events.append(evt_data)
                                             # In dual RAW+JPEG mode, camera emits 2 file added events; wait up to 2.5s for companion
-                                            dual_deadline = time.time() + 2.5
-                                            while time.time() < dual_deadline:
-                                                sub_type, sub_data = self._camera.wait_for_event(100, context)
-                                                if sub_type == gp.GP_EVENT_FILE_ADDED:
-                                                    captured_events.append(sub_data)
-                                                    break
+                                            if "RAW" in (self.image_format or "").upper():
+                                                dual_deadline = time.time() + 2.5
+                                                while time.time() < dual_deadline:
+                                                    sub_type, sub_data = self._camera.wait_for_event(100, context)
+                                                    if sub_type == gp.GP_EVENT_FILE_ADDED:
+                                                        captured_events.append(sub_data)
+                                                        break
                                             break
                                 finally:
                                     # ALWAYS release the shutter button completely using 'Release'

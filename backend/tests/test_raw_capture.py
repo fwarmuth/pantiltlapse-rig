@@ -116,3 +116,39 @@ def test_timelapse_capture_download(tmp_path):
             assert 'filename="0001.cr2"' in res.headers.get("content-disposition", "")
         finally:
             main.timelapse_engine.capture_dir = orig_capture_dir
+
+
+def test_disable_raw_capture(tmp_path):
+    with TestClient(app) as client:
+        # 1. Enable RAW mode first
+        res = client.post("/api/camera/config", json={"raw": True})
+        assert res.status_code == 200
+        status_res = client.get("/api/camera/status")
+        assert status_res.json()["raw_enabled"] is True
+        assert "RAW" in status_res.json()["image_format"]
+
+        # 2. Disable RAW mode
+        res = client.post("/api/camera/config", json={"raw": False})
+        assert res.status_code == 200
+        status_res = client.get("/api/camera/status")
+        assert status_res.json()["raw_enabled"] is False
+        assert status_res.json()["image_format"] == "L"
+
+        # 3. Trigger capture in JPEG-only mode
+        res = client.post("/api/camera/trigger")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "OK"
+        assert data.get("has_raw") is False
+        assert data.get("raw_filename") is None
+
+        # 4. Check test shots list
+        res = client.get("/api/camera/test-shots")
+        assert res.status_code == 200
+        shots = res.json().get("test_shots", [])
+        assert len(shots) == 1
+        shot = shots[0]
+        assert shot["has_raw"] is False
+        assert shot.get("raw_filename") is None
+        assert shot.get("raw_download_url") is None
+
