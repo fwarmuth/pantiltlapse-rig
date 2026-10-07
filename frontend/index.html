@@ -25,6 +25,7 @@
       <div style="display: flex; align-items: center; gap: 6px; margin-left: 12px;">
         <input type="text" id="planNameInput" value="Sunset Sequence" style="width: 140px; height: 26px;" title="Sequence Plan Name">
         <button class="btn btn-sm" id="btnSavePlan" title="Save plan to local rig storage">💾 Save</button>
+        <button class="btn btn-sm" id="btnOpenPlan" title="Open / Load an existing plan">📂 Open</button>
       </div>
     </div>
 
@@ -476,9 +477,29 @@
     </div>
   </div>
 
+  <!-- Open / Load Plan Modal -->
+  <div id="openPlanModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-content" style="max-width: 480px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="margin: 0; font-size: 15px;">📂 Open Saved Plan</h3>
+        <button class="btn btn-xs" onclick="closeOpenPlanModal()" title="Close dialog">✕</button>
+      </div>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">
+        Select an existing sequence plan to restore its waypoints, schedule, and settings:
+      </p>
+      <div id="savedPlansList" style="max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;">
+        <div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 20px 0;">Loading plans...</div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-xs" id="btnRefreshPlansList" title="Refresh saved plans list">🔄 Refresh</button>
+        <button class="btn btn-sm" onclick="closeOpenPlanModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261006_01"></script>
+  <script src="app.js?v=20261007_01"></script>
 </body>
 </html>

@@ -99,6 +99,10 @@ class TimelineStudioApp {
     this.followLive = true;
     this.liveShot = 1;
 
+    // Plan Storage Tracking
+    this.currentPlanId = null;
+    this.currentPlanRevision = 1;
+
     this.initDOM();
     this.bindEvents();
     this.initCanvas();
@@ -106,6 +110,7 @@ class TimelineStudioApp {
     this.fetchInitialRigStatus();
     this.fetchTestShots();
     this.initSSE();
+    this.loadInitialPlan();
     this.updateScheduleCalculations();
     this.checkShutterIntervalSafety();
     this.renderTrackHeaders();
@@ -120,6 +125,10 @@ class TimelineStudioApp {
     this.dom = {
       planNameInput: document.getElementById("planNameInput"),
       btnSavePlan: document.getElementById("btnSavePlan"),
+      btnOpenPlan: document.getElementById("btnOpenPlan"),
+      openPlanModal: document.getElementById("openPlanModal"),
+      savedPlansList: document.getElementById("savedPlansList"),
+      btnRefreshPlansList: document.getElementById("btnRefreshPlansList"),
       zeroRefBadge: document.getElementById("zeroRefBadge"),
       zeroRefText: document.getElementById("zeroRefText"),
       motorBadge: document.getElementById("motorBadge"),
@@ -443,6 +452,19 @@ class TimelineStudioApp {
     this.dom.btnPauseTimelapse.addEventListener("click", () => this.pauseOrResumeTimelapse());
     this.dom.btnStop.addEventListener("click", () => this.emergencyStop());
     this.dom.btnSavePlan.addEventListener("click", () => this.savePlan());
+    if (this.dom.btnOpenPlan) {
+      this.dom.btnOpenPlan.addEventListener("click", () => this.openLoadPlanDialog());
+    }
+    if (this.dom.btnRefreshPlansList) {
+      this.dom.btnRefreshPlansList.addEventListener("click", () => this.fetchSavedPlans());
+    }
+    if (this.dom.openPlanModal) {
+      this.dom.openPlanModal.addEventListener("click", (e) => {
+        if (e.target === this.dom.openPlanModal) {
+          this.closeOpenPlanModal();
+        }
+      });
+    }
 
     // Loupe Cursor Tracker on Viewport
     this.dom.viewportContainer.addEventListener("mousemove", (e) => this.onViewportMouseMove(e));
@@ -2565,10 +2587,532 @@ class TimelineStudioApp {
     }
   }
 
+  /* -------------------------------------------------------------------------- */
+  /* Plan Persistence & Open / Load Session Workflow                            */
+  /* -------------------------------------------------------------------------- */
+  serializeCurrentPlan() {
+    const total = Math.max(2, parseInt(this.plan.totalShots) || 240);
+    const interval = Math.max(1.0, parseFloat(this.plan.interval_s) || 5.0);
+    const settle = Math.max(0.0, parseFloat(this.plan.settle_time_s) || 0.5);
+
+    // Pan Axis Keyframes
+    const panTrack = this.plan.tracks.pan || { keyframes: [] };
+    const panKfs = (panTrack.keyframes || []).map((k) => ({ ...k }));
+    panKfs.sort((a, b) => a.shotIndex - b.shotIndex);
+
+    if (panKfs.length === 0) {
+      panKfs.push({ id: "p1", shotIndex: 1, value: 0.0, mode: "smooth" });
+      panKfs.push({ id: "p2", shotIndex: total, value: 0.0, mode: "smooth" });
+    } else if (panKfs.length === 1) {
+      panKfs.push({ id: "p2", shotIndex: total, value: panKfs[0].value, mode: "smooth" });
+    }
+
+    // Tilt Axis Keyframes
+    const tiltTrack = this.plan.tracks.tilt || { keyframes: [] };
+    const tiltKfs = (tiltTrack.keyframes || []).map((k) => ({ ...k }));
+    tiltKfs.sort((a, b) => a.shotIndex - b.shotIndex);
+
+    if (tiltKfs.length === 0) {
+      tiltKfs.push({ id: "t1", shotIndex: 1, value: 0.0, mode: "smooth" });
+      tiltKfs.push({ id: "t2", shotIndex: total, value: 0.0, mode: "smooth" });
+    } else if (tiltKfs.length === 1) {
+      tiltKfs.push({ id: "t2", shotIndex: total, value: tiltKfs[0].value, mode: "smooth" });
+    }
+
+    const formatKeyframes = (kfs) => {
+      const n = kfs.length;
+      const formatted = kfs.map((kf, i) => {
+        let progress = 0.0;
+        if (i === 0) {
+          progress = 0.0;
+        } else if (i === n - 1) {
+          progress = 1.0;
+        } else {
+          progress = Math.max(0.0001, Math.min(0.9999, (kf.shotIndex - 1) / (total - 1)));
+        }
+        return {
+          progress,
+          value: Number(kf.value) || 0.0,
+          outgoing_mode: kf.mode === "linear" ? "linear" : "smooth",
+          tangent_scale: 1.0
+        };
+      });
+
+      // Enforce strictly increasing progress
+      for (let i = 1; i < formatted.length; i++) {
+        if (formatted[i].progress <= formatted[i - 1].progress) {
+          formatted[i].progress = Math.min(1.0, formatted[i - 1].progress + 0.001);
+        }
+      }
+      formatted[0].progress = 0.0;
+      formatted[formatted.length - 1].progress = 1.0;
+      return formatted;
+    };
+
+    const payload = {
+      name: (this.dom.planNameInput.value.trim() || this.plan.name || "Timeline Plan"),
+      description: "Saved from Pantiltlapse Web Studio",
+      schedule: {
+        total_shots: total,
+        interval_s: interval,
+        settle_time_s: settle
+      },
+      trajectory: {
+        pan_keyframes: formatKeyframes(panKfs),
+        tilt_keyframes: formatKeyframes(tiltKfs)
+      },
+      acquisition: {
+        iso: String(this.plan.defaults.iso || "100"),
+        shutter_speed: String(this.plan.defaults.shutter_speed || "1/250"),
+        aperture: String(this.plan.defaults.aperture || "4.0"),
+        white_balance: String(this.plan.defaults.white_balance || "Auto"),
+        camera_format: "JPEG",
+        extra_settings: {
+          studio_plan: JSON.parse(JSON.stringify(this.plan))
+        }
+      }
+    };
+
+    if (this.currentPlanId) {
+      payload.id = this.currentPlanId;
+      payload.revision = this.currentPlanRevision || 1;
+    }
+
+    return payload;
+  }
+
   async savePlan() {
-    const planName = this.dom.planNameInput.value.trim() || "Timeline Plan";
+    const planName = this.dom.planNameInput.value.trim() || this.plan.name || "Timeline Plan";
+    this.plan.name = planName;
+
+    // Cache locally immediately
     localStorage.setItem("pantiltlapse_saved_plan", JSON.stringify(this.plan));
-    this.showToast(`Plan "${planName}" saved locally`, "success");
+
+    try {
+      const payload = this.serializeCurrentPlan();
+      let res;
+      if (this.currentPlanId) {
+        payload.id = this.currentPlanId;
+        payload.revision = this.currentPlanRevision || 1;
+        res = await fetch(`/api/plans/${this.currentPlanId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (res.status === 404 || res.status === 409) {
+          delete payload.id;
+          delete payload.revision;
+          res = await fetch("/api/plans", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+        }
+      } else {
+        res = await fetch("/api/plans", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      if (res.ok) {
+        const saved = await res.json();
+        this.currentPlanId = saved.id;
+        this.currentPlanRevision = saved.revision;
+        fetch("/api/app/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active_plan_id: this.currentPlanId })
+        }).catch(() => {});
+        this.showToast(`Plan "${planName}" saved to rig storage`, "success");
+      } else {
+        const err = await res.json().catch(() => ({}));
+        this.showToast(`Plan saved locally, server: ${err.detail?.message || res.statusText}`, "warning");
+      }
+    } catch (e) {
+      this.showToast(`Plan "${planName}" saved locally (offline)`, "info");
+    }
+  }
+
+  openLoadPlanDialog() {
+    if (this.dom.openPlanModal) {
+      this.dom.openPlanModal.style.display = "flex";
+      this.fetchSavedPlans();
+    }
+  }
+
+  closeOpenPlanModal() {
+    if (this.dom.openPlanModal) {
+      this.dom.openPlanModal.style.display = "none";
+    }
+  }
+
+  formatPlanDuration(seconds) {
+    if (!seconds || isNaN(seconds)) return "0s";
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    if (m === 0) return `${s}s`;
+    return `${m}m ${s.toString().padStart(2, "0")}s`;
+  }
+
+  formatPlanDate(isoStr) {
+    if (!isoStr) return "";
+    try {
+      const d = new Date(isoStr);
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    } catch (_) {
+      return isoStr;
+    }
+  }
+
+  escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  async fetchSavedPlans() {
+    if (!this.dom.savedPlansList) return;
+    this.dom.savedPlansList.innerHTML = `<div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 20px 0;">Loading plans...</div>`;
+
+    try {
+      const res = await fetch("/api/plans");
+      let plans = [];
+      if (res.ok) {
+        plans = await res.json();
+      }
+
+      // Check local storage draft
+      const localSaved = localStorage.getItem("pantiltlapse_saved_plan");
+      let localPlan = null;
+      if (localSaved) {
+        try {
+          localPlan = JSON.parse(localSaved);
+        } catch (_) {}
+      }
+
+      if (plans.length === 0 && !localPlan) {
+        this.dom.savedPlansList.innerHTML = `
+          <div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 25px 10px; background: rgba(0,0,0,0.15); border-radius: 6px;">
+            No saved plans found on rig.<br>Save your current plan first using 💾 Save.
+          </div>
+        `;
+        return;
+      }
+
+      let html = "";
+
+      // List server plans
+      plans.forEach((p) => {
+        const isCurrent = this.currentPlanId === p.id;
+        const totalShots = p.total_shots || 240;
+        const durationStr = this.formatPlanDuration(p.duration_s);
+        const dateStr = this.formatPlanDate(p.updated_at || p.created_at);
+        const safeName = this.escapeHtml(p.name || "Untitled Plan");
+
+        html += `
+          <div class="saved-plan-item" style="display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 6px;">
+            <div style="overflow: hidden; padding-right: 8px;">
+              <div style="font-weight: 600; font-size: 13px; color: var(--text-color); display: flex; align-items: center; gap: 6px;">
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeName}</span>
+                ${isCurrent ? '<span style="font-size: 9px; padding: 1px 5px; border-radius: 3px; background: var(--primary-accent); color: #fff; font-weight: normal;">Active</span>' : ''}
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                ${totalShots} shots • ETA ${durationStr} • rev ${p.revision || 1} • ${dateStr}
+              </div>
+            </div>
+            <div style="display: flex; gap: 6px; flex-shrink: 0;">
+              <button class="btn btn-sm btn-primary" onclick="window.app.loadPlanFromServer('${p.id}')">Load</button>
+              <button class="btn btn-sm btn-danger" style="padding: 4px 8px;" onclick="window.app.deletePlanFromServer('${p.id}', '${safeName}')" title="Delete Plan">✕</button>
+            </div>
+          </div>
+        `;
+      });
+
+      // Add local browser draft option if present
+      if (localPlan) {
+        const localName = this.escapeHtml(localPlan.name || "Local Browser Session");
+        html += `
+          <div class="saved-plan-item" style="display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; background: rgba(255,255,255,0.03); border: 1px dashed var(--border-color); border-radius: 6px; margin-top: 4px;">
+            <div style="overflow: hidden; padding-right: 8px;">
+              <div style="font-weight: 600; font-size: 13px; color: var(--text-color); display: flex; align-items: center; gap: 6px;">
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">📱 ${localName}</span>
+                <span style="font-size: 9px; padding: 1px 5px; border-radius: 3px; background: rgba(255,255,255,0.1); color: var(--text-muted);">Browser Cache</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                ${localPlan.totalShots || 240} shots • ${localPlan.interval_s || 5}s interval
+              </div>
+            </div>
+            <div style="display: flex; gap: 6px; flex-shrink: 0;">
+              <button class="btn btn-sm btn-secondary" onclick="window.app.loadPlanFromLocalStorage()">Load Cache</button>
+            </div>
+          </div>
+        `;
+      }
+
+      this.dom.savedPlansList.innerHTML = html;
+    } catch (e) {
+      this.dom.savedPlansList.innerHTML = `<div style="color: var(--status-error); font-size: 12px; padding: 12px; text-align: center;">Error loading plans: ${e}</div>`;
+    }
+  }
+
+  async loadPlanFromServer(planId) {
+    this.showToast("Loading plan from rig...", "info");
+    try {
+      const res = await fetch(`/api/plans/${planId}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        this.showToast(`Failed to load plan: ${err.detail?.message || res.statusText}`, "error");
+        return;
+      }
+      const data = await res.json();
+      this.applyLoadedPlan(data, true);
+      this.closeOpenPlanModal();
+    } catch (e) {
+      this.showToast(`Load error: ${e}`, "error");
+    }
+  }
+
+  loadPlanFromLocalStorage() {
+    const saved = localStorage.getItem("pantiltlapse_saved_plan");
+    if (!saved) {
+      this.showToast("No cached plan in local storage", "warning");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(saved);
+      this.applyLoadedPlan(parsed, true);
+      this.closeOpenPlanModal();
+    } catch (e) {
+      this.showToast(`Error loading cached plan: ${e}`, "error");
+    }
+  }
+
+  async deletePlanFromServer(planId, name) {
+    if (!confirm(`Delete saved plan "${name}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/plans/${planId}`, { method: "DELETE" });
+      if (res.ok) {
+        if (this.currentPlanId === planId) {
+          this.currentPlanId = null;
+        }
+        this.showToast(`Plan "${name}" deleted`, "info");
+        await this.fetchSavedPlans();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        this.showToast(`Failed to delete plan: ${err.detail?.message || res.statusText}`, "error");
+      }
+    } catch (e) {
+      this.showToast(`Delete error: ${e}`, "error");
+    }
+  }
+
+  applyLoadedPlan(planData, showToastMessage = true) {
+    if (!planData) return;
+
+    // Check if rich studio plan is stored in acquisition.extra_settings.studio_plan
+    const studioPlan = planData.acquisition?.extra_settings?.studio_plan;
+
+    if (studioPlan) {
+      this.plan.name = planData.name || studioPlan.name || "Timeline Sequence";
+      this.plan.totalShots = studioPlan.totalShots || planData.schedule?.total_shots || 240;
+      this.plan.interval_s = studioPlan.interval_s || planData.schedule?.interval_s || 5.0;
+      this.plan.settle_time_s = studioPlan.settle_time_s !== undefined ? studioPlan.settle_time_s : (planData.schedule?.settle_time_s || 0.5);
+      this.plan.defaults = Object.assign({
+        iso: "100", shutter_speed: "1/250", aperture: "4.0", white_balance: "Auto"
+      }, studioPlan.defaults || {
+        iso: planData.acquisition?.iso,
+        shutter_speed: planData.acquisition?.shutter_speed,
+        aperture: planData.acquisition?.aperture,
+        white_balance: planData.acquisition?.white_balance
+      });
+      this.plan.tracks = JSON.parse(JSON.stringify(studioPlan.tracks || {}));
+    } else if (planData.tracks) {
+      // LocalStorage format
+      this.plan.name = planData.name || "Timeline Sequence";
+      this.plan.totalShots = planData.totalShots || 240;
+      this.plan.interval_s = planData.interval_s || 5.0;
+      this.plan.settle_time_s = planData.settle_time_s !== undefined ? planData.settle_time_s : 0.5;
+      this.plan.defaults = Object.assign({
+        iso: "100", shutter_speed: "1/250", aperture: "4.0", white_balance: "Auto"
+      }, planData.defaults || {});
+      this.plan.tracks = JSON.parse(JSON.stringify(planData.tracks || {}));
+    } else if (planData.trajectory) {
+      // Canonical SequencePlan without studio_plan
+      const total = Math.max(2, parseInt(planData.schedule?.total_shots) || 240);
+      this.plan.name = planData.name || "Loaded Plan";
+      this.plan.totalShots = total;
+      this.plan.interval_s = Math.max(1.0, parseFloat(planData.schedule?.interval_s) || 5.0);
+      this.plan.settle_time_s = Math.max(0.0, parseFloat(planData.schedule?.settle_time_s) || 0.5);
+      this.plan.defaults = {
+        iso: planData.acquisition?.iso || "100",
+        shutter_speed: planData.acquisition?.shutter_speed || "1/250",
+        aperture: planData.acquisition?.aperture || "4.0",
+        white_balance: planData.acquisition?.white_balance || "Auto"
+      };
+
+      const convertKfs = (kfs, prefix) => {
+        if (!kfs || kfs.length === 0) return [];
+        return kfs.map((kf, i) => {
+          let shotIndex = Math.round(kf.progress * (total - 1)) + 1;
+          if (i === 0) shotIndex = 1;
+          if (i === kfs.length - 1) shotIndex = total;
+          return {
+            id: kf.id || `${prefix}${i + 1}`,
+            shotIndex,
+            value: Number(kf.value) || 0.0,
+            mode: kf.outgoing_mode || "auto",
+            inTangent: [-15, 0],
+            outTangent: [15, 0]
+          };
+        });
+      };
+
+      const panKfs = convertKfs(planData.trajectory?.pan_keyframes, "p");
+      const tiltKfs = convertKfs(planData.trajectory?.tilt_keyframes, "t");
+
+      this.plan.tracks = {
+        pan: {
+          id: "pan",
+          label: "Pan Axis",
+          color: "#06b6d4",
+          unit: "deg",
+          type: "continuous",
+          keyframes: panKfs.length >= 2 ? panKfs : [
+            { id: "p1", shotIndex: 1, value: 0.0, mode: "auto", inTangent: [-15, 0], outTangent: [15, 0] },
+            { id: "p2", shotIndex: total, value: 0.0, mode: "auto", inTangent: [-15, 0], outTangent: [15, 0] }
+          ]
+        },
+        tilt: {
+          id: "tilt",
+          label: "Tilt Axis",
+          color: "#f97316",
+          unit: "deg",
+          type: "continuous",
+          keyframes: tiltKfs.length >= 2 ? tiltKfs : [
+            { id: "t1", shotIndex: 1, value: 0.0, mode: "auto", inTangent: [-15, 0], outTangent: [15, 0] },
+            { id: "t2", shotIndex: total, value: 0.0, mode: "auto", inTangent: [-15, 0], outTangent: [15, 0] }
+          ]
+        }
+      };
+    }
+
+    // Ensure minimum valid pan & tilt tracks exist
+    if (!this.plan.tracks.pan || !this.plan.tracks.pan.keyframes || this.plan.tracks.pan.keyframes.length === 0) {
+      this.plan.tracks.pan = {
+        id: "pan",
+        label: "Pan Axis",
+        color: "#06b6d4",
+        unit: "deg",
+        type: "continuous",
+        keyframes: [
+          { id: "p1", shotIndex: 1, value: 0.0, mode: "auto", inTangent: [-15, 0], outTangent: [15, 0] },
+          { id: "p2", shotIndex: this.plan.totalShots, value: 0.0, mode: "auto", inTangent: [-15, 0], outTangent: [15, 0] }
+        ]
+      };
+    }
+    if (!this.plan.tracks.tilt || !this.plan.tracks.tilt.keyframes || this.plan.tracks.tilt.keyframes.length === 0) {
+      this.plan.tracks.tilt = {
+        id: "tilt",
+        label: "Tilt Axis",
+        color: "#f97316",
+        unit: "deg",
+        type: "continuous",
+        keyframes: [
+          { id: "t1", shotIndex: 1, value: 0.0, mode: "auto", inTangent: [-15, 0], outTangent: [15, 0] },
+          { id: "t2", shotIndex: this.plan.totalShots, value: 0.0, mode: "auto", inTangent: [-15, 0], outTangent: [15, 0] }
+        ]
+      };
+    }
+
+    // Update DOM inputs
+    if (this.dom.planNameInput) this.dom.planNameInput.value = this.plan.name;
+    if (this.dom.totalShotsInput) this.dom.totalShotsInput.value = this.plan.totalShots;
+    if (this.dom.totalShotsLabel) this.dom.totalShotsLabel.textContent = this.plan.totalShots;
+    if (this.dom.playheadInput) this.dom.playheadInput.max = this.plan.totalShots;
+    if (this.dom.intervalInput) this.dom.intervalInput.value = this.plan.interval_s;
+    if (this.dom.settleInput) this.dom.settleInput.value = this.plan.settle_time_s;
+
+    if (this.dom.defaultIsoSelect && this.plan.defaults.iso) {
+      this.dom.defaultIsoSelect.value = this.plan.defaults.iso;
+    }
+    if (this.dom.defaultShutterSelect && this.plan.defaults.shutter_speed) {
+      this.dom.defaultShutterSelect.value = this.plan.defaults.shutter_speed;
+    }
+    if (this.dom.defaultApertureSelect && this.plan.defaults.aperture) {
+      this.dom.defaultApertureSelect.value = this.plan.defaults.aperture;
+    }
+    if (this.dom.defaultWbSelect && this.plan.defaults.white_balance) {
+      this.dom.defaultWbSelect.value = this.plan.defaults.white_balance;
+    }
+
+    this.currentPlanId = planData.id || null;
+    this.currentPlanRevision = planData.revision || 1;
+
+    // Reset playback & track views
+    this.setPlayhead(1);
+    this.updateScheduleCalculations();
+    this.checkShutterIntervalSafety();
+    this.renderTrackHeaders();
+
+    this.activeTrackId = "pan";
+    this.selectedKeyId = this.plan.tracks.pan.keyframes[0]?.id || null;
+    this.updateInspectorUI();
+    this.renderTimeline();
+    this.updateOverlays();
+
+    // Persist in localStorage
+    localStorage.setItem("pantiltlapse_saved_plan", JSON.stringify(this.plan));
+
+    // Update backend active plan if applicable
+    if (this.currentPlanId) {
+      fetch("/api/app/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active_plan_id: this.currentPlanId })
+      }).catch(() => {});
+    }
+
+    if (showToastMessage) {
+      this.showToast(`Plan "${this.plan.name}" loaded successfully`, "success");
+    }
+  }
+
+  async loadInitialPlan() {
+    // 1. Immediately check local storage cache to restore instantly without UI flickers
+    const localSaved = localStorage.getItem("pantiltlapse_saved_plan");
+    if (localSaved) {
+      try {
+        const parsed = JSON.parse(localSaved);
+        if (parsed && (parsed.tracks || parsed.trajectory)) {
+          this.applyLoadedPlan(parsed, false);
+        }
+      } catch (e) {
+        console.warn("Failed to parse cached local plan:", e);
+      }
+    }
+
+    // 2. Query rig backend active plan from /api/app/state
+    try {
+      const stateRes = await fetch("/api/app/state");
+      if (stateRes.ok) {
+        const stateData = await stateRes.json();
+        if (stateData.active_plan_id && stateData.active_plan_id !== this.currentPlanId) {
+          const planRes = await fetch(`/api/plans/${stateData.active_plan_id}`);
+          if (planRes.ok) {
+            const planData = await planRes.json();
+            this.applyLoadedPlan(planData, false);
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   showToast(message, type = "info") {
@@ -2644,4 +3188,13 @@ window.executeRecalibrateZero = async function() {
 window.closeOffsetChoiceModal = function() {
   const m = document.getElementById("offsetChoiceModal");
   if (m) m.style.display = "none";
+};
+
+window.closeOpenPlanModal = function() {
+  if (window.app) {
+    window.app.closeOpenPlanModal();
+  } else {
+    const m = document.getElementById("openPlanModal");
+    if (m) m.style.display = "none";
+  }
 };
