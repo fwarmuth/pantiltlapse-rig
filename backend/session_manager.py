@@ -49,78 +49,7 @@ class SessionManager:
         self.active_pointer_file = self.base_dir / ".active_session"
         self._active_session: SessionMetadata | None = None
 
-        self._migrate_legacy_if_needed()
         self._load_or_create_initial_session()
-
-    def _migrate_legacy_if_needed(self) -> None:
-        """Migrate existing legacy output/plans/ and output/captures/ if sessions directory is empty."""
-        try:
-            existing_sessions = [d for d in self.base_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
-            if existing_sessions:
-                return  # Sessions already exist, no migration needed
-
-            output_dir = self.base_dir.parent
-            legacy_plans_dir = output_dir / "plans"
-            legacy_captures_dir = output_dir / "captures"
-
-            # Check if there are legacy plans or captures to migrate
-            has_plans = legacy_plans_dir.exists() and any(legacy_plans_dir.iterdir())
-            has_captures = legacy_captures_dir.exists() and any(legacy_captures_dir.iterdir())
-
-            if not (has_plans or has_captures):
-                return
-
-            logger.info("Migrating legacy plans and captures to sessions/...")
-            legacy_session_name = "Legacy_Archive"
-            legacy_slug = "legacy_archive"
-            legacy_session_dir = self.base_dir / legacy_slug
-            legacy_session_dir.mkdir(parents=True, exist_ok=True)
-            test_shots_dir = legacy_session_dir / "test_shots"
-            test_shots_dir.mkdir(parents=True, exist_ok=True)
-            timelapse_dir = legacy_session_dir / "timelapse"
-            timelapse_dir.mkdir(parents=True, exist_ok=True)
-
-            migrated_plan: dict[str, Any] = {}
-            if has_plans:
-                for plan_entry in legacy_plans_dir.iterdir():
-                    if plan_entry.is_dir():
-                        plan_file = plan_entry / "plan.json"
-                        if plan_file.exists():
-                            try:
-                                with open(plan_file, encoding="utf-8") as pf:
-                                    migrated_plan = json.load(pf)
-                                break
-                            except Exception:
-                                pass
-
-            if has_captures:
-                # Copy or move root capture files to test_shots/
-                for f in list(legacy_captures_dir.iterdir()):
-                    if f.is_file() and f.name.startswith("capture_"):
-                        try:
-                            shutil.copy2(f, test_shots_dir / f.name)
-                        except Exception:
-                            pass
-                    elif f.is_dir() and f.name.startswith("timelapse_"):
-                        # Copy contents of latest timelapse dir to timelapse/
-                        for tf in f.iterdir():
-                            if tf.is_file():
-                                try:
-                                    shutil.copy2(tf, timelapse_dir / tf.name)
-                                except Exception:
-                                    pass
-
-            meta = SessionMetadata(
-                name=legacy_session_name,
-                slug=legacy_slug,
-                plan=migrated_plan,
-            )
-            self._save_session_metadata(meta)
-            self._set_active_session_slug(legacy_slug)
-            self._active_session = meta
-            logger.info(f"Successfully migrated legacy files into session '{legacy_slug}'")
-        except Exception as e:
-            logger.warning(f"Legacy migration skipped or failed: {e}")
 
     def _load_or_create_initial_session(self) -> None:
         """Load the active session from disk pointer or create a default session."""
