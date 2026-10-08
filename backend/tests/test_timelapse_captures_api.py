@@ -50,3 +50,33 @@ def test_timelapse_captures_endpoints():
         # Missing file returns 404
         missing_res = client.get("/api/timelapse/captures/missing.jpg")
         assert missing_res.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_timelapse_eager_preview_generation():
+    from PIL import Image
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        main.timelapse_engine.capture_dir = tmpdir
+        main.timelapse_engine._latest_capture = {
+            "shot_index": 1,
+            "filename": "tl_0001.jpg",
+            "url": "/api/timelapse/captures/tl_0001.jpg?quality=low",
+            "timestamp": "2026-10-08T12:00:00Z",
+        }
+        status = main.timelapse_engine.get_status()
+        assert status["latest_capture"] is not None
+        assert status["latest_capture"]["shot_index"] == 1
+
+        # Create a valid JPEG
+        img = Image.new("RGB", (200, 200), color=(255, 0, 0))
+        img_path = Path(tmpdir) / "tl_0001.jpg"
+        img.save(img_path, "JPEG")
+
+        # Call eager preview generation
+        await main.timelapse_engine._eager_generate_preview("tl_0001.jpg")
+
+        preview_path = Path(tmpdir) / ".previews" / "tl_0001_low.jpg"
+        assert preview_path.exists()
+        assert preview_path.stat().st_size > 0
+

@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
+from media_helper import generate_resized_preview_sync
+
 logger = logging.getLogger("CameraCommander.Timelapse")
 
 
@@ -68,6 +70,8 @@ class TimelapseEngine:
         self.run_id: str | None = None
         self.capture_dir: str | None = None
         self.captured_shots: list[dict[str, Any]] = []
+        self._latest_capture: dict[str, Any] | None = None
+        self._preview_semaphore: asyncio.Semaphore = asyncio.Semaphore(1)
 
         self._task: asyncio.Task | None = None
         self._pause_event = asyncio.Event()
@@ -111,6 +115,7 @@ class TimelapseEngine:
         self.estimated_eta_s = config.total_shots * config.interval_s
         self.last_error = None
         self.captured_shots = []
+        self._latest_capture = None
         self._cancel_flag = False
         self._cancel_complete = asyncio.Event()
         self._cancel_complete.set()
@@ -470,6 +475,21 @@ class TimelapseEngine:
                         shot_data["raw_filename"] = capture_res.get("raw_filename")
                     self.captured_shots.append(shot_data)
 
+                    # Update latest capture telemetry for live viewport monitoring
+                    latest_cap: dict[str, Any] = {
+                        "shot_index": k + 1,
+                        "filename": filename,
+                        "url": f"/api/timelapse/captures/{filename}?quality=low",
+                        "timestamp": shot_data["timestamp"],
+                    }
+                    if capture_res.get("has_raw"):
+                        latest_cap["has_raw"] = True
+                        latest_cap["raw_filename"] = capture_res.get("raw_filename")
+                    self._latest_capture = latest_cap
+
+                    # Asynchronously pre-generate low-res (1024px) preview in background
+                    asyncio.create_task(self._eager_generate_preview(filename, capture_res))
+
                 # Update Progress Telemetry
                 self.current_shot = k + 1
                 self.elapsed_time_s = time.time() - self.start_time
@@ -529,6 +549,7 @@ class TimelapseEngine:
             "last_error": self.last_error,
             "run_id": self.run_id,
             "capture_dir": self.capture_dir,
+            "latest_capture": self._latest_capture,
             "config": self.config.model_dump(mode="json") if self.config else None,
         }
 
@@ -571,3 +592,40 @@ class TimelapseEngine:
                         "exists": True,
                     })
         return results
+
+    async def _eager_generate_preview(self, filename: str, capture_res: dict[str, Any] | None = None) -> None:
+        """Asynchronously pre-generate low-res (1024px) preview into .previews/ using Pillow."""
+        if not self.capture_dir:
+            return
+
+        async with self._preview_semaphore:
+            try:
+                capture_path = Path(self.capture_dir)
+                orig_file = capture_path / filename
+
+                # Determine displayable source image (companion preview if RAW, otherwise original file)
+                source_img = orig_file
+                raw_exts = (".cr2", ".cr3", ".nef", ".arw", ".dng")
+                if orig_file.suffix.lower() in raw_exts:
+                    for ext in (".jpg", ".jpeg", ".JPG", ".JPEG"):
+                        companion = orig_file.with_suffix(ext)
+                        if companion.exists():
+                            source_img = companion
+                            break
+                        companion_prev = orig_file.parent / f"{orig_file.stem}_preview{ext}"
+                        if companion_prev.exists():
+                            source_img = companion_prev
+                            break
+
+                if not source_img.exists():
+                    return
+
+                cache_dir = capture_path / ".previews"
+                target_preview = cache_dir / f"{source_img.stem}_low.jpg"
+
+                # Offload Pillow draft downscale to thread
+                await asyncio.to_thread(generate_resized_preview_sync, source_img, target_preview, 1024, 70)
+                logger.debug(f"Eagerly generated preview: {target_preview.name}")
+            except Exception as exc:
+                logger.debug(f"Could not eagerly generate preview for '{filename}': {exc}")
+

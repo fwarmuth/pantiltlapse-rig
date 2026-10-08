@@ -100,6 +100,7 @@ class TimelineStudioApp {
     // Decoupled Live Execution Tracking
     this.followLive = true;
     this.liveShot = 1;
+    this.capturedShotsMap = new Map(); // shotIndex -> filename
 
     // Plan Storage Tracking
     this.currentPlanId = null;
@@ -247,6 +248,8 @@ class TimelineStudioApp {
       addTrackDropdown: document.getElementById("addTrackDropdown"),
       zoomSlider: document.getElementById("zoomSlider"),
       btnToggleCurveGraph: document.getElementById("btnToggleCurveGraph"),
+      followLiveToggleLabel: document.getElementById("followLiveToggleLabel"),
+      chkFollowLive: document.getElementById("chkFollowLive"),
       btnToggleFollowLive: document.getElementById("btnToggleFollowLive"),
       followLiveDot: document.getElementById("followLiveDot"),
       followLiveLabel: document.getElementById("followLiveLabel"),
@@ -443,6 +446,17 @@ class TimelineStudioApp {
       this.setPlayhead(parseInt(e.target.value) || 1);
     });
 
+    if (this.dom.chkFollowLive) {
+      this.dom.chkFollowLive.addEventListener("change", (e) => {
+        this.followLive = e.target.checked;
+        if (this.followLive && this.liveShot > 0) {
+          this.setPlayhead(this.liveShot, true, true);
+        }
+        this.updateLiveTrackingUI();
+        this.renderTimeline();
+      });
+    }
+
     if (this.dom.btnToggleFollowLive) {
       this.dom.btnToggleFollowLive.addEventListener("click", () => this.toggleFollowLive());
     }
@@ -619,6 +633,21 @@ class TimelineStudioApp {
     }
 
     try {
+      const tlRes = await fetch("/api/timelapse/status");
+      if (tlRes.ok) {
+        const tlData = await tlRes.json();
+        if (tlData) {
+          this.handleLiveEvent({ timelapse: tlData });
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch initial timelapse status:", e);
+    }
+
+    await this.fetchTimelapseCaptures();
+    this.updateViewportForPlayhead();
+
+    try {
       const camRes = await fetch("/api/camera/status");
       if (camRes.ok) {
         const camData = await camRes.json();
@@ -627,7 +656,8 @@ class TimelineStudioApp {
           this.plan.defaults.image_format = camData.image_format || (camData.raw_enabled ? "RAW + L" : "L");
         }
         this.updateRawUI();
-        if (camData.has_latest_photo && !this.isLiveViewActive) {
+        if (camData.has_latest_photo && !this.isLiveViewActive && this.capturedShotsMap.size === 0) {
+          // If no timelapse sequence is loaded or active, fallback to showing latest camera snapshot
           this.dom.previewImage.src = this.getPreviewUrl(true);
           this.dom.previewImage.style.display = "block";
           this.dom.viewportPlaceholder.style.display = "none";
@@ -639,6 +669,24 @@ class TimelineStudioApp {
       }
     } catch (e) {
       console.warn("Could not fetch initial camera status:", e);
+    }
+  }
+
+  async fetchTimelapseCaptures() {
+    try {
+      const res = await fetch("/api/timelapse/captures");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          for (const item of data) {
+            if (item && item.shot_index && item.filename) {
+              this.capturedShotsMap.set(item.shot_index, item.filename);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch timelapse captures:", e);
     }
   }
 
@@ -719,12 +767,19 @@ class TimelineStudioApp {
         this.liveShot = data.timelapse.current_shot;
       }
 
+      if (data.timelapse.latest_capture) {
+        const lc = data.timelapse.latest_capture;
+        if (lc.shot_index && lc.filename) {
+          this.capturedShotsMap.set(lc.shot_index, lc.filename);
+        }
+      }
+
       if (tState === "RUNNING") {
         this.dom.btnStartTimelapse.style.display = "none";
         this.dom.btnPauseTimelapse.style.display = "inline-flex";
         this.dom.btnPauseTimelapse.textContent = "⏸ Pause";
         if (this.followLive && this.liveShot > 0) {
-          this.setPlayhead(this.liveShot, false);
+          this.setPlayhead(this.liveShot, false, true);
         } else {
           this.renderTimeline();
         }
@@ -754,7 +809,7 @@ class TimelineStudioApp {
   toggleFollowLive() {
     this.followLive = !this.followLive;
     if (this.followLive && this.liveShot > 0) {
-      this.setPlayhead(this.liveShot, true);
+      this.setPlayhead(this.liveShot, true, true);
     }
     this.updateLiveTrackingUI();
     this.renderTimeline();
@@ -763,7 +818,7 @@ class TimelineStudioApp {
   jumpToLive() {
     this.followLive = true;
     if (this.liveShot > 0) {
-      this.setPlayhead(this.liveShot, true);
+      this.setPlayhead(this.liveShot, true, true);
     }
     this.updateLiveTrackingUI();
     this.renderTimeline();
@@ -772,6 +827,22 @@ class TimelineStudioApp {
 
   updateLiveTrackingUI() {
     const isTimelapseActive = this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED";
+
+    if (this.dom.followLiveToggleLabel) {
+      this.dom.followLiveToggleLabel.style.display = isTimelapseActive ? "inline-flex" : "none";
+      if (this.dom.chkFollowLive) {
+        this.dom.chkFollowLive.checked = this.followLive;
+      }
+      if (this.followLive) {
+        this.dom.followLiveToggleLabel.classList.add("active");
+        if (this.dom.followLiveDot) this.dom.followLiveDot.className = "live-dot pulse";
+        if (this.dom.followLiveLabel) this.dom.followLiveLabel.textContent = "Follow Live";
+      } else {
+        this.dom.followLiveToggleLabel.classList.remove("active");
+        if (this.dom.followLiveDot) this.dom.followLiveDot.className = "live-dot";
+        if (this.dom.followLiveLabel) this.dom.followLiveLabel.textContent = "Follow Live";
+      }
+    }
 
     if (this.dom.btnToggleFollowLive) {
       this.dom.btnToggleFollowLive.style.display = isTimelapseActive ? "inline-flex" : "none";
@@ -1192,9 +1263,9 @@ class TimelineStudioApp {
         if (Math.abs(mouseX - kx) < 12) {
           this.activeTrackId = tr.id;
           this.selectedKeyId = key.id;
-          this.setPlayhead(key.shotIndex);
           this.dragTarget = { type: "key", trackId: tr.id, id: key.id };
           this.isDragging = true;
+          this.setPlayhead(key.shotIndex, true, false);
           this.updateInspectorUI();
           this.renderTimeline();
           return;
@@ -1204,9 +1275,9 @@ class TimelineStudioApp {
 
     // Otherwise scrub playhead
     const targetShot = this.xToShot(mouseX);
-    this.setPlayhead(targetShot);
     this.dragTarget = { type: "playhead" };
     this.isDragging = true;
+    this.setPlayhead(targetShot, true, false);
   }
 
   onCanvasMouseMove(e) {
@@ -1218,7 +1289,8 @@ class TimelineStudioApp {
     const targetShot = this.xToShot(mouseX);
 
     if (this.dragTarget.type === "playhead") {
-      this.setPlayhead(targetShot);
+      this.detachFollowLiveIfRunning();
+      this.setPlayhead(targetShot, true, false);
     } else if (this.dragTarget.type === "key") {
       const track = this.plan.tracks[this.dragTarget.trackId];
       if (track) {
@@ -1246,7 +1318,7 @@ class TimelineStudioApp {
             key.value = Number(rawVal.toFixed(1));
           }
           track.keyframes.sort((a, b) => a.shotIndex - b.shotIndex);
-          this.setPlayhead(key.shotIndex);
+          this.setPlayhead(key.shotIndex, true, false);
           this.updateInspectorUI();
           this.renderTimeline();
           this.checkLiveRamping(track.id, key.value);
@@ -1256,8 +1328,12 @@ class TimelineStudioApp {
   }
 
   onCanvasMouseUp() {
+    const wasDragging = this.isDragging;
     this.isDragging = false;
     this.dragTarget = null;
+    if (wasDragging) {
+      this.updateViewportForPlayhead();
+    }
   }
 
   /* -------------------------------------------------------------------------- */
@@ -1732,7 +1808,7 @@ class TimelineStudioApp {
       `Pan: ${Number(pan).toFixed(1)}° | Tilt: ${Number(tilt).toFixed(1)}° | ISO ${iso} | ${shutter}s | f/${aperture} | ${wb}`;
   }
 
-  setPlayhead(shotIndex, updateInput = true) {
+  setPlayhead(shotIndex, updateInput = true, loadMedia = true) {
     this.playhead = Math.max(1, Math.min(this.plan.totalShots, shotIndex));
     if (updateInput) this.dom.playheadInput.value = this.playhead;
 
@@ -1746,6 +1822,38 @@ class TimelineStudioApp {
     this.updateOverlays();
     this.updateLiveTrackingUI();
     this.renderTimeline();
+
+    if (loadMedia && !this.isDragging && !this.isPlayingPreview) {
+      this.updateViewportForPlayhead();
+    }
+  }
+
+  updateViewportForPlayhead() {
+    // Only manage timelapse viewport when on timelapse tab and not streaming live view
+    if (this.activeViewportTab !== "timelapse" || this.isLiveViewActive) return;
+
+    if (this.capturedShotsMap && this.capturedShotsMap.has(this.playhead)) {
+      const fn = this.capturedShotsMap.get(this.playhead);
+      const imgUrl = `/api/timelapse/captures/${encodeURIComponent(fn)}?quality=${this.imageTier}`;
+      this.dom.previewImage.src = imgUrl;
+      this.dom.previewImage.style.display = "block";
+      this.dom.viewportPlaceholder.style.display = "none";
+      if (this.dom.latestPhotoPill) {
+        this.dom.latestPhotoPill.style.display = "flex";
+        this.dom.latestPhotoText.textContent = `Shot ${this.playhead}: ${fn}`;
+      }
+    } else {
+      // Uncaptured / future frame: hide image and display clean frame placeholder
+      this.dom.previewImage.style.display = "none";
+      this.dom.viewportPlaceholder.style.display = "flex";
+      if (this.dom.viewportPlaceholderText) {
+        this.dom.viewportPlaceholderText.textContent =
+          `Shot ${this.playhead} / ${this.plan.totalShots} • Uncaptured • Adjust settings to add key trigger`;
+      }
+      if (this.dom.latestPhotoPill) {
+        this.dom.latestPhotoPill.style.display = "none";
+      }
+    }
   }
 
   /* Auto-Synced Jogging: Moves rig & syncs directly into active keypoint */
@@ -2038,7 +2146,7 @@ class TimelineStudioApp {
         this.dom.previewImage.style.display = "block";
         this.dom.viewportPlaceholder.style.display = "none";
       } else {
-        this.dom.previewImage.src = this.getPreviewUrl(true);
+        this.updateViewportForPlayhead();
       }
     } else {
       // Switch to Test Shots mode
@@ -2245,6 +2353,11 @@ class TimelineStudioApp {
   getPreviewUrl(bustCache = false) {
     if (this.activeViewportTab === "test-shots" && this.selectedTestShot) {
       const base = `/api/camera/test-shots/${this.selectedTestShot}?quality=${this.imageTier}`;
+      return bustCache ? `${base}&t=${Date.now()}` : base;
+    }
+    if (this.activeViewportTab === "timelapse" && this.capturedShotsMap && this.capturedShotsMap.has(this.playhead)) {
+      const fn = this.capturedShotsMap.get(this.playhead);
+      const base = `/api/timelapse/captures/${encodeURIComponent(fn)}?quality=${this.imageTier}`;
       return bustCache ? `${base}&t=${Date.now()}` : base;
     }
     const base = `/api/camera/preview/latest?quality=${this.imageTier}`;
@@ -2554,7 +2667,7 @@ class TimelineStudioApp {
     } else {
       this.dom.btnToggleLiveView.textContent = "🎥 Live Stream: OFF";
       this.dom.btnToggleLiveView.classList.remove("btn-primary");
-      this.dom.previewImage.src = this.getPreviewUrl(true);
+      this.updateViewportForPlayhead();
     }
   }
 
@@ -2667,11 +2780,11 @@ class TimelineStudioApp {
     this.dom.btnPlayPreview.textContent = "⏸ Pause";
     this.dom.btnPlayPreview.classList.add("btn-danger");
 
-    if (this.playhead >= this.plan.totalShots) this.setPlayhead(1);
+    if (this.playhead >= this.plan.totalShots) this.setPlayhead(1, true, false);
 
     this.previewIntervalId = setInterval(() => {
       if (this.playhead < this.plan.totalShots) {
-        this.setPlayhead(this.playhead + 1);
+        this.setPlayhead(this.playhead + 1, true, false);
       } else {
         this.stopPreviewPlayback();
       }
@@ -2686,6 +2799,7 @@ class TimelineStudioApp {
     }
     this.dom.btnPlayPreview.textContent = "▶ Preview";
     this.dom.btnPlayPreview.classList.remove("btn-danger");
+    this.updateViewportForPlayhead();
   }
 
   /* -------------------------------------------------------------------------- */
@@ -2736,8 +2850,10 @@ class TimelineStudioApp {
       });
       const data = await res.json();
       if (data.status === "OK") {
+        this.capturedShotsMap.clear();
         this.followLive = true;
         this.liveShot = 1;
+        this.setPlayhead(1, true, true);
         this.updateLiveTrackingUI();
         this.showToast("Time-lapse sequence started!", "success");
       } else {

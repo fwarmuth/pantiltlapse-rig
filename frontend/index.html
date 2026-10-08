@@ -418,10 +418,11 @@
         </div>
 
         <!-- Follow Live Toggle (Active during time-lapse runs) -->
-        <button class="btn btn-xs btn-follow-live active" id="btnToggleFollowLive" style="display: none;" title="Toggle automatic tracking of live execution playhead">
+        <label class="follow-live-checkbox active" id="followLiveToggleLabel" style="display: none;" title="Automatically jump scrubber to latest captured frame">
+          <input type="checkbox" id="chkFollowLive" checked>
           <span id="followLiveDot" class="live-dot pulse"></span>
-          <span id="followLiveLabel">Following Live</span>
-        </button>
+          <span id="followLiveLabel">Follow Live</span>
+        </label>
       </div>
 
       <div class="timeline-toolbar-center">
@@ -535,6 +536,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261008_01"></script>
+  <script src="app.js?v=20261008_02"></script>
 </body>
 </html>
