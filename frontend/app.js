@@ -226,6 +226,7 @@ class TimelineStudioApp {
 
       // Defaults
       btnSyncFromCam: document.getElementById("btnSyncFromCam"),
+      cameraTrackContextBadge: document.getElementById("cameraTrackContextBadge"),
       defaultIsoSelect: document.getElementById("defaultIsoSelect"),
       defaultShutterSelect: document.getElementById("defaultShutterSelect"),
       defaultApertureSelect: document.getElementById("defaultApertureSelect"),
@@ -242,6 +243,8 @@ class TimelineStudioApp {
       playheadInput: document.getElementById("playheadInput"),
       totalShotsLabel: document.getElementById("totalShotsLabel"),
       btnAddKeyTrigger: document.getElementById("btnAddKeyTrigger"),
+      btnAddTrackMenuBtn: document.getElementById("btnAddTrackMenuBtn"),
+      addTrackDropdown: document.getElementById("addTrackDropdown"),
       zoomSlider: document.getElementById("zoomSlider"),
       btnToggleCurveGraph: document.getElementById("btnToggleCurveGraph"),
       btnToggleFollowLive: document.getElementById("btnToggleFollowLive"),
@@ -287,27 +290,55 @@ class TimelineStudioApp {
     });
     this.dom.btnAutoAdjustInterval.addEventListener("click", () => this.autoAdjustInterval());
 
-    // Sequence Camera Defaults
+    // Sequence Camera Defaults & Key Trigger Auto-Creation
     const updateDefault = async (param, val) => {
-      this.plan.defaults[param] = val;
-      this.cleanupCameraTrack(param);
-      this.checkShutterIntervalSafety();
-      this.updateOverlays();
-      this.renderTimeline();
-      this.checkLiveRamping(param, val);
-
-      // If camera connected and not running a sequence, push setting to camera immediately
-      if (this.liveState.timelapse.state !== "RUNNING") {
-        try {
-          await fetch("/api/camera/config", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ [param]: String(val) })
-          });
-          if (this.liveState.camera) {
-            this.liveState.camera[param] = String(val);
+      if (this.playhead === 1) {
+        this.plan.defaults[param] = val;
+        // If a track already exists for this parameter, update its shot 1 keyframe
+        const track = this.plan.tracks[param];
+        if (track) {
+          const k1 = track.keyframes.find((k) => k.shotIndex === 1);
+          if (k1) {
+            k1.value = val;
           }
-        } catch (_) {}
+          this.cleanupCameraTrack(param);
+        }
+        this.checkShutterIntervalSafety();
+        this.updateOverlays();
+        this.renderTimeline();
+        this.renderTrackHeaders();
+        this.updateInspectorUI();
+        this.checkLiveRamping(param, val);
+
+        // If camera connected and not running a sequence, push setting to camera immediately
+        if (this.liveState.timelapse.state !== "RUNNING") {
+          try {
+            await fetch("/api/camera/config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ [param]: String(val) })
+            });
+            if (this.liveState.camera) {
+              this.liveState.camera[param] = String(val);
+            }
+          } catch (_) {}
+        }
+      } else {
+        // Intermediate shot: auto-create or update key trigger on parameter track
+        this.ensureCameraTrack(param, val);
+        this.renderTrackHeaders();
+        this.updateInspectorUI();
+        this.renderTimeline();
+        this.updateOverlays();
+        this.checkShutterIntervalSafety();
+        this.checkLiveRamping(param, val);
+        const labels = {
+          shutter_speed: "Shutter",
+          iso: "ISO",
+          aperture: "Aperture",
+          white_balance: "White Balance"
+        };
+        this.showToast(`Set ${labels[param] || param} key trigger at Shot ${this.playhead}: ${val}`, "success");
       }
     };
     this.dom.defaultIsoSelect.addEventListener("change", (e) => updateDefault("iso", e.target.value));
@@ -362,6 +393,37 @@ class TimelineStudioApp {
     // Key Management
     this.dom.btnToggleKeyTrigger.addEventListener("click", () => this.toggleKeyTriggerAtPlayhead());
     this.dom.btnAddKeyTrigger.addEventListener("click", () => this.addKeyTriggerAtPlayhead());
+
+    // + Track Dropdown Toggle & Selection
+    if (this.dom.btnAddTrackMenuBtn && this.dom.addTrackDropdown) {
+      this.dom.btnAddTrackMenuBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const isOpen = this.dom.addTrackDropdown.style.display === "flex";
+        this.dom.addTrackDropdown.style.display = isOpen ? "none" : "flex";
+      });
+
+      document.addEventListener("click", (e) => {
+        if (this.dom.addTrackDropdown && !this.dom.addTrackDropdown.contains(e.target) && e.target !== this.dom.btnAddTrackMenuBtn) {
+          this.dom.addTrackDropdown.style.display = "none";
+        }
+      });
+
+      this.dom.addTrackDropdown.querySelectorAll(".track-menu-item").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.dom.addTrackDropdown.style.display = "none";
+          const param = btn.dataset.param;
+          if (param) {
+            const currentVal = this.evaluateTrackAtShot(this.plan.tracks[param] || { id: param }, this.playhead);
+            this.ensureCameraTrack(param, currentVal);
+            this.renderTrackHeaders();
+            this.updateInspectorUI();
+            this.renderTimeline();
+            this.updateOverlays();
+          }
+        });
+      });
+    }
 
     // Transport buttons
     this.dom.btnFirstShot.addEventListener("click", () => {
@@ -1255,31 +1317,37 @@ class TimelineStudioApp {
   /* Dynamic Parameter Track Auto-Creation & Auto-Cleanup                       */
   /* -------------------------------------------------------------------------- */
   ensureCameraTrack(paramKey, initialVal) {
+    const labels = {
+      shutter_speed: "Shutter",
+      iso: "ISO",
+      aperture: "Aperture",
+      white_balance: "White Balance"
+    };
+    const colors = {
+      shutter_speed: "#a855f7",
+      iso: "#10b981",
+      aperture: "#ec4899",
+      white_balance: "#eab308"
+    };
+
     if (!this.plan.tracks[paramKey]) {
-      const labels = {
-        shutter_speed: "Shutter",
-        iso: "ISO",
-        aperture: "Aperture",
-        white_balance: "White Balance"
-      };
-      const colors = {
-        shutter_speed: "#a855f7",
-        iso: "#10b981",
-        aperture: "#ec4899",
-        white_balance: "#eab308"
-      };
+      const kfs = [];
+      if (this.playhead === 1) {
+        kfs.push({ id: `${paramKey}-start`, shotIndex: 1, value: initialVal || this.plan.defaults[paramKey] });
+      } else {
+        kfs.push({ id: `${paramKey}-start`, shotIndex: 1, value: this.plan.defaults[paramKey] });
+        kfs.push({ id: `${paramKey}-${Date.now()}`, shotIndex: this.playhead, value: initialVal });
+      }
 
       this.plan.tracks[paramKey] = {
         id: paramKey,
         label: labels[paramKey] || paramKey,
         color: colors[paramKey] || "#8b5cf6",
         type: "discrete",
-        keyframes: [
-          { id: `${paramKey}-start`, shotIndex: 1, value: this.plan.defaults[paramKey] },
-          { id: `${paramKey}-${Date.now()}`, shotIndex: this.playhead, value: initialVal }
-        ]
+        keyframes: kfs
       };
       this.activeTrackId = paramKey;
+      this.selectedKeyId = kfs[kfs.length - 1].id;
       this.showToast(`Auto-created timeline track: ${labels[paramKey]}`, "info");
     } else {
       const track = this.plan.tracks[paramKey];
@@ -1291,7 +1359,25 @@ class TimelineStudioApp {
         key.value = initialVal;
       }
       track.keyframes.sort((a, b) => a.shotIndex - b.shotIndex);
+      this.activeTrackId = paramKey;
+      this.selectedKeyId = key.id;
     }
+  }
+
+  removeCameraTrack(paramKey) {
+    const track = this.plan.tracks[paramKey];
+    if (!track || track.type === "continuous") return;
+
+    delete this.plan.tracks[paramKey];
+    if (this.activeTrackId === paramKey) {
+      this.activeTrackId = "pan";
+      this.selectedKeyId = this.plan.tracks.pan.keyframes[0]?.id || null;
+    }
+    this.renderTrackHeaders();
+    this.updateInspectorUI();
+    this.renderTimeline();
+    this.updateOverlays();
+    this.showToast(`Removed track: ${track.label}`, "info");
   }
 
   cleanupCameraTrack(paramKey) {
@@ -1340,8 +1426,22 @@ class TimelineStudioApp {
           <span class="track-color-indicator ${track.id}"></span>
           ${track.label}
         </span>
-        <span style="color: ${track.color}; font-family: var(--font-mono); font-size: 11px;">${displayVal}</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span style="color: ${track.color}; font-family: var(--font-mono); font-size: 11px;">${displayVal}</span>
+          ${track.type === "discrete" ? `<button class="track-delete-btn" title="Remove track">✕</button>` : ""}
+        </div>
       `;
+
+      if (track.type === "discrete") {
+        const delBtn = item.querySelector(".track-delete-btn");
+        if (delBtn) {
+          delBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.removeCameraTrack(trackId);
+          };
+        }
+      }
+
       container.appendChild(item);
     });
   }
@@ -1589,6 +1689,31 @@ class TimelineStudioApp {
       this.dom.keyCardTitle.textContent = `Shot ${this.playhead} (Interpolated)`;
       this.dom.btnToggleKeyTrigger.textContent = "+ Key Here";
       this.dom.btnToggleKeyTrigger.className = "btn btn-primary btn-sm";
+    }
+
+    // Synchronize Section 3 controls with evaluated values at active playhead
+    const curIso = this.evaluateTrackAtShot(this.plan.tracks.iso || { id: "iso" }, this.playhead);
+    const curShutter = this.evaluateTrackAtShot(this.plan.tracks.shutter_speed || { id: "shutter_speed" }, this.playhead);
+    const curAperture = this.evaluateTrackAtShot(this.plan.tracks.aperture || { id: "aperture" }, this.playhead);
+    const curWb = this.evaluateTrackAtShot(this.plan.tracks.white_balance || { id: "white_balance" }, this.playhead);
+
+    if (this.dom.defaultIsoSelect && curIso) this.dom.defaultIsoSelect.value = curIso;
+    if (this.dom.defaultShutterSelect && curShutter) this.dom.defaultShutterSelect.value = curShutter;
+    if (this.dom.defaultApertureSelect && curAperture) this.dom.defaultApertureSelect.value = curAperture;
+    if (this.dom.defaultWbSelect && curWb) this.dom.defaultWbSelect.value = curWb;
+
+    if (this.dom.cameraTrackContextBadge) {
+      if (this.playhead === 1) {
+        this.dom.cameraTrackContextBadge.textContent = "Shot 1 (Default)";
+        this.dom.cameraTrackContextBadge.style.background = "rgba(59, 130, 246, 0.15)";
+        this.dom.cameraTrackContextBadge.style.color = "#93c5fd";
+        this.dom.cameraTrackContextBadge.style.borderColor = "rgba(59, 130, 246, 0.3)";
+      } else {
+        this.dom.cameraTrackContextBadge.textContent = `Shot ${this.playhead} (Active)`;
+        this.dom.cameraTrackContextBadge.style.background = "rgba(16, 185, 129, 0.15)";
+        this.dom.cameraTrackContextBadge.style.color = "#6ee7b7";
+        this.dom.cameraTrackContextBadge.style.borderColor = "rgba(16, 185, 129, 0.3)";
+      }
     }
 
     this.renderTrackHeaders();

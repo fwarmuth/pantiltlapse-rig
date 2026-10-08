@@ -357,7 +357,10 @@
       <div class="inspector-section">
         <div class="inspector-section-header">
           <span class="inspector-section-title">📷 Sequence Camera Defaults</span>
-          <button class="btn btn-xs" id="btnSyncFromCam">Sync from Cam</button>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <span id="cameraTrackContextBadge" class="badge" style="font-size: 10px; padding: 1px 6px; background: rgba(59, 130, 246, 0.15); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.3);">Shot 1 (Default)</span>
+            <button class="btn btn-xs" id="btnSyncFromCam">Sync from Cam</button>
+          </div>
         </div>
         <p style="font-size: 11px; color: var(--text-dim); margin-bottom: 8px;">
           Changing a setting at an intermediate shot automatically adds its track to the timeline.
@@ -422,9 +425,34 @@
       </div>
 
       <div class="timeline-toolbar-center">
-        <button class="btn btn-sm" id="btnAddKeyTrigger" title="Add Key Trigger at Playhead (K)">
-          <span style="color: var(--key-diamond);">◆</span> Add Key Trigger (K)
-        </button>
+        <div style="display: inline-flex; align-items: center; gap: 6px; position: relative;">
+          <button class="btn btn-sm" id="btnAddKeyTrigger" title="Add Key Trigger at Playhead (K)">
+            <span style="color: var(--key-diamond);">◆</span> Add Key Trigger (K)
+          </button>
+          <div class="track-menu-container" style="position: relative;">
+            <button class="btn btn-sm" id="btnAddTrackMenuBtn" title="Add Camera Parameter Track (Shutter, ISO, Aperture, WB)">
+              + Track ▾
+            </button>
+            <div class="track-menu-dropdown" id="addTrackDropdown" style="display: none;">
+              <button class="track-menu-item" data-param="shutter_speed">
+                <span class="track-color-indicator shutter_speed" style="width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px;"></span>
+                Shutter Speed Track
+              </button>
+              <button class="track-menu-item" data-param="iso">
+                <span class="track-color-indicator iso" style="width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px;"></span>
+                ISO Track
+              </button>
+              <button class="track-menu-item" data-param="aperture">
+                <span class="track-color-indicator aperture" style="width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px;"></span>
+                Aperture Track
+              </button>
+              <button class="track-menu-item" data-param="white_balance">
+                <span class="track-color-indicator white_balance" style="width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px;"></span>
+                White Balance Track
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="timeline-toolbar-right">
@@ -507,6 +535,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261007_02"></script>
+  <script src="app.js?v=20261008_01"></script>
 </body>
 </html>
