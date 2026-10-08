@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
-from media_helper import generate_resized_preview_sync
+from media_helper import generate_resized_preview_async, generate_resized_preview_sync
 
 logger = logging.getLogger("CameraCommander.Timelapse")
 
@@ -629,8 +629,8 @@ class TimelapseEngine:
                 cache_dir = capture_path / ".previews"
                 target_preview = cache_dir / f"{source_img.stem}_low.jpg"
 
-                # Offload Pillow draft downscale to thread
-                await asyncio.to_thread(generate_resized_preview_sync, source_img, target_preview, 1024, 70)
+                # Offload Pillow draft downscale with single-concurrency serialization
+                await generate_resized_preview_async(source_img, target_preview, 1024, 70)
                 logger.debug(f"Eagerly generated preview: {target_preview.name}")
             except Exception as exc:
                 logger.debug(f"Could not eagerly generate preview for '{filename}': {exc}")

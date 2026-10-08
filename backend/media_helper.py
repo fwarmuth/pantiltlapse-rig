@@ -49,6 +49,9 @@ def extract_jpeg_exif(file_path: Path) -> dict[str, Any]:
         return {}
 
 
+_preview_semaphore = asyncio.Semaphore(1)
+
+
 def generate_resized_preview_sync(
     orig_path: Path,
     dest_path: Path,
@@ -71,14 +74,18 @@ def generate_resized_preview_sync(
         from PIL import Image, ImageOps
 
         with Image.open(orig_path) as im:
-            im = ImageOps.exif_transpose(im)
+            # 1. libjpeg DCT scaling MUST be set via draft() BEFORE reading pixels or transposing
             if hasattr(im, "draft") and max_dimension <= 1920:
                 im.draft("RGB", (max_dimension, max_dimension))
-            im.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+            # 2. Exif orientation transposition on the DCT-reduced bitmap
+            im = ImageOps.exif_transpose(im)
+            # 3. Fast bilinear resample to exact target bounding box
+            im.thumbnail((max_dimension, max_dimension), Image.Resampling.BILINEAR)
             if im.mode not in ("RGB", "L"):
                 im = im.convert("RGB")
             tmp = dest_path.parent / f".tmp_{dest_path.stem}_{os.getpid()}_{uuid4().hex[:8]}.jpg"
-            im.save(tmp, "JPEG", quality=quality, optimize=True)
+            # 4. optimize=False avoids extra memory-heavy Huffman optimization pass
+            im.save(tmp, "JPEG", quality=quality, optimize=False)
             tmp.replace(dest_path)
             return True
     except Exception as e:
@@ -89,6 +96,31 @@ def generate_resized_preview_sync(
                 pass
         logger.warning(f"Failed to generate resized preview '{dest_path}' from '{orig_path}': {e}")
         return False
+    finally:
+        # Reclaim memory immediately on memory-constrained devices (e.g. Pi Zero 2 W)
+        try:
+            import gc
+            gc.collect()
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
+
+
+async def generate_resized_preview_async(
+    orig_path: Path,
+    dest_path: Path,
+    max_dimension: int = 1024,
+    quality: int = 75,
+) -> bool:
+    """Safely offload preview downscaling with serialized single-concurrency to prevent OOM/swap."""
+    async with _preview_semaphore:
+        if dest_path.exists() and orig_path.exists() and dest_path.stat().st_mtime >= orig_path.stat().st_mtime:
+            return True
+        return await asyncio.to_thread(
+            generate_resized_preview_sync, orig_path, dest_path, max_dimension, quality
+        )
+
 
 
 async def publish_media_artifact(

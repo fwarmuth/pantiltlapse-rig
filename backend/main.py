@@ -25,8 +25,14 @@ from domain.trajectory import sample_trajectory
 from dry_run_engine import DryRunEngine
 from fake_camera_manager import FakeCameraManager
 from fake_serial_manager import FakeSerialManager
-from media_helper import generate_resized_preview_sync
+from media_helper import (
+    _preview_semaphore,
+    generate_resized_preview_async,
+    generate_resized_preview_sync,
+)
 from preview_controller import PreviewController
+
+_preview_downscale_lock = _preview_semaphore
 from serial_manager import SerialManager
 from session_manager import SessionManager, SessionMetadata
 from storage import PlanStore
@@ -579,7 +585,7 @@ async def _serve_tiered_image(orig_path: Path, quality_tier: str | None = None) 
     if selected_tier == "low":
         target_preview = cache_dir / f"{source_img.stem}_low.jpg"
         if not target_preview.exists() or target_preview.stat().st_mtime < source_img.stat().st_mtime:
-            ok = await asyncio.to_thread(generate_resized_preview_sync, source_img, target_preview, 1024, 70)
+            ok = await generate_resized_preview_async(source_img, target_preview, 1024, 70)
             if not ok or not target_preview.exists():
                 return FileResponse(source_img, media_type="image/jpeg" if not is_raw else raw_media_type)
         return FileResponse(target_preview, media_type="image/jpeg")
@@ -587,7 +593,7 @@ async def _serve_tiered_image(orig_path: Path, quality_tier: str | None = None) 
     elif selected_tier == "balanced":
         target_preview = cache_dir / f"{source_img.stem}_balanced.jpg"
         if not target_preview.exists() or target_preview.stat().st_mtime < source_img.stat().st_mtime:
-            ok = await asyncio.to_thread(generate_resized_preview_sync, source_img, target_preview, 1920, 80)
+            ok = await generate_resized_preview_async(source_img, target_preview, 1920, 80)
             if not ok or not target_preview.exists():
                 return FileResponse(source_img, media_type="image/jpeg" if not is_raw else raw_media_type)
         return FileResponse(target_preview, media_type="image/jpeg")
@@ -1356,7 +1362,7 @@ async def get_test_shot_artifact_file(
                 target_file = cached_fast
                 media_type = "image/jpeg"
             elif orig_path.exists() and orig_path.suffix.lower() in (".jpg", ".jpeg"):
-                ok = await asyncio.to_thread(generate_resized_preview_sync, orig_path, cached_fast, 1024, 75)
+                ok = await generate_resized_preview_async(orig_path, cached_fast, 1024, 75)
                 if ok and cached_fast.exists():
                     target_file = cached_fast
                     media_type = "image/jpeg"
@@ -1370,7 +1376,7 @@ async def get_test_shot_artifact_file(
                 target_file = cached_med
                 media_type = "image/jpeg"
             elif orig_path.exists() and orig_path.suffix.lower() in (".jpg", ".jpeg"):
-                ok = await asyncio.to_thread(generate_resized_preview_sync, orig_path, cached_med, 1920, 82)
+                ok = await generate_resized_preview_async(orig_path, cached_med, 1920, 82)
                 if ok and cached_med.exists():
                     target_file = cached_med
                     media_type = "image/jpeg"
