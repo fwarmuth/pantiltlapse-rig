@@ -1192,3 +1192,63 @@ select:focus {
   opacity: 1;
 }
 
+/* Shoot Session Manager */
+.session-bar-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 14px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border-color, #2d3340);
+}
+
+#sessionNameInput {
+  background: var(--bg-surface-elevated, #1b1e26);
+  border: 1px solid var(--border-color, #333846);
+  color: var(--text-color, #f1f5f9);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-sm, 4px);
+  padding: 2px 8px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+#sessionNameInput:focus {
+  outline: none;
+  border-color: var(--primary-accent, #38bdf8);
+  background: #222733;
+}
+
+.session-item-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color, #333846);
+  border-radius: var(--radius-sm, 6px);
+  transition: all 0.15s ease;
+}
+
+.session-item-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.session-item-card.active {
+  border-color: var(--primary-accent, #38bdf8);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.session-badge-active {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--primary-accent, #38bdf8);
+  color: #0f172a;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+

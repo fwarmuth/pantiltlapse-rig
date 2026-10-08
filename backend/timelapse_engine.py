@@ -33,6 +33,7 @@ class TimelapseConfig(BaseModel):
     camera_settings: list[dict[str, str]] | None = Field(
         default=None, description="Explicit per-shot camera exposure settings"
     )
+    target_dir: str | None = Field(default=None, description="Explicit target directory for sequence captures")
 
     @model_validator(mode="after")
     def validate_explicit_pose_count(self) -> "TimelapseConfig":
@@ -132,6 +133,11 @@ class TimelapseEngine:
 
     def _create_capture_storage(self, config: TimelapseConfig | None = None) -> tuple[str, str | None]:
         """Allocate a unique, human-readable run identity and an isolated capture directory."""
+        if config and config.target_dir:
+            target_path = Path(config.target_dir).resolve()
+            target_path.mkdir(parents=True, exist_ok=True)
+            return target_path.name, str(target_path)
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         plan_title = config.plan_name if config else None
 

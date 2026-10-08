@@ -106,6 +106,10 @@ class TimelineStudioApp {
     this.currentPlanId = null;
     this.currentPlanRevision = 1;
 
+    // Active Shoot Session Tracking
+    this.activeSession = null;
+    this.sessionsList = [];
+
     this.initDOM();
     this.bindEvents();
     this.initCanvas();
@@ -126,6 +130,19 @@ class TimelineStudioApp {
   /* -------------------------------------------------------------------------- */
   initDOM() {
     this.dom = {
+      // Shoot Session Elements
+      sessionNameInput: document.getElementById("sessionNameInput"),
+      btnSaveSession: document.getElementById("btnSaveSession"),
+      btnOpenSessionsModal: document.getElementById("btnOpenSessionsModal"),
+      btnNewSession: document.getElementById("btnNewSession"),
+      sessionsModal: document.getElementById("sessionsModal"),
+      btnCloseSessionsModal: document.getElementById("btnCloseSessionsModal"),
+      btnCloseSessionsModalBottom: document.getElementById("btnCloseSessionsModalBottom"),
+      newSessionModalInput: document.getElementById("newSessionModalInput"),
+      btnCreateSessionFromModal: document.getElementById("btnCreateSessionFromModal"),
+      sessionsList: document.getElementById("sessionsList"),
+      btnRefreshSessionsList: document.getElementById("btnRefreshSessionsList"),
+
       planNameInput: document.getElementById("planNameInput"),
       btnSavePlan: document.getElementById("btnSavePlan"),
       btnOpenPlan: document.getElementById("btnOpenPlan"),
@@ -534,7 +551,60 @@ class TimelineStudioApp {
     this.dom.btnStartTimelapse.addEventListener("click", () => this.startTimelapse());
     this.dom.btnPauseTimelapse.addEventListener("click", () => this.pauseOrResumeTimelapse());
     this.dom.btnStop.addEventListener("click", () => this.emergencyStop());
-    this.dom.btnSavePlan.addEventListener("click", () => this.savePlan());
+
+    // Shoot Session Controls
+    if (this.dom.btnSaveSession) {
+      this.dom.btnSaveSession.addEventListener("click", () => this.saveActiveSessionPlan());
+    }
+    if (this.dom.btnOpenSessionsModal) {
+      this.dom.btnOpenSessionsModal.addEventListener("click", () => this.openSessionsModal());
+    }
+    if (this.dom.btnNewSession) {
+      this.dom.btnNewSession.addEventListener("click", () => this.promptCreateNewSession());
+    }
+    if (this.dom.btnCloseSessionsModal) {
+      this.dom.btnCloseSessionsModal.addEventListener("click", () => this.closeSessionsModal());
+    }
+    if (this.dom.btnCloseSessionsModalBottom) {
+      this.dom.btnCloseSessionsModalBottom.addEventListener("click", () => this.closeSessionsModal());
+    }
+    if (this.dom.sessionsModal) {
+      this.dom.sessionsModal.addEventListener("click", (e) => {
+        if (e.target === this.dom.sessionsModal) this.closeSessionsModal();
+      });
+    }
+    if (this.dom.btnRefreshSessionsList) {
+      this.dom.btnRefreshSessionsList.addEventListener("click", () => this.fetchSessionsList());
+    }
+    if (this.dom.btnCreateSessionFromModal) {
+      this.dom.btnCreateSessionFromModal.addEventListener("click", () => {
+        const name = this.dom.newSessionModalInput ? this.dom.newSessionModalInput.value.trim() : "";
+        this.createNewSession(name || null);
+      });
+    }
+    if (this.dom.newSessionModalInput) {
+      this.dom.newSessionModalInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          const name = this.dom.newSessionModalInput.value.trim();
+          this.createNewSession(name || null);
+        }
+      });
+    }
+    if (this.dom.sessionNameInput) {
+      this.dom.sessionNameInput.addEventListener("change", () => {
+        this.renameActiveSession(this.dom.sessionNameInput.value.trim());
+      });
+      this.dom.sessionNameInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          this.dom.sessionNameInput.blur();
+        }
+      });
+    }
+
+    // Legacy Plan Save/Open Controls
+    if (this.dom.btnSavePlan) {
+      this.dom.btnSavePlan.addEventListener("click", () => this.savePlan());
+    }
     if (this.dom.btnOpenPlan) {
       this.dom.btnOpenPlan.addEventListener("click", () => this.openLoadPlanDialog());
     }
@@ -3396,6 +3466,315 @@ class TimelineStudioApp {
     }
   }
 
+  /* -------------------------------------------------------------------------- */
+  /* Shoot Session Management                                                   */
+  /* -------------------------------------------------------------------------- */
+  async fetchActiveSession(restorePlan = true) {
+    try {
+      const res = await fetch("/api/sessions/active");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const session = await res.json();
+      this.activeSession = session;
+
+      if (this.dom.sessionNameInput) {
+        this.dom.sessionNameInput.value = session.name || "Untitled Shoot";
+      }
+      if (this.dom.planNameInput) {
+        this.dom.planNameInput.value = session.name || "Untitled Shoot";
+      }
+
+      if (restorePlan && session.plan && (session.plan.tracks || session.plan.trajectory || session.plan.schedule)) {
+        this.applyLoadedPlan(session.plan, false);
+      }
+
+      // Re-sync test shots and timelapse captures for the newly loaded active session
+      await this.fetchTestShots(true);
+      this.capturedShotsMap.clear();
+      await this.fetchTimelapseCaptures();
+      this.updateOverlays();
+      this.renderTimeline();
+      return session;
+    } catch (e) {
+      console.warn("Could not fetch active session:", e);
+      if (this.dom.sessionNameInput && (!this.dom.sessionNameInput.value || this.dom.sessionNameInput.value === "Loading Session...")) {
+        this.dom.sessionNameInput.value = "Default Session";
+      }
+      return null;
+    }
+  }
+
+  openSessionsModal() {
+    if (this.dom.sessionsModal) {
+      this.dom.sessionsModal.style.display = "flex";
+      this.fetchSessionsList();
+      if (this.dom.newSessionModalInput) {
+        this.dom.newSessionModalInput.value = "";
+        this.dom.newSessionModalInput.focus();
+      }
+    }
+  }
+
+  closeSessionsModal() {
+    if (this.dom.sessionsModal) {
+      this.dom.sessionsModal.style.display = "none";
+    }
+  }
+
+  async fetchSessionsList() {
+    if (!this.dom.sessionsList) return;
+    this.dom.sessionsList.innerHTML = `<div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 20px 0;">Loading sessions...</div>`;
+
+    try {
+      const res = await fetch("/api/sessions");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const sessions = await res.json();
+      this.sessionsList = sessions || [];
+
+      if (this.sessionsList.length === 0) {
+        this.dom.sessionsList.innerHTML = `
+          <div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 20px 0;">
+            No shoot sessions found. Create a new one above.
+          </div>
+        `;
+        return;
+      }
+
+      let html = "";
+      this.sessionsList.forEach((s) => {
+        const isActive = this.activeSession && (this.activeSession.slug === s.slug || this.activeSession.id === s.id);
+        const testCount = s.test_shots_count ?? 0;
+        const tlCount = s.timelapse_count ?? 0;
+        const safeName = this.escapeHtml(s.name || s.slug);
+        const safeSlug = this.escapeHtml(s.slug);
+        const dateStr = this.formatPlanDate(s.updated_at || s.created_at);
+
+        html += `
+          <div class="session-item-card ${isActive ? 'active' : ''}">
+            <div style="overflow: hidden; padding-right: 8px;">
+              <div style="font-weight: 600; font-size: 13px; color: var(--text-color); display: flex; align-items: center; gap: 6px;">
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">📁 ${safeName}</span>
+                ${isActive ? '<span class="session-badge-active">Active</span>' : ''}
+              </div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 3px; display: flex; align-items: center; gap: 8px;">
+                <span>📷 ${testCount} test shot${testCount === 1 ? '' : 's'}</span>
+                <span>•</span>
+                <span>🎞️ ${tlCount} capture${tlCount === 1 ? '' : 's'}</span>
+                <span>•</span>
+                <span>${dateStr}</span>
+              </div>
+            </div>
+            <div style="display: flex; gap: 6px; flex-shrink: 0; align-items: center;">
+              ${!isActive ? `<button class="btn btn-sm btn-primary" onclick="window.app.switchSession('${safeSlug}')">Switch</button>` : ''}
+              <button class="btn btn-sm" onclick="window.app.renameSession('${safeSlug}', '${safeName.replace(/'/g, "\\'")}')" title="Rename Session">✏️</button>
+              <button class="btn btn-sm btn-danger" style="padding: 4px 8px;" onclick="window.app.deleteSession('${safeSlug}', '${safeName.replace(/'/g, "\\'")}')" title="Delete Session">✕</button>
+            </div>
+          </div>
+        `;
+      });
+
+      this.dom.sessionsList.innerHTML = html;
+    } catch (e) {
+      console.warn("Could not list sessions:", e);
+      this.dom.sessionsList.innerHTML = `<div style="color: var(--status-error); font-size: 12px; padding: 12px; text-align: center;">Error loading sessions: ${e.message || e}</div>`;
+    }
+  }
+
+  async switchSession(slugOrId) {
+    this.showToast("Switching shoot session...", "info");
+    try {
+      const res = await fetch(`/api/sessions/${slugOrId}/activate`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      this.activeSession = data;
+      if (this.dom.sessionNameInput) this.dom.sessionNameInput.value = data.name;
+      if (this.dom.planNameInput) this.dom.planNameInput.value = data.name;
+
+      this.closeSessionsModal();
+      this.showToast(`Switched to session "${data.name}"`, "success");
+
+      // Apply plan if present
+      if (data.plan && (data.plan.tracks || data.plan.trajectory || data.plan.schedule)) {
+        this.applyLoadedPlan(data.plan, false);
+      }
+
+      // Reset and reload isolated test shots & timelapse captures
+      this.selectedTestShot = null;
+      this.testShots = [];
+      this.renderTestShotsFilmstrip();
+      await this.fetchTestShots(true);
+
+      this.capturedShotsMap.clear();
+      await this.fetchTimelapseCaptures();
+
+      this.setPlayhead(1);
+      this.updateOverlays();
+      this.renderTimeline();
+    } catch (e) {
+      this.showToast(`Switch session failed: ${e.message || e}`, "error");
+    }
+  }
+
+  async createNewSession(name = null) {
+    const sessionName = (name || "").trim();
+    this.showToast("Creating new shoot session...", "info");
+    try {
+      const payload = {
+        name: sessionName || undefined,
+        plan: this.serializeCurrentPlan()
+      };
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      this.activeSession = data;
+      if (this.dom.sessionNameInput) this.dom.sessionNameInput.value = data.name;
+      if (this.dom.planNameInput) this.dom.planNameInput.value = data.name;
+      if (this.dom.newSessionModalInput) this.dom.newSessionModalInput.value = "";
+
+      this.closeSessionsModal();
+      this.showToast(`Created new session "${data.name}"`, "success");
+
+      // Fresh session has no prior test shots or captures
+      this.selectedTestShot = null;
+      this.testShots = [];
+      this.renderTestShotsFilmstrip();
+      await this.fetchTestShots(true);
+
+      this.capturedShotsMap.clear();
+      await this.fetchTimelapseCaptures();
+
+      this.setPlayhead(1);
+      this.updateOverlays();
+      this.renderTimeline();
+    } catch (e) {
+      this.showToast(`Create session failed: ${e.message || e}`, "error");
+    }
+  }
+
+  promptCreateNewSession() {
+    const now = new Date();
+    const defaultName = `Shoot_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+    const entered = prompt("Enter name for the new shoot session:", defaultName);
+    if (entered !== null) {
+      this.createNewSession(entered.trim() || defaultName);
+    }
+  }
+
+  async renameActiveSession(newName) {
+    const name = (newName || "").trim();
+    if (!name || !this.activeSession) return;
+    if (name === this.activeSession.name) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${this.activeSession.slug}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      this.activeSession = data;
+      if (this.dom.sessionNameInput) this.dom.sessionNameInput.value = data.name;
+      if (this.dom.planNameInput) this.dom.planNameInput.value = data.name;
+      this.showToast(`Session renamed to "${data.name}"`, "success");
+    } catch (e) {
+      this.showToast(`Rename failed: ${e.message || e}`, "error");
+      if (this.dom.sessionNameInput && this.activeSession) {
+        this.dom.sessionNameInput.value = this.activeSession.name;
+      }
+    }
+  }
+
+  async renameSession(slugOrId, currentName) {
+    const newName = prompt("Rename shoot session:", currentName);
+    if (!newName || newName.trim() === currentName) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${slugOrId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim() })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (this.activeSession && (this.activeSession.slug === slugOrId || this.activeSession.id === slugOrId)) {
+        this.activeSession = data;
+        if (this.dom.sessionNameInput) this.dom.sessionNameInput.value = data.name;
+        if (this.dom.planNameInput) this.dom.planNameInput.value = data.name;
+      }
+      this.showToast(`Renamed session to "${data.name}"`, "success");
+      await this.fetchSessionsList();
+    } catch (e) {
+      this.showToast(`Rename failed: ${e.message || e}`, "error");
+    }
+  }
+
+  async deleteSession(slugOrId, sessionName) {
+    if (!confirm(`Are you sure you want to delete session "${sessionName}"?\nThis will permanently delete all its test shots, timelapse captures, and motion plan!`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/sessions/${slugOrId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      this.showToast(`Session "${sessionName}" deleted`, "info");
+      // If we deleted the active session, reload the newly assigned active session
+      if (this.activeSession && (this.activeSession.slug === slugOrId || this.activeSession.id === slugOrId)) {
+        await this.fetchActiveSession(true);
+      }
+      await this.fetchSessionsList();
+    } catch (e) {
+      this.showToast(`Delete failed: ${e.message || e}`, "error");
+    }
+  }
+
+  async saveActiveSessionPlan() {
+    const planName = (this.dom.sessionNameInput?.value || this.dom.planNameInput?.value || this.plan.name || "Shoot Session").trim();
+    this.plan.name = planName;
+    if (this.dom.sessionNameInput) this.dom.sessionNameInput.value = planName;
+    if (this.dom.planNameInput) this.dom.planNameInput.value = planName;
+
+    // Cache locally immediately
+    localStorage.setItem("pantiltlapse_saved_plan", JSON.stringify(this.plan));
+
+    try {
+      const planPayload = this.serializeCurrentPlan();
+      const res = await fetch("/api/sessions/active/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(planPayload)
+      });
+      if (res.ok) {
+        const updatedSession = await res.json();
+        this.activeSession = updatedSession;
+        this.showToast(`Session "${planName}" saved to rig`, "success");
+      } else {
+        const err = await res.json().catch(() => ({}));
+        this.showToast(`Session saved locally, server: ${err.detail || res.statusText}`, "warning");
+      }
+    } catch (e) {
+      this.showToast(`Session "${planName}" saved locally (offline)`, "info");
+    }
+  }
+
   async loadInitialPlan() {
     // 1. Immediately check local storage cache to restore instantly without UI flickers
     const localSaved = localStorage.getItem("pantiltlapse_saved_plan");
@@ -3410,20 +3789,12 @@ class TimelineStudioApp {
       }
     }
 
-    // 2. Query rig backend active plan from /api/app/state
+    // 2. Fetch and synchronize active shoot session from rig
     try {
-      const stateRes = await fetch("/api/app/state");
-      if (stateRes.ok) {
-        const stateData = await stateRes.json();
-        if (stateData.active_plan_id && stateData.active_plan_id !== this.currentPlanId) {
-          const planRes = await fetch(`/api/plans/${stateData.active_plan_id}`);
-          if (planRes.ok) {
-            const planData = await planRes.json();
-            this.applyLoadedPlan(planData, false);
-          }
-        }
-      }
-    } catch (_) {}
+      await this.fetchActiveSession(true);
+    } catch (e) {
+      console.warn("Could not sync active session on boot:", e);
+    }
   }
 
   showToast(message, type = "info") {
@@ -3509,3 +3880,22 @@ window.closeOpenPlanModal = function() {
     if (m) m.style.display = "none";
   }
 };
+
+window.openSessionsModal = function() {
+  if (window.app) {
+    window.app.openSessionsModal();
+  } else {
+    const m = document.getElementById("sessionsModal");
+    if (m) m.style.display = "flex";
+  }
+};
+
+window.closeSessionsModal = function() {
+  if (window.app) {
+    window.app.closeSessionsModal();
+  } else {
+    const m = document.getElementById("sessionsModal");
+    if (m) m.style.display = "none";
+  }
+};
+

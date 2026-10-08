@@ -28,6 +28,7 @@ from fake_serial_manager import FakeSerialManager
 from media_helper import generate_resized_preview_sync
 from preview_controller import PreviewController
 from serial_manager import SerialManager
+from session_manager import SessionManager, SessionMetadata
 from storage import PlanStore
 from timelapse_engine import TimelapseConfig, TimelapseEngine
 
@@ -52,7 +53,8 @@ else:
         baudrate=int(os.getenv("SERIAL_BAUD", "9600")),
     )
 
-capture_dir = os.path.join(os.path.dirname(__file__), "..", "output", "captures")
+session_mgr = SessionManager()
+capture_dir = str(session_mgr.get_active_test_shots_dir())
 if use_fake_camera:
     logger.info("Initializing application with FakeCameraManager (SIMULATION=true)")
     camera_mgr = FakeCameraManager(capture_dir=capture_dir)
@@ -71,6 +73,7 @@ timelapse_engine = TimelapseEngine(
     rig_mgr=rig_mgr,
     coordinator=coordinator,
 )
+timelapse_engine.capture_dir = str(session_mgr.get_active_timelapse_dir())
 dry_run_engine = DryRunEngine(
     serial_mgr=serial_mgr,
     rig_mgr=rig_mgr,
@@ -998,6 +1001,112 @@ async def set_camera_raw_widget(req: RawWidgetSetRequest):
     return res
 
 
+# --- Shoot Session Manager Endpoints ---
+class CreateSessionRequest(BaseModel):
+    name: str | None = None
+    plan: dict[str, Any] | None = None
+
+
+class RenameSessionRequest(BaseModel):
+    name: str
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """List all shoot sessions with shot counts and thumbnails."""
+    return session_mgr.list_sessions()
+
+
+@app.get("/api/sessions/active")
+async def get_active_session():
+    """Get metadata and plan of the active shoot session."""
+    session = session_mgr.get_active_session()
+    return session.model_dump(mode="json")
+
+
+@app.post("/api/sessions", status_code=status.HTTP_201_CREATED)
+async def create_new_session(req: CreateSessionRequest | None = None):
+    """Create a new self-contained shoot session and switch to it."""
+    session = session_mgr.create_session(
+        name=req.name if req else None,
+        plan=req.plan if req else None,
+        activate=True,
+    )
+    camera_mgr.capture_dir = str(session_mgr.get_active_test_shots_dir())
+    timelapse_engine.capture_dir = str(session_mgr.get_active_timelapse_dir())
+    return session.model_dump(mode="json")
+
+
+@app.post("/api/sessions/{session_id_or_slug}/activate")
+async def activate_session(session_id_or_slug: str):
+    """Switch the active session by ID or slug."""
+    try:
+        session = session_mgr.switch_session(session_id_or_slug)
+        camera_mgr.capture_dir = str(session_mgr.get_active_test_shots_dir())
+        timelapse_engine.capture_dir = str(session_mgr.get_active_timelapse_dir())
+        return session.model_dump(mode="json")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@app.patch("/api/sessions/{session_id_or_slug}")
+async def rename_session(session_id_or_slug: str, req: RenameSessionRequest):
+    """Rename a shoot session."""
+    try:
+        session = session_mgr.rename_session(session_id_or_slug, req.name)
+        return session.model_dump(mode="json")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@app.delete("/api/sessions/{session_id_or_slug}")
+async def delete_session(session_id_or_slug: str):
+    """Delete a shoot session and its captured media."""
+    deleted = session_mgr.delete_session(session_id_or_slug)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    camera_mgr.capture_dir = str(session_mgr.get_active_test_shots_dir())
+    timelapse_engine.capture_dir = str(session_mgr.get_active_timelapse_dir())
+    return {"status": "OK", "message": "Session deleted"}
+
+
+@app.post("/api/sessions/active/plan")
+async def save_active_session_plan(plan_data: dict[str, Any]):
+    """Save/update the active session's motion plan."""
+    session = session_mgr.save_active_plan(plan_data)
+    return session.model_dump(mode="json")
+
+
+@app.get("/api/sessions/{session_slug}/test-shots/{filename}")
+async def serve_session_test_shot(
+    session_slug: str,
+    filename: str,
+    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
+):
+    """Serve specific test shot from a session's test_shots folder."""
+    session_dir = session_mgr.base_dir / session_slug / "test_shots"
+    safe_name = os.path.basename(filename)
+    target = (session_dir / safe_name).resolve()
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Test shot '{filename}' not found")
+    return await _serve_tiered_image(target, quality)
+
+
+@app.get("/api/sessions/{session_slug}/timelapse/{filename}")
+async def serve_session_timelapse_shot(
+    session_slug: str,
+    filename: str,
+    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
+):
+    """Serve specific time-lapse frame from a session's timelapse folder."""
+    session_dir = session_mgr.base_dir / session_slug / "timelapse"
+    safe_name = os.path.basename(filename)
+    target = (session_dir / safe_name).resolve()
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Capture '{filename}' not found")
+    return await _serve_tiered_image(target, quality)
+
+
 # --- Sequence Plan CRUD & Trajectory API Endpoints ---
 @app.post("/api/plans", status_code=status.HTTP_201_CREATED)
 async def create_plan(plan: SequencePlan):
@@ -1353,6 +1462,8 @@ async def get_timelapse_status():
 @app.post("/api/timelapse/start")
 async def start_timelapse(config: TimelapseConfig):
     _require_serial_connected()
+    if not config.target_dir:
+        config.target_dir = str(session_mgr.get_active_timelapse_dir())
     return await timelapse_engine.start(config)
 
 

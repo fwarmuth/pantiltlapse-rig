@@ -21,11 +21,14 @@
         </div>
       </div>
 
-      <!-- Plan Name & Save -->
-      <div style="display: flex; align-items: center; gap: 6px; margin-left: 12px;">
-        <input type="text" id="planNameInput" value="Sunset Sequence" style="width: 140px; height: 26px;" title="Sequence Plan Name">
-        <button class="btn btn-sm" id="btnSavePlan" title="Save plan to local rig storage">💾 Save</button>
-        <button class="btn btn-sm" id="btnOpenPlan" title="Open / Load an existing plan">📂 Open</button>
+      <!-- Shoot Session Cluster -->
+      <div class="session-bar-cluster" style="display: flex; align-items: center; gap: 6px; margin-left: 12px;">
+        <span style="font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;">Shoot:</span>
+        <input type="text" id="sessionNameInput" value="Loading Session..." style="width: 145px; height: 26px;" title="Current Shoot Session Name (Click or Enter to Rename)">
+        <input type="hidden" id="planNameInput">
+        <button class="btn btn-sm" id="btnSaveSession" title="Save current session plan & settings">💾 Save</button>
+        <button class="btn btn-sm" id="btnOpenSessionsModal" title="Browse, switch, or manage shoot sessions">📁 Sessions ▾</button>
+        <button class="btn btn-sm btn-primary" id="btnNewSession" title="Start a fresh new shoot session">+ New</button>
       </div>
     </div>
 
@@ -513,6 +516,30 @@
     </div>
   </div>
 
+  <!-- Shoot Sessions Manager Modal -->
+  <div id="sessionsModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-content" style="max-width: 520px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="margin: 0; font-size: 15px;">📁 Shoot Sessions Manager</h3>
+        <button class="btn btn-xs" id="btnCloseSessionsModal" title="Close dialog">✕</button>
+      </div>
+      <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">
+        Each shoot session isolates its own test shots, motion trajectory, and sequence captures in a self-contained folder:
+      </p>
+      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+        <input type="text" id="newSessionModalInput" placeholder="New shoot name (e.g. Milkyway at Summit)" style="flex: 1; height: 28px;">
+        <button class="btn btn-sm btn-primary" id="btnCreateSessionFromModal">+ Create Session</button>
+      </div>
+      <div id="sessionsList" style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;">
+        <div style="color: var(--text-dim); font-size: 12px; text-align: center; padding: 20px 0;">Loading sessions...</div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn btn-xs" id="btnRefreshSessionsList" title="Refresh shoot sessions list">🔄 Refresh</button>
+        <button class="btn btn-sm" id="btnCloseSessionsModalBottom">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Open / Load Plan Modal -->
   <div id="openPlanModal" class="modal-backdrop" style="display: none;">
     <div class="modal-content" style="max-width: 480px;">
@@ -536,6 +563,6 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="app.js?v=20261008_02"></script>
+  <script src="app.js?v=20261008_03"></script>
 </body>
 </html>
