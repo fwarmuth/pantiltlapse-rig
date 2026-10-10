@@ -2386,9 +2386,11 @@ class TimelineStudioApp {
     const total = this.plan.totalShots;
     const interval = this.plan.interval_s;
     const totalSecs = total * interval;
-    const mins = Math.floor(totalSecs / 60);
+    const hours = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
     const secs = Math.floor(totalSecs % 60);
-    const runTimeStr = `${mins}m ${secs.toString().padStart(2, "0")}s`;
+    const runTimeStr = [hours, mins, secs]
+      .map(value => String(value).padStart(2, "0")).join(":");
     this.dom.calcRunTime.textContent = runTimeStr;
     this.dom.timingOverlay.textContent = `ETA: ${runTimeStr}`;
 
