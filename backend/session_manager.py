@@ -39,7 +39,12 @@ class SessionManager:
       - timelapse/: Final sequence frames (0001.jpg...)
     """
 
-    def __init__(self, base_dir: Path | str | None = None):
+    def __init__(
+        self,
+        base_dir: Path | str | None = None,
+        time_provider: Any = None,
+    ):
+        self.time_provider = time_provider
         if base_dir is None:
             backend_dir = Path(__file__).resolve().parent
             base_dir = backend_dir.parent / "output" / "sessions"
@@ -51,32 +56,15 @@ class SessionManager:
 
         self._load_or_create_initial_session()
 
+    def _get_now(self) -> datetime:
+        if callable(self.time_provider):
+            return self.time_provider()
+        return datetime.now()
+
     def _load_or_create_initial_session(self) -> None:
-        """Load the active session from disk pointer or create a default session."""
-        if self.active_pointer_file.exists():
-            try:
-                active_slug = self.active_pointer_file.read_text(encoding="utf-8").strip()
-                if active_slug:
-                    session = self._load_session_by_slug(active_slug)
-                    if session:
-                        self._active_session = session
-                        return
-            except Exception as e:
-                logger.warning(f"Could not load active session pointer: {e}")
-
-        # If any sessions exist, pick the most recently updated one
-        all_sessions = self.list_sessions()
-        if all_sessions:
-            first_slug = all_sessions[0]["slug"]
-            session = self._load_session_by_slug(first_slug)
-            if session:
-                self._active_session = session
-                self._set_active_session_slug(first_slug)
-                return
-
-        # Otherwise create a fresh default session for today
-        default_name = f"Session_{datetime.now().strftime('%Y-%m-%d')}"
-        self._active_session = self.create_session(name=default_name)
+        """Create a fresh timestamped session on startup to guarantee zero session reuse across shoots."""
+        default_name = f"Session_{self._get_now().strftime('%Y-%m-%d_%H%M%S')}"
+        self._active_session = self.create_session(name=default_name, activate=True)
 
     def _set_active_session_slug(self, slug: str) -> None:
         """Write the active session slug pointer atomically."""
@@ -149,6 +137,80 @@ class SessionManager:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def list_takes(self, slug: str | None = None) -> list[str]:
+        """List all take subdirectory names (e.g. ['take_01', 'take_02']) sorted ascending."""
+        session_slug = slug or self.get_active_session().slug
+        tl_dir = self.base_dir / session_slug / "timelapse"
+        if not tl_dir.exists():
+            return []
+        takes = []
+        for entry in tl_dir.iterdir():
+            if entry.is_dir() and not entry.name.startswith("."):
+                takes.append(entry.name)
+        takes.sort()
+        return takes
+
+    def get_latest_timelapse_take_dir(self, slug: str | None = None) -> Path:
+        """
+        Return the directory of the most recent take, or take_01 if none exists.
+        If legacy flat timelapse files exist directly in timelapse/, returns timelapse/ itself.
+        """
+        session_slug = slug or self.get_active_session().slug
+        tl_dir = self.base_dir / session_slug / "timelapse"
+        tl_dir.mkdir(parents=True, exist_ok=True)
+
+        takes = self.list_takes(session_slug)
+        if takes:
+            latest = tl_dir / takes[-1]
+            latest.mkdir(parents=True, exist_ok=True)
+            return latest
+
+        # Check if legacy flat images exist
+        flat_images = [f for f in tl_dir.iterdir() if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in (".jpg", ".jpeg", ".cr2")]
+        if flat_images:
+            return tl_dir
+
+        # Otherwise allocate take_01
+        take1 = tl_dir / "take_01"
+        take1.mkdir(parents=True, exist_ok=True)
+        return take1
+
+    def get_next_timelapse_take_dir(self, slug: str | None = None) -> Path:
+        """
+        Allocate and return a fresh, empty take directory (e.g. take_01, take_02) for a new sequence.
+        Reuses an existing take ONLY if it contains 0 images. Never overwrites existing captures.
+        """
+        session_slug = slug or self.get_active_session().slug
+        tl_dir = self.base_dir / session_slug / "timelapse"
+        tl_dir.mkdir(parents=True, exist_ok=True)
+
+        takes = self.list_takes(session_slug)
+        flat_images = [f for f in tl_dir.iterdir() if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in (".jpg", ".jpeg", ".cr2")]
+
+        max_idx = 0
+        for t in takes:
+            m = re.match(r"^take_(\d+)$", t, re.IGNORECASE)
+            if m:
+                max_idx = max(max_idx, int(m.group(1)))
+            else:
+                max_idx = max(max_idx, len(takes))
+
+        if flat_images and max_idx == 0:
+            max_idx = 1
+
+        if takes and max_idx > 0:
+            current_take_dir = tl_dir / f"take_{max_idx:02d}"
+            if current_take_dir.exists():
+                take_files = [f for f in current_take_dir.iterdir() if f.is_file() and not f.name.startswith(".")]
+                if len(take_files) == 0:
+                    return current_take_dir
+
+        next_idx = max_idx + 1
+        new_take_dir = tl_dir / f"take_{next_idx:02d}"
+        new_take_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Allocated new timelapse take: {new_take_dir}")
+        return new_take_dir
+
     def create_session(
         self,
         name: str | None = None,
@@ -158,7 +220,7 @@ class SessionManager:
         """Create a new self-contained session directory and optionally activate it."""
         session_name = (name or "").strip()
         if not session_name:
-            session_name = f"Session_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}"
+            session_name = f"Session_{self._get_now().strftime('%Y-%m-%d_%H%M%S')}"
 
         slug = self._get_unique_slug(session_name)
         session_dir = self.base_dir / slug
@@ -288,11 +350,20 @@ class SessionManager:
             timelapse_count = 0
             latest_tl_shot_name = None
             if timelapse_dir.exists():
-                tl_files = [f for f in timelapse_dir.iterdir() if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in (".jpg", ".jpeg")]
-                tl_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-                timelapse_count = len(tl_files)
-                if tl_files:
-                    latest_tl_shot_name = tl_files[0].name
+                all_tl_files = []
+                for entry in timelapse_dir.iterdir():
+                    if entry.is_dir() and not entry.name.startswith("."):
+                        all_tl_files.extend([
+                            f for f in entry.iterdir()
+                            if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in (".jpg", ".jpeg")
+                        ])
+                    elif entry.is_file() and not entry.name.startswith(".") and entry.suffix.lower() in (".jpg", ".jpeg"):
+                        all_tl_files.append(entry)
+
+                all_tl_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                timelapse_count = len(all_tl_files)
+                if all_tl_files:
+                    latest_tl_shot_name = all_tl_files[0].relative_to(timelapse_dir).as_posix()
 
             # Determine thumbnail url
             thumb_url = None
@@ -310,6 +381,7 @@ class SessionManager:
                 "updated_at": session.updated_at.isoformat(),
                 "test_shots_count": test_shots_count,
                 "timelapse_shots_count": timelapse_count,
+                "takes_count": len(self.list_takes(session.slug)),
                 "thumbnail_url": thumb_url,
                 "plan_name": session.plan.get("name") if isinstance(session.plan, dict) else None,
             })

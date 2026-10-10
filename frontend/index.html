@@ -253,6 +253,10 @@
           <span>Run Time: <strong id="calcRunTime" style="color: var(--text-muted);">20m 00s</strong></span>
           <span>Video @ 24fps: <strong id="calcClipLength" style="color: var(--text-muted);">10.0s</strong></span>
         </div>
+        <div style="margin-top: 4px; font-size: 11px; color: var(--text-dim); display: flex; justify-content: space-between;">
+          <span>Est. End: <strong id="calcEndTime" style="color: #38bdf8;">--:--:--</strong></span>
+          <span>Clock: <strong id="clockSyncStatus" style="color: var(--text-muted);">Sync on Zero</strong></span>
+        </div>
       </div>
 
       <!-- Section 2: Selected Key Trigger Inspector -->
@@ -265,6 +269,7 @@
           <div class="key-trigger-title">
             <span class="diamond">◆</span>
             <span id="keyCardTitle">Key Trigger #1 (Shot 1)</span>
+            <span id="keyCardStatusBadge" class="key-status-badge" style="display: none; margin-left: 6px;">🔒 Executed (Locked)</span>
           </div>
           <button class="btn btn-sm" id="btnToggleKeyTrigger">Remove Key</button>
         </div>
@@ -339,6 +344,17 @@
             <option value="linear">Linear</option>
             <option value="bezier">Custom Bezier (Manual Tangents)</option>
           </select>
+          <div id="easeStrengthRow" style="margin-top: 8px; display: flex; flex-direction: column; gap: 4px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 11px; color: var(--text-dim);">Ease Strength: <strong id="easeStrengthVal" style="color: #f59e0b;">40%</strong></span>
+              <div style="display: flex; gap: 4px;">
+                <button class="btn btn-xs" type="button" onclick="app.setEaseStrength(0)">0%</button>
+                <button class="btn btn-xs" type="button" onclick="app.setEaseStrength(40)">40%</button>
+                <button class="btn btn-xs" type="button" onclick="app.setEaseStrength(100)">100%</button>
+              </div>
+            </div>
+            <input type="range" id="easeStrengthInput" min="0" max="100" value="40" style="width: 100%; accent-color: #f59e0b;">
+          </div>
         </div>
 
         <!-- Physical Jogging Station (Drives Motors) -->
@@ -418,6 +434,7 @@
           <span>Trigger</span>
           <input type="number" id="playheadInput" min="1" max="240" value="1">
           <span style="color: var(--text-dim);">/ <span id="totalShotsLabel">240</span></span>
+          <span id="playheadTimeBadge" class="playhead-time-badge" title="Estimated Real Wall-Clock Time">--:--:--</span>
         </div>
 
         <!-- Follow Live Toggle (Active during time-lapse runs) -->
@@ -492,11 +509,11 @@
     <div class="modal-content">
       <h3 style="margin-bottom: 8px;">Confirm Physical Zero Origin</h3>
       <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 14px;">
-        This sets the current motor orientation as origin (0.00°, 0.00°) and validates software limits.
+        This sets current motor orientation as origin (0.00°, 0.00°), validates software limits, and synchronizes the rig clock with your device time.
       </p>
       <div style="display: flex; gap: 8px; justify-content: flex-end;">
         <button class="btn btn-sm" onclick="closeRecalibrateModal()">Cancel</button>
-        <button class="btn btn-primary btn-sm" onclick="executeRecalibrateZero()">🎯 Confirm & Set (0°, 0°)</button>
+        <button class="btn btn-primary btn-sm" onclick="executeRecalibrateZero()">🎯 Confirm & Sync (0°, 0°)</button>
       </div>
     </div>
   </div>

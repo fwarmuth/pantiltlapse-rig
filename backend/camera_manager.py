@@ -15,6 +15,16 @@ except ImportError:
 logger = logging.getLogger("CameraCommander.Camera")
 
 
+def get_noncolliding_stem(dest_dir: str, base_stem: str, extensions: list[str]) -> str:
+    """Find a stem such that dest_dir / f'{candidate_stem}{ext}' does not exist for any extension in extensions."""
+    candidate_stem = base_stem
+    counter = 1
+    while any(os.path.exists(os.path.join(dest_dir, f"{candidate_stem}{ext}")) for ext in extensions):
+        candidate_stem = f"{base_stem}_{counter:02d}"
+        counter += 1
+    return candidate_stem
+
+
 class CameraManager:
     """
     Manages Canon DSLR camera control via native python-gphoto2 C-bindings.
@@ -830,10 +840,13 @@ class CameraManager:
                         captured_events.append(single_path)
 
                     if filename:
-                        stem = os.path.splitext(filename)[0]
+                        base_stem = os.path.splitext(filename)[0]
                     else:
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        stem = f"capture_{timestamp}"
+                        base_stem = f"capture_{timestamp}"
+
+                    event_exts = [os.path.splitext(fp.name)[1].lower() or ".jpg" for fp in captured_events] or [".jpg"]
+                    stem = get_noncolliding_stem(dest_dir, base_stem, event_exts)
 
                     saved_files = []
                     raw_exts = (".cr2", ".cr3", ".nef", ".arw", ".dng")

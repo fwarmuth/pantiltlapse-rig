@@ -36,6 +36,7 @@ _preview_downscale_lock = _preview_semaphore
 from serial_manager import SerialManager
 from session_manager import SessionManager, SessionMetadata
 from storage import PlanStore
+from time_manager import SystemTimeManager
 from timelapse_engine import TimelapseConfig, TimelapseEngine
 
 # Load deployment environment variables from backend/.env file if present
@@ -50,6 +51,8 @@ is_simulation = os.getenv("SIMULATION", "false").lower() == "true"
 use_fake_serial = os.getenv("FAKE_SERIAL", "false").lower() == "true" or is_simulation
 use_fake_camera = os.getenv("FAKE_CAMERA", "false").lower() == "true" or is_simulation
 
+time_mgr = SystemTimeManager()
+
 if use_fake_serial:
     logger.info("Initializing application with FakeSerialManager (SIMULATION=true)")
     serial_mgr = FakeSerialManager()
@@ -59,7 +62,7 @@ else:
         baudrate=int(os.getenv("SERIAL_BAUD", "9600")),
     )
 
-session_mgr = SessionManager()
+session_mgr = SessionManager(time_provider=time_mgr.get_current_datetime)
 capture_dir = str(session_mgr.get_active_test_shots_dir())
 if use_fake_camera:
     logger.info("Initializing application with FakeCameraManager (SIMULATION=true)")
@@ -79,7 +82,7 @@ timelapse_engine = TimelapseEngine(
     rig_mgr=rig_mgr,
     coordinator=coordinator,
 )
-timelapse_engine.capture_dir = str(session_mgr.get_active_timelapse_dir())
+timelapse_engine.capture_dir = str(session_mgr.get_latest_timelapse_take_dir())
 dry_run_engine = DryRunEngine(
     serial_mgr=serial_mgr,
     rig_mgr=rig_mgr,
@@ -146,6 +149,18 @@ class DriverRequest(BaseModel):
 class RigLimitsRequest(BaseModel):
     tilt_min_deg: float = Field(default=-80.0, description="Minimum allowable tilt angle in degrees")
     tilt_max_deg: float = Field(default=80.0, description="Maximum allowable tilt angle in degrees")
+
+
+class ConfirmZeroRequest(BaseModel):
+    client_time: float | int | None = Field(default=None, description="Client epoch timestamp in seconds or ms")
+    client_iso: str | None = Field(default=None, description="Client ISO datetime string")
+    timezone: str | None = Field(default=None, description="Client timezone string, e.g. 'Europe/Berlin'")
+
+
+class TimeSyncRequest(BaseModel):
+    client_time: float | int = Field(..., description="Client epoch timestamp in seconds or ms")
+    client_iso: str | None = Field(default=None, description="Client ISO datetime string")
+    timezone: str | None = Field(default=None, description="Client timezone string")
 
 
 class CameraConfigRequest(BaseModel):
@@ -240,8 +255,10 @@ async def update_rig_limits(req: RigLimitsRequest):
 
 
 @app.post("/api/rig/confirm-zero")
-async def confirm_physical_zero():
-    """Operator resets current position as origin (0, 0) and confirms zero reference."""
+async def confirm_physical_zero(req: ConfirmZeroRequest | None = None):
+    """Operator resets current position as origin (0, 0) and confirms zero reference.
+    Optionally synchronizes rig internal clock with client timestamp.
+    """
     _require_serial_connected()
     _require_hardware_idle("confirm zero")
     await _acquire_maintenance("confirm zero")
@@ -275,9 +292,33 @@ async def confirm_physical_zero():
         serial_mgr.current_tilt = 0.0
         serial_mgr.drivers_enabled = True
         ref = rig_mgr.confirm_reference()
-        return {"status": "OK", "reference": ref, "motors": serial_mgr.get_status()}
+
+        time_sync_info = None
+        if req and req.client_time is not None:
+            time_sync_info = time_mgr.sync(req.client_time, timezone_name=req.timezone)
+
+        return {
+            "status": "OK",
+            "reference": ref,
+            "motors": serial_mgr.get_status(),
+            "time_sync": time_sync_info or time_mgr.get_status(),
+        }
     finally:
         await coordinator.end_maintenance()
+
+
+# --- System Clock Synchronization Endpoints ---
+@app.get("/api/system/time")
+async def get_system_time():
+    """Return current rig wall-clock time status and sync offset."""
+    return time_mgr.get_status()
+
+
+@app.post("/api/system/time-sync")
+async def sync_system_time(req: TimeSyncRequest):
+    """Explicitly synchronize rig wall-clock time from client timestamp."""
+    status_info = time_mgr.sync(req.client_time, timezone_name=req.timezone)
+    return {"status": "OK", "time_sync": status_info}
 
 
 # --- Motor API Endpoints ---
@@ -1039,7 +1080,7 @@ async def create_new_session(req: CreateSessionRequest | None = None):
         activate=True,
     )
     camera_mgr.capture_dir = str(session_mgr.get_active_test_shots_dir())
-    timelapse_engine.capture_dir = str(session_mgr.get_active_timelapse_dir())
+    timelapse_engine.capture_dir = str(session_mgr.get_latest_timelapse_take_dir())
     return session.model_dump(mode="json")
 
 
@@ -1049,7 +1090,7 @@ async def activate_session(session_id_or_slug: str):
     try:
         session = session_mgr.switch_session(session_id_or_slug)
         camera_mgr.capture_dir = str(session_mgr.get_active_test_shots_dir())
-        timelapse_engine.capture_dir = str(session_mgr.get_active_timelapse_dir())
+        timelapse_engine.capture_dir = str(session_mgr.get_latest_timelapse_take_dir())
         return session.model_dump(mode="json")
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -1072,7 +1113,7 @@ async def delete_session(session_id_or_slug: str):
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     camera_mgr.capture_dir = str(session_mgr.get_active_test_shots_dir())
-    timelapse_engine.capture_dir = str(session_mgr.get_active_timelapse_dir())
+    timelapse_engine.capture_dir = str(session_mgr.get_latest_timelapse_take_dir())
     return {"status": "OK", "message": "Session deleted"}
 
 
@@ -1098,17 +1139,16 @@ async def serve_session_test_shot(
     return await _serve_tiered_image(target, quality)
 
 
-@app.get("/api/sessions/{session_slug}/timelapse/{filename}")
+@app.get("/api/sessions/{session_slug}/timelapse/{filename:path}")
 async def serve_session_timelapse_shot(
     session_slug: str,
     filename: str,
     quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
 ):
-    """Serve specific time-lapse frame from a session's timelapse folder."""
-    session_dir = session_mgr.base_dir / session_slug / "timelapse"
-    safe_name = os.path.basename(filename)
-    target = (session_dir / safe_name).resolve()
-    if not target.exists() or not target.is_file():
+    """Serve specific time-lapse frame from a session's timelapse folder or take subfolder."""
+    session_dir = (session_mgr.base_dir / session_slug / "timelapse").resolve()
+    target = (session_dir / filename).resolve()
+    if not target.is_relative_to(session_dir) or not target.exists() or not target.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Capture '{filename}' not found")
     return await _serve_tiered_image(target, quality)
 
@@ -1469,7 +1509,7 @@ async def get_timelapse_status():
 async def start_timelapse(config: TimelapseConfig):
     _require_serial_connected()
     if not config.target_dir:
-        config.target_dir = str(session_mgr.get_active_timelapse_dir())
+        config.target_dir = str(session_mgr.get_next_timelapse_take_dir())
     return await timelapse_engine.start(config)
 
 
@@ -1508,29 +1548,26 @@ async def adjust_timelapse(req: TimelapseAdjustRequest):
     return res
 
 
+@app.get("/api/timelapse/takes")
+async def get_timelapse_takes():
+    """List all available takes in the active shoot session."""
+    active_take_name = Path(timelapse_engine.capture_dir).name if timelapse_engine.capture_dir else None
+    return {
+        "takes": session_mgr.list_takes(),
+        "active_take": active_take_name,
+    }
+
+
 @app.get("/api/timelapse/captures")
-async def get_timelapse_captures():
-    """Return ordered list of captured photos for the active or latest time-lapse run."""
-    return timelapse_engine.get_captures()
-
-
-@app.get("/api/timelapse/captures/{filename}")
-async def get_timelapse_capture_file(
-    filename: str,
-    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
-    tier: str | None = Query(None, description="Alias for quality tier: 'low', 'balanced', or 'full'"),
-):
-    """Serve a captured time-lapse image file with preview tiering support."""
-    if not timelapse_engine.capture_dir:
-        raise HTTPException(status_code=404, detail="No active or recent time-lapse capture directory")
-    capture_dir_path = Path(timelapse_engine.capture_dir).resolve()
-    safe_name = os.path.basename(filename)
-    file_path = (capture_dir_path / safe_name).resolve()
-    if not str(file_path).startswith(str(capture_dir_path)):
-        raise HTTPException(status_code=403, detail="Forbidden file path")
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail=f"Capture file '{filename}' not found")
-    return await _serve_tiered_image(file_path, tier or quality or "low")
+async def get_timelapse_captures(take: str | None = Query(None, description="Specific take name (e.g. 'take_01')")):
+    """Return ordered list of captured photos for the active, requested, or latest time-lapse run."""
+    target_dir = None
+    if take:
+        clean_take = os.path.basename(take.strip())
+        take_dir = (session_mgr.get_active_timelapse_dir() / clean_take).resolve()
+        if take_dir.exists() and take_dir.is_dir():
+            target_dir = str(take_dir)
+    return timelapse_engine.get_captures(target_dir=target_dir)
 
 
 @app.get("/api/timelapse/captures/{filename}/download")
@@ -1561,6 +1598,37 @@ async def download_timelapse_capture_file(filename: str):
         filename=safe_name,
         headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
     )
+
+
+@app.get("/api/timelapse/captures/{filename:path}")
+async def get_timelapse_capture_file(
+    filename: str,
+    take: str | None = Query(None, description="Specific take name"),
+    quality: str = Query("low", description="Preview quality tier: 'low', 'balanced', or 'full'"),
+    tier: str | None = Query(None, description="Alias for quality tier: 'low', 'balanced', or 'full'"),
+):
+    """Serve a captured time-lapse image file with preview tiering support."""
+    active_dir = None
+    if take:
+        clean_take = os.path.basename(take.strip())
+        take_path = (session_mgr.get_active_timelapse_dir() / clean_take).resolve()
+        if take_path.exists():
+            active_dir = take_path
+    if not active_dir and timelapse_engine.capture_dir:
+        active_dir = Path(timelapse_engine.capture_dir).resolve()
+    if not active_dir:
+        active_dir = session_mgr.get_latest_timelapse_take_dir().resolve()
+
+    safe_name = os.path.basename(filename)
+    file_path = (active_dir / safe_name).resolve()
+    if not file_path.exists() or not file_path.is_file():
+        # Fallback to direct resolution inside active session timelapse folder
+        alt_path = (session_mgr.get_active_timelapse_dir() / filename).resolve()
+        if alt_path.is_relative_to(session_mgr.get_active_timelapse_dir()) and alt_path.exists() and alt_path.is_file():
+            file_path = alt_path
+        else:
+            raise HTTPException(status_code=404, detail=f"Capture file '{filename}' not found")
+    return await _serve_tiered_image(file_path, tier or quality or "low")
 
 
 # --- Studio UI State & Reload Rehydration Endpoints ---
@@ -1603,6 +1671,7 @@ async def stream_events():
                 "dry_run": dry_run_engine.get_status(),
                 "coordinator": coordinator.get_status(),
                 "app_state": app_state_mgr.state.model_dump(mode="json"),
+                "system_time": time_mgr.get_status(),
             }
             yield f"data: {json.dumps(payload, default=str)}\n\n"
             await asyncio.sleep(1.0)

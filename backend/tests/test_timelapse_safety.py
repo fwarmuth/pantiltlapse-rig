@@ -194,3 +194,77 @@ def test_timelapse_adjust_active_run(tmp_path):
 
     asyncio.run(run())
 
+
+def test_timelapse_adjust_preserves_executed_history(tmp_path):
+    async def run():
+        rig_mgr = RigManager(storage_dir=tmp_path)
+        rig_mgr.confirm_reference()
+        serial_mgr = WorkingSerialManager()
+        camera_mgr = ConfigTrackingCameraManager()
+        coordinator = OperationCoordinator()
+        engine = TimelapseEngine(serial_mgr, camera_mgr, rig_mgr, coordinator)
+
+        poses_a = [
+            {"pan": 0.0, "tilt": 0.0},
+            {"pan": 10.0, "tilt": 5.0},
+            {"pan": 20.0, "tilt": 10.0},
+            {"pan": 30.0, "tilt": 15.0},
+        ]
+        settings_a = [
+            {"iso": "100", "shutter_speed": "1/250"},
+            {"iso": "100", "shutter_speed": "1/250"},
+            {"iso": "200", "shutter_speed": "1/125"},
+            {"iso": "200", "shutter_speed": "1/125"},
+        ]
+        config = TimelapseConfig(
+            total_shots=4,
+            interval_s=1.0,
+            settle_time_s=0.0,
+            poses=poses_a,
+            camera_settings=settings_a,
+        )
+        await engine.start(config)
+
+        # Wait until at least shot 1 (current_shot >= 1) is executed
+        for _ in range(20):
+            if engine.current_shot >= 1:
+                break
+            await asyncio.sleep(0.05)
+
+        done_count = engine.current_shot
+        assert done_count >= 1
+
+        # Client attempts to send modified past poses (e.g. shot 0 pan changed to 55.0)
+        poses_malicious = [
+            {"pan": 55.0, "tilt": 40.0},
+            {"pan": 15.0, "tilt": 8.0},
+            {"pan": 25.0, "tilt": 12.0},
+            {"pan": 35.0, "tilt": 18.0},
+        ]
+        settings_malicious = [
+            {"iso": "6400", "shutter_speed": "30"},
+            {"iso": "400", "shutter_speed": "1/60"},
+            {"iso": "400", "shutter_speed": "1/60"},
+            {"iso": "400", "shutter_speed": "1/60"},
+        ]
+
+        adjust_res = await engine.adjust_active_run(poses=poses_malicious, camera_settings=settings_malicious)
+        assert adjust_res["status"] == "OK"
+
+        # Verify that already executed poses in engine.config were strictly preserved
+        for i in range(done_count):
+            assert engine.config.poses[i]["pan"] == poses_a[i]["pan"]
+            assert engine.config.poses[i]["tilt"] == poses_a[i]["tilt"]
+            assert engine.config.camera_settings[i]["iso"] == settings_a[i]["iso"]
+
+        # Verify remaining future poses took the new values
+        for i in range(done_count, 4):
+            assert engine.config.poses[i]["pan"] == poses_malicious[i]["pan"]
+            assert engine.config.camera_settings[i]["iso"] == settings_malicious[i]["iso"]
+
+        await engine._task
+        assert engine.state == "COMPLETED"
+
+    asyncio.run(run())
+
+

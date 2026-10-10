@@ -152,3 +152,34 @@ def test_disable_raw_capture(tmp_path):
         assert shot.get("raw_filename") is None
         assert shot.get("raw_download_url") is None
 
+
+def test_capture_never_overwrites_existing_file(tmp_path):
+    dest_dir = tmp_path / "zero_overwrite_test"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    fake_cam = FakeCameraManager(capture_dir=str(dest_dir))
+    fake_cam.is_connected = True
+    fake_cam.image_format = "RAW + L"
+
+    import asyncio
+    async def run():
+        # First capture with explicit name
+        res1 = await fake_cam.trigger_capture("snap.jpg", target_dir=str(dest_dir))
+        assert res1["camera_filename"] == "snap.jpg"
+        assert res1["raw_filename"] == "snap.cr2"
+        assert (dest_dir / "snap.jpg").exists()
+        assert (dest_dir / "snap.cr2").exists()
+
+        # Second capture with SAME explicit name - must NOT overwrite
+        res2 = await fake_cam.trigger_capture("snap.jpg", target_dir=str(dest_dir))
+        assert res2["camera_filename"] == "snap_01.jpg"
+        assert res2["raw_filename"] == "snap_01.cr2"
+        assert (dest_dir / "snap_01.jpg").exists()
+        assert (dest_dir / "snap_01.cr2").exists()
+
+        # Both captures exist intact
+        assert (dest_dir / "snap.jpg").exists()
+        assert (dest_dir / "snap_01.jpg").exists()
+
+    asyncio.run(run())
+
+

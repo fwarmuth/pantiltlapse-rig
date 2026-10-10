@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fake Timeline - Key Trigger & Curve Sandbox</title>
+  <style>
+    :root {
+      --bg: #090b10;
+      --card-bg: #111520;
+      --border: #232a3d;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --done-color: #10b981;
+      --future-color: #38bdf8;
+      --key-diamond: #facc15;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "JetBrains Mono", monospace; }
+    body { background: var(--bg); color: var(--text); padding: 20px; font-size: 13px; user-select: none; }
+
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    h1 { font-size: 18px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: rgba(56, 189, 248, 0.12); color: var(--accent); border: 1px solid rgba(56, 189, 248, 0.25); }
+
+    /* Clean Sandbox Control Bar */
+    .control-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 18px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .ctrl-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .ctrl-item label { color: var(--text-muted); font-weight: 500; }
+    .ctrl-item input[type=number] {
+      background: #080a10;
+      border: 1px solid var(--border);
+      color: #fff;
+      padding: 5px 8px;
+      border-radius: 5px;
+      width: 75px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .ctrl-item input[type=range] { accent-color: var(--done-color); width: 140px; }
+
+    .btn {
+      background: #1e2433;
+      color: #fff;
+      border: 1px solid var(--border);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #283145; border-color: #3e4a66; }
+    .btn-primary { background: #0284c7; border-color: #38bdf8; }
+    .btn-primary:hover { background: #0369a1; }
+    .btn-danger { background: #dc2626; border-color: #ef4444; }
+
+    /* Timeline Container */
+    .timeline-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      position: relative;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 380px;
+      background: #06080e;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: crosshair;
+    }
+
+    /* Bottom Info & Edit Box */
+    .bottom-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .key-editor {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: #181d2a;
+      border: 1px solid var(--border);
+      padding: 8px 14px;
+      border-radius: 6px;
+    }
+
+    .pill {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      font-family: monospace;
+    }
+    .pill-done { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .pill-future { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+
+    .instructions {
+      color: var(--text-muted);
+      font-size: 12px;
+      display: flex;
+      gap: 16px;
+    }
+    .instructions span strong { color: var(--text); }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Fake Timeline <span class="badge">Single Angle Curve Sandbox</span></h1>
+    <div style="font-size: 12px; color: var(--text-muted);">
+      Drag diamonds to move key triggers &bull; Click anywhere to add a key trigger
+    </div>
+  </header>
+
+  <!-- Sandbox Control Bar -->
+  <div class="control-bar">
+    <!-- 1. Total Frames -->
+    <div class="ctrl-item">
+      <label>Total Frames:</label>
+      <input type="number" id="totalFramesInput" min="20" max="200" value="100">
+    </div>
+
+    <div style="width: 1px; height: 24px; background: var(--border);"></div>
+
+    <!-- 2. Already Done Frames -->
+    <div class="ctrl-item" style="background: rgba(16, 185, 129, 0.08); padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.25);">
+      <label style="color: #10b981; font-weight: 600;">Already Done Frames (K):</label>
+      <input type="number" id="doneFramesInput" min="0" max="95" value="30">
+      <input type="range" id="doneFramesRange" min="0" max="95" value="30">
+    </div>
+
+    <div style="width: 1px; height: 24px; background: var(--border);"></div>
+
+    <!-- 3. Add Key Button -->
+    <button class="btn btn-primary" id="btnAddKeyBtn">◆ Add Key Trigger</button>
+    <button class="btn" id="btnResetPlan">Reset to Default</button>
+
+    <!-- 4. Easing Strength (Ease In/Out) -->
+    <div class="ctrl-item" style="background: rgba(245, 158, 11, 0.08); padding: 4px 10px; border-radius: 6px; border: 1px solid rgba(245, 158, 11, 0.25);">
+      <label style="color: #f59e0b; font-weight: 600;">Ease Strength:</label>
+      <input type="range" id="easeStrengthRange" min="0" max="100" value="100" style="width: 100px; accent-color: #f59e0b;">
+      <span id="easeStrengthLabel" style="font-family: monospace; font-weight: 700; color: #f59e0b; min-width: 40px;">100%</span>
+      <div style="display: flex; gap: 4px; margin-left: 4px;">
+        <button class="btn" style="padding: 2px 6px; font-size: 10px;" onclick="setEasePreset(0)">0% (Linear)</button>
+        <button class="btn" style="padding: 2px 6px; font-size: 10px;" onclick="setEasePreset(40)">40% (Gentle)</button>
+        <button class="btn" style="padding: 2px 6px; font-size: 10px;" onclick="setEasePreset(100)">100% (Full)</button>
+      </div>
+    </div>
+
+    <!-- 5. Smoothing Engine Switch -->
+    <div class="ctrl-item" style="margin-left: auto;">
+      <label>Transition Smoothing:</label>
+      <select id="methodSelect" style="background: #080a10; border: 1px solid var(--border); color: #fff; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+        <option value="latest_key" selected>Latest Trigger as Key (Your Idea)</option>
+        <option value="hermite">Velocity-Continuous Hermite</option>
+        <option value="buggy">Buggy Baseline (Old behavior)</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Main Fake Timeline Card -->
+  <div class="timeline-container">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+      <strong style="font-size: 12px; color: var(--accent);">1. Trajectory Position: Angle (°) vs Frame</strong>
+      <span style="font-size: 11px; color: #10b981; font-family: monospace;">🟢 Green Shaded = Already Done Frames</span>
+    </div>
+    <canvas id="canvas" width="1100" height="280"></canvas>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; margin-bottom: 6px;">
+      <strong style="font-size: 12px; color: #f59e0b;">2. Motor Velocity: Speed Delta (° / Frame)</strong>
+      <span id="velStatsBadge" style="font-size: 11px; font-family: monospace; color: var(--text-muted);">Speed at K: -- &bull; Speed at K+1: --</span>
+    </div>
+    <canvas id="velocityCanvas" width="1100" height="150"></canvas>
+
+    <div class="bottom-bar">
+      <!-- Selected Key Trigger Inspector -->
+      <div class="key-editor">
+        <strong id="selectedKeyLabel">Selected Key: #1 (Frame 1)</strong>
+        <span class="pill pill-done" id="selectedKeyPill">Already Done (Locked)</span>
+
+        <div class="ctrl-item" style="margin-left: 8px;">
+          <label>Frame:</label>
+          <input type="number" id="editKeyFrameInput" min="1" max="100" value="1">
+        </div>
+
+        <div class="ctrl-item">
+          <label>Angle (°):</label>
+          <input type="number" id="editKeyValInput" step="0.5" min="-80" max="80" value="0.0">
+        </div>
+
+        <div class="ctrl-item">
+          <label>Mode:</label>
+          <select id="editKeyModeSelect" style="background: #080a10; border: 1px solid var(--border); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px;">
+            <option value="auto">Auto (Natural Bezier)</option>
+            <option value="ease_in_out">Ease In / Out</option>
+            <option value="linear">Linear</option>
+          </select>
+        </div>
+
+        <button class="btn btn-danger" id="btnDeleteKey" style="padding: 4px 10px; font-size: 11px;">✕ Delete</button>
+      </div>
+
+      <!-- Quick Tips -->
+      <div class="instructions">
+        <span>📍 <strong>Click empty area</strong> to add key trigger</span>
+        <span>🖱️ <strong>Drag diamond</strong> to adjust frame &amp; angle</span>
+        <span>🟢 <strong>Green shaded</strong> = Already done frames (fixed)</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    const state = {
+      totalFrames: 100,
+      doneFrames: 30, // frames 1..doneFrames are completed
+      selectedKeyId: 2,
+      method: "latest_key", // latest_key, hermite, buggy
+      easeStrength: 1.0, // 0.0 (Linear) to 1.0 (Full Smoothstep)
+      isDragging: false,
+      draggedKeyId: null,
+      // Key triggers: array of { id, frame, value }
+      keyframes: [
+        { id: 1, frame: 1, value: 0.0 },
+        { id: 2, frame: 100, value: 70.0 }
+      ],
+      // Ground truth recorded poses for already done frames
+      doneHistory: []
+    };
+
+    let nextId = 10;
+
+    // Elements
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const velocityCanvas = document.getElementById("velocityCanvas");
+    const vctx = velocityCanvas.getContext("2d");
+    const velStatsBadge = document.getElementById("velStatsBadge");
+    const totalFramesInput = document.getElementById("totalFramesInput");
+    const doneFramesInput = document.getElementById("doneFramesInput");
+    const doneFramesRange = document.getElementById("doneFramesRange");
+    const easeStrengthRange = document.getElementById("easeStrengthRange");
+    const easeStrengthLabel = document.getElementById("easeStrengthLabel");
+    const methodSelect = document.getElementById("methodSelect");
+    const btnAddKeyBtn = document.getElementById("btnAddKeyBtn");
+    const btnResetPlan = document.getElementById("btnResetPlan");
+    const btnDeleteKey = document.getElementById("btnDeleteKey");
+    const selectedKeyLabel = document.getElementById("selectedKeyLabel");
+    const selectedKeyPill = document.getElementById("selectedKeyPill");
+    const editKeyFrameInput = document.getElementById("editKeyFrameInput");
+    const editKeyValInput = document.getElementById("editKeyValInput");
+    const editKeyModeSelect = document.getElementById("editKeyModeSelect");
+
+    const rulerH = 34;
+    const padX = 55;
+    const minAngle = -30;
+    const maxAngle = 90;
+
+    // Adjustable ease: blends between Linear (strength=0) and Smoothstep (strength=1)
+    function ease(u, strength = state.easeStrength) {
+      const clampedU = Math.max(0, Math.min(1, u));
+      const s = clampedU * clampedU * (3.0 - 2.0 * clampedU);
+      return (1.0 - strength) * clampedU + strength * s;
+    }
+
+    // Piecewise standard curve
+    function evalKeyframes(kfs, f) {
+      if (!kfs || kfs.length === 0) return 0.0;
+      const sorted = [...kfs].sort((a, b) => a.frame - b.frame);
+      if (sorted.length === 1) return sorted[0].value;
+      if (f <= sorted[0].frame) return sorted[0].value;
+      if (f >= sorted[sorted.length - 1].frame) return sorted[sorted.length - 1].value;
+
+      let left = sorted[0];
+      let right = sorted[sorted.length - 1];
+      for (let i = 0; i < sorted.length - 1; i++) {
+        if (sorted[i].frame <= f && sorted[i + 1].frame >= f) {
+          left = sorted[i];
+          right = sorted[i + 1];
+          break;
+        }
+      }
+      if (left.frame === right.frame) return left.value;
+      const u = (f - left.frame) / (right.frame - left.frame);
+      const mode = left.mode || "auto";
+      const t = mode === "linear" ? u : ease(u);
+      return left.value + t * (right.value - left.value);
+    }
+
+    // Generate/refresh the initial executed ground truth history (frames 1..totalFrames)
+    function refreshDoneHistory() {
+      const baseKeys = [
+        { frame: 1, value: 0.0, mode: "auto" },
+        { frame: state.totalFrames, value: 70.0, mode: "auto" }
+      ];
+      state.doneHistory = [];
+      for (let f = 1; f <= state.totalFrames; f++) {
+        state.doneHistory.push(evalKeyframes(baseKeys, f));
+      }
+    }
+    refreshDoneHistory();
+
+    // Compute the single resulting trajectory curve
+    function computeResultingCurve() {
+      const N = state.totalFrames;
+      const K = state.doneFrames;
+      const curve = [];
+
+      if (K === 0 || state.method === "buggy") {
+        // Evaluate everything directly through keyframes
+        for (let f = 1; f <= N; f++) {
+          curve.push(evalKeyframes(state.keyframes, f));
+        }
+        return curve;
+      }
+
+      // Already done frames 1..K are fixed from ground truth history!
+      for (let f = 1; f <= K; f++) {
+        curve.push(state.doneHistory[f - 1]);
+      }
+
+      const y_K = state.doneHistory[K - 1];
+      const y_prev = K > 1 ? state.doneHistory[K - 2] : y_K;
+      const v_K = y_K - y_prev; // slope at boundary
+
+      // Find future key triggers (frame > K)
+      const futureKeys = state.keyframes.filter(k => k.frame > K).sort((a, b) => a.frame - b.frame);
+
+      if (futureKeys.length === 0) {
+        // No future keys: hold position
+        for (let f = K + 1; f <= N; f++) {
+          curve.push(y_K);
+        }
+        return curve;
+      }
+
+      const nextKey = futureKeys[0];
+      const nextMode = nextKey.mode || "auto";
+
+      if (state.method === "latest_key" || nextMode === "ease_in_out" || nextMode === "linear") {
+        // Evaluate piecewise with left = (K, y_K) using the target's mode
+        const combinedKeys = [{ frame: K, value: y_K, mode: nextMode }, ...futureKeys];
+        for (let f = K + 1; f <= N; f++) {
+          curve.push(evalKeyframes(combinedKeys, f));
+        }
+      } else if (state.method === "hermite") {
+        // Natural Bezier (Auto): Velocity-Continuous Hermite matching incoming v_K
+        const L = nextKey.frame - K;
+        let d0 = v_K * L;
+        const deltaY = nextKey.value - y_K;
+        if (deltaY * d0 <= 0) d0 = 0.0;
+        else if (Math.abs(d0) > 3 * Math.abs(deltaY)) d0 = 3 * deltaY;
+        const d1 = 0.0;
+
+        const combinedKeys = [{ frame: K, value: y_K, mode: "auto" }, ...futureKeys];
+
+        for (let f = K + 1; f <= N; f++) {
+          if (f <= nextKey.frame) {
+            const u = (f - K) / L;
+            const h00 = 2 * u * u * u - 3 * u * u + 1;
+            const h10 = u * u * u - 2 * u * u + u;
+            const h01 = -2 * u * u * u + 3 * u * u;
+            const h11 = u * u * u - u * u;
+            curve.push(h00 * y_K + h10 * d0 + h01 * nextKey.value + h11 * d1);
+          } else {
+            curve.push(evalKeyframes(combinedKeys, f));
+          }
+        }
+      }
+
+      return curve;
+    }
+
+    // Coordinate conversions
+    function frameToX(f) {
+      return padX + ((f - 1) / (state.totalFrames - 1)) * (canvas.width - padX * 2);
+    }
+    function xToFrame(x) {
+      const frac = (x - padX) / (canvas.width - padX * 2);
+      return Math.max(1, Math.min(state.totalFrames, Math.round(1 + frac * (state.totalFrames - 1))));
+    }
+    function valToY(v) {
+      const graphH = canvas.height - rulerH - 24;
+      const frac = (v - minAngle) / (maxAngle - minAngle);
+      return canvas.height - 14 - frac * graphH;
+    }
+    function yToVal(y) {
+      const graphH = canvas.height - rulerH - 24;
+      const frac = (canvas.height - 14 - y) / graphH;
+      const raw = minAngle + frac * (maxAngle - minAngle);
+      return Math.max(-80, Math.min(80, Math.round(raw * 2) / 2));
+    }
+
+    function drawDiamond(x, y, size, fill, stroke) {
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.moveTo(x, y - size);
+      ctx.lineTo(x + size, y);
+      ctx.lineTo(x, y + size);
+      ctx.lineTo(x - size, y);
+      ctx.closePath();
+      ctx.fill();
+      if (stroke) {
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    }
+
+    // Render Canvas
+    function render() {
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const N = state.totalFrames;
+      const K = state.doneFrames;
+
+      // 1. Draw Ruler
+      ctx.fillStyle = "#0d1017";
+      ctx.fillRect(0, 0, w, rulerH);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+      ctx.beginPath();
+      ctx.moveTo(0, rulerH + 0.5);
+      ctx.lineTo(w, rulerH + 0.5);
+      ctx.stroke();
+
+      ctx.fillStyle = "#64748b";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "center";
+      const step = N > 90 ? 10 : 5;
+      for (let f = 1; f <= N; f++) {
+        const x = frameToX(f);
+        if (f % step === 0 || f === 1 || f === N) {
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+          ctx.beginPath();
+          ctx.moveTo(x, rulerH - 12);
+          ctx.lineTo(x, rulerH);
+          ctx.stroke();
+          ctx.fillText(f, x, rulerH - 14);
+        } else {
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+          ctx.beginPath();
+          ctx.moveTo(x, rulerH - 5);
+          ctx.lineTo(x, rulerH);
+          ctx.stroke();
+        }
+      }
+
+      // 2. Horizontal Grid & Angle Labels
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      ctx.fillStyle = "#475569";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "right";
+      for (let a = -20; a <= 80; a += 20) {
+        const y = valToY(a);
+        ctx.beginPath();
+        ctx.moveTo(padX, y);
+        ctx.lineTo(w - padX, y);
+        ctx.stroke();
+        ctx.fillText(a + "°", padX - 8, y + 3);
+      }
+
+      // 0° reference line
+      const zeroY = valToY(0);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+      ctx.beginPath();
+      ctx.moveTo(padX, zeroY);
+      ctx.lineTo(w - padX, zeroY);
+      ctx.stroke();
+
+      // 3. Shaded "Already Done Frames" Region (1..K)
+      if (K > 0) {
+        const kX = frameToX(K);
+        ctx.fillStyle = "rgba(16, 185, 129, 0.09)";
+        ctx.fillRect(frameToX(1), rulerH, kX - frameToX(1), h - rulerH);
+
+        // Green boundary needle
+        ctx.strokeStyle = "#10b981";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(kX, 0);
+        ctx.lineTo(kX, h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Label on ruler
+        ctx.fillStyle = "#10b981";
+        ctx.fillRect(kX - 30, 3, 60, 15);
+        ctx.fillStyle = "#06080e";
+        ctx.font = "bold 9px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(`DONE (${K})`, kX, 14);
+      }
+
+      // 4. Calculate & Draw the Resulting Trajectory Curve
+      const curve = computeResultingCurve();
+
+      // Draw past segment (green) and future segment (cyan/blue)
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      for (let f = 1; f <= N; f++) {
+        const x = frameToX(f);
+        const y = valToY(curve[f - 1]);
+        if (f === 1) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = "#38bdf8";
+      ctx.stroke();
+
+      // Highlight already done portion on curve in emerald green
+      if (K > 0) {
+        ctx.lineWidth = 3.2;
+        ctx.strokeStyle = "#10b981";
+        ctx.beginPath();
+        for (let f = 1; f <= K; f++) {
+          const x = frameToX(f);
+          const y = valToY(curve[f - 1]);
+          if (f === 1) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      // 5. Draw Key Triggers (Diamonds)
+      state.keyframes.forEach(k => {
+        const kx = frameToX(k.frame);
+        const ky = valToY(k.value);
+        const isSelected = k.id === state.selectedKeyId;
+        const isDone = k.frame <= K;
+
+        const fill = isSelected ? "#facc15" : isDone ? "#10b981" : "#38bdf8";
+        const stroke = isSelected ? "#fff" : null;
+        drawDiamond(kx, ky, isSelected ? 8 : 6, fill, stroke);
+
+        if (isDone) {
+          ctx.fillStyle = "#10b981";
+          ctx.font = "9px monospace";
+          ctx.textAlign = "center";
+          ctx.fillText("🔒", kx, ky - 10);
+        }
+      });
+
+      // 6. Draw Motor Velocity Curve
+      renderVelocity(curve);
+
+      // Update bottom inspector
+      updateInspector();
+    }
+
+    function renderVelocity(curve) {
+      const w = velocityCanvas.width;
+      const h = velocityCanvas.height;
+      vctx.clearRect(0, 0, w, h);
+
+      const N = state.totalFrames;
+      const K = state.doneFrames;
+
+      // Calculate speed array: delta per frame (deg / frame)
+      const speeds = [0];
+      for (let i = 1; i < curve.length; i++) {
+        speeds.push(curve[i] - curve[i - 1]);
+      }
+
+      // Auto-scale velocity Y axis
+      let minSpd = -0.5;
+      let maxSpd = 2.5;
+      speeds.forEach(v => {
+        if (v < minSpd) minSpd = v - 0.4;
+        if (v > maxSpd) maxSpd = v + 0.4;
+      });
+      const margin = (maxSpd - minSpd) * 0.12 || 0.4;
+      minSpd -= margin;
+      maxSpd += margin;
+
+      const spdToY = (v) => h - 14 - ((v - minSpd) / (maxSpd - minSpd)) * (h - 28);
+
+      // 1. Shaded done region
+      if (K > 0) {
+        const kX = frameToX(K);
+        vctx.fillStyle = "rgba(16, 185, 129, 0.08)";
+        vctx.fillRect(frameToX(1), 0, kX - frameToX(1), h);
+
+        // Green boundary needle
+        vctx.strokeStyle = "#10b981";
+        vctx.lineWidth = 1.8;
+        vctx.setLineDash([4, 3]);
+        vctx.beginPath();
+        vctx.moveTo(kX, 0);
+        vctx.lineTo(kX, h);
+        vctx.stroke();
+        vctx.setLineDash([]);
+      }
+
+      // 2. Zero Speed Line
+      const zeroY = spdToY(0);
+      vctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+      vctx.lineWidth = 1;
+      vctx.beginPath();
+      vctx.moveTo(padX, zeroY);
+      vctx.lineTo(w - padX, zeroY);
+      vctx.stroke();
+
+      vctx.fillStyle = "#64748b";
+      vctx.font = "10px monospace";
+      vctx.textAlign = "right";
+      vctx.fillText("0.0°/f", padX - 8, zeroY + 3);
+
+      // Grid steps for velocity
+      const spdStep = (maxSpd - minSpd) / 4;
+      vctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+      for (let i = 0; i <= 4; i++) {
+        const sv = minSpd + i * spdStep;
+        if (Math.abs(sv) < 0.25) continue; // skip close to 0
+        const gy = spdToY(sv);
+        vctx.beginPath();
+        vctx.moveTo(padX, gy);
+        vctx.lineTo(w - padX, gy);
+        vctx.stroke();
+        vctx.fillText(sv.toFixed(1) + "°/f", padX - 8, gy + 3);
+      }
+
+      // 3. Draw Velocity Curve
+      vctx.lineWidth = 2.4;
+      vctx.strokeStyle = "#f59e0b";
+      vctx.beginPath();
+      for (let f = 1; f <= N; f++) {
+        const x = frameToX(f);
+        const y = spdToY(speeds[f - 1]);
+        if (f === 1) vctx.moveTo(x, y);
+        else vctx.lineTo(x, y);
+      }
+      vctx.stroke();
+
+      // Highlight done segment in emerald
+      if (K > 0) {
+        vctx.lineWidth = 3.0;
+        vctx.strokeStyle = "#10b981";
+        vctx.beginPath();
+        for (let f = 1; f <= K; f++) {
+          const x = frameToX(f);
+          const y = spdToY(speeds[f - 1]);
+          if (f === 1) vctx.moveTo(x, y);
+          else vctx.lineTo(x, y);
+        }
+        vctx.stroke();
+      }
+
+      // 4. Update Stats Badge
+      if (K > 0 && K < N) {
+        const spdK = speeds[K - 1];
+        const spdNext = speeds[K];
+        const isStall = Math.abs(spdNext) < 0.08 && Math.abs(spdK) > 0.35;
+        const stallText = isStall ? " <strong style='color:#ef4444;'>(Speed Stalls to 0 at K+1!)</strong>" : " <strong style='color:#10b981;'>(Smooth)</strong>";
+        velStatsBadge.innerHTML = `Speed at K: <strong>${spdK >= 0 ? '+' : ''}${spdK.toFixed(2)}°/f</strong> &bull; Speed at K+1: <strong>${spdNext >= 0 ? '+' : ''}${spdNext.toFixed(2)}°/f</strong>${stallText}`;
+      } else {
+        velStatsBadge.textContent = "Adjust 'Already Done Frames' to inspect transition speed";
+      }
+    }
+
+    function updateInspector() {
+      const key = state.keyframes.find(k => k.id === state.selectedKeyId);
+      const K = state.doneFrames;
+
+      if (!key) {
+        selectedKeyLabel.textContent = "No Key Trigger Selected";
+        selectedKeyPill.textContent = "Click a diamond";
+        selectedKeyPill.className = "pill";
+        editKeyFrameInput.disabled = true;
+        editKeyValInput.disabled = true;
+        btnDeleteKey.disabled = true;
+        return;
+      }
+
+      const isDone = key.frame <= K;
+      selectedKeyLabel.textContent = `Selected Key: #${key.id} (Frame ${key.frame})`;
+
+      if (isDone) {
+        selectedKeyPill.textContent = "Already Done (Locked)";
+        selectedKeyPill.className = "pill pill-done";
+        editKeyFrameInput.disabled = true;
+        editKeyValInput.disabled = true;
+        editKeyModeSelect.disabled = true;
+        btnDeleteKey.disabled = true;
+      } else {
+        selectedKeyPill.textContent = "Future Trigger (Editable)";
+        selectedKeyPill.className = "pill pill-future";
+        editKeyFrameInput.disabled = false;
+        editKeyValInput.disabled = false;
+        editKeyModeSelect.disabled = false;
+        btnDeleteKey.disabled = false;
+      }
+
+      editKeyFrameInput.value = key.frame;
+      editKeyValInput.value = key.value.toFixed(1);
+      editKeyModeSelect.value = key.mode || "auto";
+    }
+
+    // Canvas Interactions
+    canvas.addEventListener("mousedown", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      // 1. Check if clicked on a key trigger diamond
+      for (const k of state.keyframes) {
+        const kx = frameToX(k.frame);
+        const ky = valToY(k.value);
+        if (Math.hypot(mouseX - kx, mouseY - ky) < 14) {
+          state.selectedKeyId = k.id;
+          if (k.frame > state.doneFrames) {
+            state.isDragging = true;
+            state.draggedKeyId = k.id;
+          }
+          render();
+          return;
+        }
+      }
+
+      // 2. Click on empty space: Add a new key trigger directly at clicked location!
+      const clickedFrame = xToFrame(mouseX);
+      const clickedVal = yToVal(mouseY);
+
+      if (clickedFrame <= state.doneFrames) {
+        // Clicked in past region
+        alert(`Cannot add key trigger in already done frames (Frame ${clickedFrame} ≤ Done ${state.doneFrames}). Click in future region.`);
+        return;
+      }
+
+      const newKey = { id: ++nextId, frame: clickedFrame, value: clickedVal };
+      state.keyframes.push(newKey);
+      state.keyframes.sort((a, b) => a.frame - b.frame);
+      state.selectedKeyId = newKey.id;
+      state.isDragging = true;
+      state.draggedKeyId = newKey.id;
+      render();
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!state.isDragging || !state.draggedKeyId) return;
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const key = state.keyframes.find(k => k.id === state.draggedKeyId);
+      if (key) {
+        // Clamp frame so it cannot be dragged into already done frames
+        const targetFrame = Math.max(state.doneFrames + 1, Math.min(state.totalFrames, xToFrame(mouseX)));
+        const targetVal = yToVal(mouseY);
+
+        key.frame = targetFrame;
+        key.value = targetVal;
+        state.keyframes.sort((a, b) => a.frame - b.frame);
+        render();
+      }
+    });
+
+    window.addEventListener("mouseup", () => {
+      state.isDragging = false;
+      state.draggedKeyId = null;
+    });
+
+    // Inputs & Buttons
+    totalFramesInput.addEventListener("change", (e) => {
+      state.totalFrames = Math.max(20, parseInt(e.target.value, 10) || 100);
+      doneFramesInput.max = state.totalFrames - 2;
+      doneFramesRange.max = state.totalFrames - 2;
+      if (state.doneFrames > state.totalFrames - 2) {
+        state.doneFrames = state.totalFrames - 2;
+        doneFramesInput.value = state.doneFrames;
+        doneFramesRange.value = state.doneFrames;
+      }
+      refreshDoneHistory();
+      render();
+    });
+
+    function setDoneFrames(k) {
+      state.doneFrames = Math.max(0, Math.min(state.totalFrames - 2, k));
+      doneFramesInput.value = state.doneFrames;
+      doneFramesRange.value = state.doneFrames;
+      render();
+    }
+    doneFramesInput.addEventListener("input", (e) => setDoneFrames(parseInt(e.target.value, 10) || 0));
+    function setEaseStrength(val) {
+      state.easeStrength = Math.max(0, Math.min(100, val)) / 100;
+      easeStrengthRange.value = Math.round(state.easeStrength * 100);
+      easeStrengthLabel.textContent = `${Math.round(state.easeStrength * 100)}%`;
+      render();
+    }
+    window.setEasePreset = function(pct) {
+      setEaseStrength(pct);
+    };
+    easeStrengthRange.addEventListener("input", (e) => {
+      setEaseStrength(parseInt(e.target.value, 10) || 0);
+    });
+
+    methodSelect.addEventListener("change", (e) => {
+      state.method = e.target.value;
+      render();
+    });
+
+    // Add Key Button
+    btnAddKeyBtn.addEventListener("click", () => {
+      const targetFrame = Math.min(state.totalFrames, state.doneFrames + 15);
+      const newKey = { id: ++nextId, frame: targetFrame, value: 35.0 };
+      state.keyframes.push(newKey);
+      state.keyframes.sort((a, b) => a.frame - b.frame);
+      state.selectedKeyId = newKey.id;
+      render();
+    });
+
+    // Reset Plan
+    btnResetPlan.addEventListener("click", () => {
+      state.keyframes = [
+        { id: 1, frame: 1, value: 0.0 },
+        { id: 2, frame: state.totalFrames, value: 70.0 }
+      ];
+      state.selectedKeyId = 2;
+      render();
+    });
+
+    // Delete Key
+    btnDeleteKey.addEventListener("click", () => {
+      const key = state.keyframes.find(k => k.id === state.selectedKeyId);
+      if (!key) return;
+      if (key.frame <= state.doneFrames) {
+        alert("Cannot delete an already done key trigger.");
+        return;
+      }
+      state.keyframes = state.keyframes.filter(k => k.id !== key.id);
+      state.selectedKeyId = state.keyframes[0]?.id || null;
+      render();
+    });
+
+    // Direct Key Edit
+    editKeyFrameInput.addEventListener("change", (e) => {
+      const key = state.keyframes.find(k => k.id === state.selectedKeyId);
+      if (key && key.frame > state.doneFrames) {
+        key.frame = Math.max(state.doneFrames + 1, Math.min(state.totalFrames, parseInt(e.target.value, 10) || 1));
+        state.keyframes.sort((a, b) => a.frame - b.frame);
+        render();
+      }
+    });
+
+    editKeyValInput.addEventListener("input", (e) => {
+      const key = state.keyframes.find(k => k.id === state.selectedKeyId);
+      if (key && key.frame > state.doneFrames) {
+        key.value = parseFloat(e.target.value) || 0.0;
+        render();
+      }
+    });
+
+    editKeyModeSelect.addEventListener("change", (e) => {
+      const key = state.keyframes.find(k => k.id === state.selectedKeyId);
+      if (key && key.frame > state.doneFrames) {
+        key.mode = e.target.value;
+        render();
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>

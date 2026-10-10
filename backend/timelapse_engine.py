@@ -135,6 +135,10 @@ class TimelapseEngine:
         """Allocate a unique, human-readable run identity and an isolated capture directory."""
         if config and config.target_dir:
             target_path = Path(config.target_dir).resolve()
+            if target_path.exists():
+                existing = [f for f in target_path.iterdir() if f.is_file() and not f.name.startswith(".")]
+                if existing:
+                    target_path = target_path / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             target_path.mkdir(parents=True, exist_ok=True)
             return target_path.name, str(target_path)
 
@@ -232,10 +236,16 @@ class TimelapseEngine:
                     "status": "ERROR",
                     "message": f"poses length {len(poses)} must match total_shots {self.total_shots}",
                 }
+            # Enforce immutability of executed poses (0 .. current_shot-1)
+            updated_poses = list(poses)
+            if self.config.poses and self.current_shot > 0:
+                for idx in range(min(self.current_shot, len(self.config.poses))):
+                    updated_poses[idx] = self.config.poses[idx]
+
             # Validate remaining targets against rig limits
-            for p in poses[self.current_shot:]:
+            for p in updated_poses[self.current_shot:]:
                 self.rig_mgr.validate_move(pan=p.get("pan", 0.0), tilt=p.get("tilt", 0.0))
-            self.config.poses = poses
+            self.config.poses = updated_poses
 
         if camera_settings is not None:
             if len(camera_settings) != self.total_shots:
@@ -243,7 +253,12 @@ class TimelapseEngine:
                     "status": "ERROR",
                     "message": f"camera_settings length {len(camera_settings)} must match total_shots {self.total_shots}",
                 }
-            self.config.camera_settings = camera_settings
+            # Enforce immutability of executed camera settings
+            updated_settings = list(camera_settings)
+            if self.config.camera_settings and self.current_shot > 0:
+                for idx in range(min(self.current_shot, len(self.config.camera_settings))):
+                    updated_settings[idx] = self.config.camera_settings[idx]
+            self.config.camera_settings = updated_settings
 
         logger.info(
             f"Active time-lapse adjusted at shot {self.current_shot + 1}/{self.total_shots} "
@@ -552,6 +567,7 @@ class TimelapseEngine:
             "progress_pct": round(progress_pct, 1),
             "elapsed_time_s": round(self.elapsed_time_s, 1),
             "estimated_eta_s": round(self.estimated_eta_s, 1),
+            "start_time": self.start_time if self.start_time > 0 else None,
             "last_error": self.last_error,
             "run_id": self.run_id,
             "capture_dir": self.capture_dir,
@@ -559,44 +575,58 @@ class TimelapseEngine:
             "config": self.config.model_dump(mode="json") if self.config else None,
         }
 
-    def get_captures(self) -> list[dict[str, Any]]:
-        """Return ordered list of captured photos for the current/latest time-lapse run."""
+    def get_captures(self, target_dir: str | Path | None = None) -> list[dict[str, Any]]:
+        """Return ordered list of captured photos for the specified or current/latest time-lapse run."""
         results = []
-        capture_path = Path(self.capture_dir) if self.capture_dir else None
+        active_dir = target_dir or self.capture_dir
+        capture_path = Path(active_dir).resolve() if active_dir else None
 
-        for shot in self.captured_shots:
-            fn = shot["filename"]
-            exists = (capture_path / fn).exists() if capture_path else False
-            shot_dict = {
-                **shot,
-                "url": f"/api/timelapse/captures/{fn}",
-                "download_url": f"/api/timelapse/captures/{fn}/download",
-                "exists": exists,
-            }
-            raw_fn = shot.get("raw_filename")
-            if raw_fn:
-                raw_exists = (capture_path / raw_fn).exists() if capture_path else False
-                shot_dict["raw_url"] = f"/api/timelapse/captures/{raw_fn}"
-                shot_dict["raw_download_url"] = f"/api/timelapse/captures/{raw_fn}/download"
-                shot_dict["raw_exists"] = raw_exists
-            results.append(shot_dict)
+        if not target_dir or target_dir == self.capture_dir:
+            for shot in self.captured_shots:
+                fn = shot["filename"]
+                exists = (capture_path / fn).exists() if capture_path else False
+                shot_dict = {
+                    **shot,
+                    "url": f"/api/timelapse/captures/{fn}",
+                    "download_url": f"/api/timelapse/captures/{fn}/download",
+                    "exists": exists,
+                }
+                raw_fn = shot.get("raw_filename")
+                if raw_fn:
+                    raw_exists = (capture_path / raw_fn).exists() if capture_path else False
+                    shot_dict["raw_url"] = f"/api/timelapse/captures/{raw_fn}"
+                    shot_dict["raw_download_url"] = f"/api/timelapse/captures/{raw_fn}/download"
+                    shot_dict["raw_exists"] = raw_exists
+                results.append(shot_dict)
 
         if not results and capture_path and capture_path.exists():
-            for f in sorted(capture_path.iterdir()):
-                if f.is_file() and f.suffix.lower() in [".jpg", ".jpeg", ".svg", ".cr2", ".nef"]:
-                    shot_idx = 0
-                    try:
-                        parts = f.stem.split("_")
-                        shot_idx = int(parts[-1])
-                    except (ValueError, IndexError):
-                        pass
-                    results.append({
-                        "shot_index": shot_idx,
-                        "filename": f.name,
-                        "url": f"/api/timelapse/captures/{f.name}",
-                        "size_bytes": f.stat().st_size,
-                        "exists": True,
-                    })
+            files = sorted([f for f in capture_path.iterdir() if f.is_file() and not f.name.startswith(".")])
+            raw_exts = (".cr2", ".cr3", ".nef", ".arw", ".dng")
+            raw_map = {f.stem.lower(): f for f in files if f.suffix.lower() in raw_exts}
+            jpg_map = {f.stem.lower(): f for f in files if f.suffix.lower() in (".jpg", ".jpeg", ".svg")}
+
+            for stem_key, f in sorted(jpg_map.items()):
+                shot_idx = 0
+                try:
+                    parts = f.stem.split("_")
+                    shot_idx = int(parts[-1])
+                except (ValueError, IndexError):
+                    pass
+                raw_f = raw_map.get(stem_key)
+                item = {
+                    "shot_index": shot_idx,
+                    "filename": f.name,
+                    "url": f"/api/timelapse/captures/{f.name}",
+                    "download_url": f"/api/timelapse/captures/{f.name}/download",
+                    "size_bytes": f.stat().st_size,
+                    "exists": True,
+                }
+                if raw_f:
+                    item["raw_filename"] = raw_f.name
+                    item["raw_url"] = f"/api/timelapse/captures/{raw_f.name}"
+                    item["raw_download_url"] = f"/api/timelapse/captures/{raw_f.name}/download"
+                    item["raw_exists"] = True
+                results.append(item)
         return results
 
     async def _eager_generate_preview(self, filename: str, capture_res: dict[str, Any] | None = None) -> None:

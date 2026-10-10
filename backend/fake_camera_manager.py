@@ -7,6 +7,16 @@ from typing import Any
 logger = logging.getLogger("CameraCommander.FakeCamera")
 
 
+def get_noncolliding_stem(dest_dir: str, base_stem: str, extensions: list[str]) -> str:
+    """Find a stem such that dest_dir / f'{candidate_stem}{ext}' does not exist for any extension in extensions."""
+    candidate_stem = base_stem
+    counter = 1
+    while any(os.path.exists(os.path.join(dest_dir, f"{candidate_stem}{ext}")) for ext in extensions):
+        candidate_stem = f"{base_stem}_{counter:02d}"
+        counter += 1
+    return candidate_stem
+
+
 class FakeCameraManager:
     """
     Explicit simulation camera manager for desktop development and hardware isolation.
@@ -228,24 +238,33 @@ class FakeCameraManager:
 
         await asyncio.sleep(0.3)  # Realistic capture delay
 
-        if not filename:
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            filename = f"fake_capture_{timestamp}.jpg"
-
         dest_dir = os.path.abspath(target_dir) if target_dir else self.capture_dir
         os.makedirs(dest_dir, exist_ok=True)
-        target_file = os.path.join(dest_dir, filename)
-        ext = os.path.splitext(filename)[1].lower() or ".jpg"
+
+        is_raw_mode = "RAW" in (self.image_format or "").upper()
+        if filename:
+            base_stem = os.path.splitext(filename)[0]
+            ext = os.path.splitext(filename)[1].lower() or ".jpg"
+        else:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            base_stem = f"fake_capture_{timestamp}"
+            ext = ".jpg"
+
+        extensions = [ext]
+        if is_raw_mode:
+            extensions.append(".cr2")
+
+        stem = get_noncolliding_stem(dest_dir, base_stem, extensions)
+        resolved_filename = f"{stem}{ext}"
+        target_file = os.path.join(dest_dir, resolved_filename)
 
         # Generate placeholders off event loop
         preview_path = await asyncio.to_thread(self._create_placeholder_files, target_file, ext)
 
         # In RAW or RAW+L mode, also create companion .cr2 file
-        is_raw_mode = "RAW" in (self.image_format or "").upper()
         raw_target_file = None
         raw_filename = None
         if is_raw_mode:
-            stem = os.path.splitext(filename)[0]
             raw_filename = f"{stem}.cr2"
             raw_target_file = os.path.join(dest_dir, raw_filename)
             with open(raw_target_file, "wb") as f:
@@ -266,7 +285,7 @@ class FakeCameraManager:
         mime_type = mime_map.get(ext, "application/octet-stream")
 
         result = {
-            "camera_filename": filename,
+            "camera_filename": resolved_filename,
             "saved_original_path": target_file,
             "extension": ext,
             "mime_type": mime_type,
@@ -275,7 +294,7 @@ class FakeCameraManager:
             "has_raw": bool(raw_target_file),
             "raw_filename": raw_filename,
             "raw_path": raw_target_file,
-            "all_files": [filename] + ([raw_filename] if raw_filename else []),
+            "all_files": [resolved_filename] + ([raw_filename] if raw_filename else []),
         }
 
         logger.info(f"Fake camera captured photo: {target_file} ({mime_type}), raw={raw_target_file}")
@@ -283,7 +302,8 @@ class FakeCameraManager:
         return {
             "status": "OK",
             "fake": True,
-            "filename": filename,
+            "filename": resolved_filename,
+            "camera_filename": resolved_filename,
             "path": target_file,
             "has_raw": bool(raw_target_file),
             "raw_filename": raw_filename,

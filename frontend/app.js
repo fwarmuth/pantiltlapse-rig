@@ -101,6 +101,9 @@ class TimelineStudioApp {
     this.followLive = true;
     this.liveShot = 1;
     this.capturedShotsMap = new Map(); // shotIndex -> filename
+    this.activePoses = [];
+    this.activeCameraSettings = [];
+    this.easeStrength = 0.40;
 
     // Plan Storage Tracking
     this.currentPlanId = null;
@@ -109,6 +112,13 @@ class TimelineStudioApp {
     // Active Shoot Session Tracking
     this.activeSession = null;
     this.sessionsList = [];
+
+    // Real-Time Clock Synchronization & Wall-Clock Timeline
+    this.rulerHeight = 34;
+    this.systemTime = null;
+    this.lastZeroTime = null;
+    this.sequenceStartTime = null;
+    this.projectedStartTime = Date.now();
 
     this.initDOM();
     this.bindEvents();
@@ -122,7 +132,11 @@ class TimelineStudioApp {
     this.checkShutterIntervalSafety();
     this.renderTrackHeaders();
     this.updateInspectorUI();
+    this.updatePlayheadTimeBadge();
     this.renderTimeline();
+
+    // 1-second clock ticker for live/projected wall-clock timeline
+    setInterval(() => this.onClockTick(), 1000);
   }
 
   /* -------------------------------------------------------------------------- */
@@ -223,11 +237,14 @@ class TimelineStudioApp {
       settleInput: document.getElementById("settleInput"),
       calcRunTime: document.getElementById("calcRunTime"),
       calcClipLength: document.getElementById("calcClipLength"),
+      calcEndTime: document.getElementById("calcEndTime"),
+      clockSyncStatus: document.getElementById("clockSyncStatus"),
 
       // Key Trigger Inspector & Direct Angles
       inspectorTrackTitle: document.getElementById("inspectorTrackTitle"),
       keyTriggerCard: document.getElementById("keyTriggerCard"),
       keyCardTitle: document.getElementById("keyCardTitle"),
+      keyCardStatusBadge: document.getElementById("keyCardStatusBadge"),
       btnToggleKeyTrigger: document.getElementById("btnToggleKeyTrigger"),
       keyAnglesPanel: document.getElementById("keyAnglesPanel"),
       keyPanInput: document.getElementById("keyPanInput"),
@@ -241,6 +258,9 @@ class TimelineStudioApp {
       keyDiscreteSelect: document.getElementById("keyDiscreteSelect"),
       easingContainer: document.getElementById("easingContainer"),
       keyEasingSelect: document.getElementById("keyEasingSelect"),
+      easeStrengthRow: document.getElementById("easeStrengthRow"),
+      easeStrengthInput: document.getElementById("easeStrengthInput"),
+      easeStrengthVal: document.getElementById("easeStrengthVal"),
 
       // Defaults
       btnSyncFromCam: document.getElementById("btnSyncFromCam"),
@@ -259,6 +279,7 @@ class TimelineStudioApp {
       btnNextKey: document.getElementById("btnNextKey"),
       btnLastShot: document.getElementById("btnLastShot"),
       playheadInput: document.getElementById("playheadInput"),
+      playheadTimeBadge: document.getElementById("playheadTimeBadge"),
       totalShotsLabel: document.getElementById("totalShotsLabel"),
       btnAddKeyTrigger: document.getElementById("btnAddKeyTrigger"),
       btnAddTrackMenuBtn: document.getElementById("btnAddTrackMenuBtn"),
@@ -406,9 +427,17 @@ class TimelineStudioApp {
         if (key) {
           key.mode = e.target.value;
           this.renderTimeline();
+          this.checkLiveRamping(this.activeTrackId, key.value);
         }
       }
     });
+
+    if (this.dom.easeStrengthInput) {
+      this.dom.easeStrengthInput.addEventListener("input", (e) => {
+        const val = parseInt(e.target.value, 10);
+        this.setEaseStrength(val);
+      });
+    }
 
     // Key Management
     this.dom.btnToggleKeyTrigger.addEventListener("click", () => this.toggleKeyTriggerAtPlayhead());
@@ -828,8 +857,25 @@ class TimelineStudioApp {
       }
     }
 
+    if (data.system_time) {
+      this.systemTime = data.system_time;
+      if (this.dom.clockSyncStatus) {
+        if (data.system_time.synced) {
+          const syncDate = data.system_time.last_sync ? new Date(data.system_time.last_sync) : new Date(data.system_time.rig_time * 1000);
+          this.dom.clockSyncStatus.textContent = `Synced (${syncDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+          this.dom.clockSyncStatus.style.color = "#10b981";
+        } else {
+          this.dom.clockSyncStatus.textContent = "Sync on Zero";
+          this.dom.clockSyncStatus.style.color = "var(--text-muted)";
+        }
+      }
+    }
+
     if (data.timelapse) {
       this.liveState.timelapse = data.timelapse;
+      if (data.timelapse.start_time) {
+        this.sequenceStartTime = data.timelapse.start_time * 1000;
+      }
       const tState = data.timelapse.state;
       this.dom.modeText.textContent = tState;
 
@@ -841,6 +887,15 @@ class TimelineStudioApp {
         const lc = data.timelapse.latest_capture;
         if (lc.shot_index && lc.filename) {
           this.capturedShotsMap.set(lc.shot_index, lc.filename);
+        }
+      }
+
+      if (data.timelapse.config) {
+        if ((!this.activePoses || this.activePoses.length === 0) && data.timelapse.config.poses) {
+          this.activePoses = [...data.timelapse.config.poses];
+        }
+        if ((!this.activeCameraSettings || this.activeCameraSettings.length === 0) && data.timelapse.config.camera_settings) {
+          this.activeCameraSettings = [...data.timelapse.config.camera_settings];
         }
       }
 
@@ -991,6 +1046,62 @@ class TimelineStudioApp {
     return Math.round(1 + ratio * (total - 1));
   }
 
+  getSequenceBaseTime() {
+    const isRunning = this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED";
+    if (isRunning) {
+      if (this.sequenceStartTime) return this.sequenceStartTime;
+      if (this.liveState.timelapse.start_time) {
+        this.sequenceStartTime = this.liveState.timelapse.start_time * 1000;
+        return this.sequenceStartTime;
+      }
+      return Date.now() - Math.max(0, (this.liveShot || 1) - 1) * (this.plan.interval_s || 5) * 1000;
+    }
+    if (this.lastZeroTime && (Date.now() - this.lastZeroTime < 3600000)) {
+      return this.lastZeroTime;
+    }
+    if (!this.projectedStartTime || (Date.now() - this.projectedStartTime > 60000)) {
+      this.projectedStartTime = Date.now();
+    }
+    return this.projectedStartTime;
+  }
+
+  getEstimatedTimeForShot(shotIndex) {
+    const baseMs = this.getSequenceBaseTime();
+    const intervalMs = (this.plan.interval_s || 5.0) * 1000;
+    const shotMs = baseMs + Math.max(0, shotIndex - 1) * intervalMs;
+    return new Date(shotMs);
+  }
+
+  formatWallClockTime(timestampMs, includeSeconds = true) {
+    const d = new Date(timestampMs);
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    const s = String(d.getSeconds()).padStart(2, "0");
+    return includeSeconds ? `${h}:${m}:${s}` : `${h}:${m}`;
+  }
+
+  updatePlayheadTimeBadge() {
+    if (!this.dom.playheadTimeBadge) return;
+    const estDate = this.getEstimatedTimeForShot(this.playhead);
+    const timeStr = this.formatWallClockTime(estDate.getTime(), true);
+    this.dom.playheadTimeBadge.textContent = timeStr;
+    const isRunning = this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED";
+    this.dom.playheadTimeBadge.title = isRunning
+      ? `Estimated Real Wall-Clock Time for Shot ${this.playhead} (Sequence Running)`
+      : `Projected Real Wall-Clock Time for Shot ${this.playhead}`;
+  }
+
+  onClockTick() {
+    const isRunning = this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED";
+    if (isRunning || !this.isDragging) {
+      this.updatePlayheadTimeBadge();
+      this.updateScheduleCalculations();
+      if (isRunning) {
+        this.renderTimeline();
+      }
+    }
+  }
+
   renderTimeline() {
     if (!this.ctx) return;
     const w = this.canvasWidth;
@@ -999,11 +1110,17 @@ class TimelineStudioApp {
 
     ctx.clearRect(0, 0, w, h);
 
-    const rulerH = 28;
+    const rulerH = this.rulerHeight || 34;
 
     // Draw Top Ruler
     ctx.fillStyle = "#17191e";
     ctx.fillRect(0, 0, w, rulerH);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+    ctx.beginPath();
+    ctx.moveTo(0, rulerH + 0.5);
+    ctx.lineTo(w, rulerH + 0.5);
+    ctx.stroke();
+
     this.renderRuler(ctx, rulerH);
 
     if (this.viewMode === "tracks") {
@@ -1074,11 +1191,11 @@ class TimelineStudioApp {
     // Playhead handle on ruler
     ctx.fillStyle = playheadColor;
     ctx.beginPath();
-    ctx.moveTo(phX - 6, 0);
-    ctx.lineTo(phX + 6, 0);
-    ctx.lineTo(phX + 6, rulerH - 8);
+    ctx.moveTo(phX - 7, 0);
+    ctx.lineTo(phX + 7, 0);
+    ctx.lineTo(phX + 7, rulerH - 8);
     ctx.lineTo(phX, rulerH);
-    ctx.lineTo(phX - 6, rulerH - 8);
+    ctx.lineTo(phX - 7, rulerH - 8);
     ctx.closePath();
     ctx.fill();
 
@@ -1088,34 +1205,51 @@ class TimelineStudioApp {
       ctx.font = "bold 8px JetBrains Mono";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("EDIT", phX, 8);
+      ctx.fillText("EDIT", phX, 10);
       ctx.restore();
     }
   }
 
   renderRuler(ctx, rulerH) {
     const total = this.plan.totalShots;
-    ctx.fillStyle = "#64748b";
-    ctx.font = "10px JetBrains Mono";
-    ctx.textAlign = "center";
 
     let step = 10;
     if (this.zoom > 3) step = 2;
     else if (this.zoom > 1.5) step = 5;
     else if (total > 500) step = 50;
 
-    for (let s = 1; s <= total; s += step) {
-      const x = this.shotToX(s);
-      if (x < -20 || x > this.canvasWidth + 20) continue;
+    const pxPerStep = Math.abs(this.shotToX(step + 1) - this.shotToX(1));
+    const showSeconds = pxPerStep >= 55;
+    const timeLabelInterval = pxPerStep < 36 ? Math.ceil(42 / pxPerStep) : 1;
 
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+    let tickIndex = 0;
+    for (let s = 1; s <= total; s += step, tickIndex++) {
+      const x = this.shotToX(s);
+      if (x < -40 || x > this.canvasWidth + 40) continue;
+
+      // Ruler tick mark
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(x + 0.5, rulerH - 8);
+      ctx.moveTo(x + 0.5, rulerH - 7);
       ctx.lineTo(x + 0.5, rulerH);
       ctx.stroke();
 
-      ctx.fillText(`${s}`, x, rulerH - 12);
+      // Dual-line Ruler Display:
+      // Line 1: Frame number (#s)
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "bold 9px JetBrains Mono, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(`#${s}`, x, 12);
+
+      // Line 2: Estimated wall-clock time (HH:MM:SS)
+      if (tickIndex % timeLabelInterval === 0) {
+        const estDate = this.getEstimatedTimeForShot(s);
+        const timeStr = this.formatWallClockTime(estDate.getTime(), showSeconds);
+        ctx.fillStyle = "#38bdf8";
+        ctx.font = "8.5px JetBrains Mono, monospace";
+        ctx.fillText(timeStr, x, 24);
+      }
     }
   }
 
@@ -1154,13 +1288,28 @@ class TimelineStudioApp {
         ctx.stroke();
 
         // Keyframe Diamonds
+        const isTimelapseActive =
+          (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+          this.liveShot > 0;
+
         track.keyframes.forEach((key) => {
           const kx = this.shotToX(key.shotIndex);
           const isSelected = this.activeTrackId === track.id && this.selectedKeyId === key.id;
-          this.drawDiamond(ctx, kx, y + rowH / 2, isSelected ? 8 : 6, isSelected ? "#facc15" : track.color);
+          const isKeyLocked = isTimelapseActive && key.shotIndex <= this.liveShot;
+          this.drawDiamond(
+            ctx,
+            kx,
+            y + rowH / 2,
+            isSelected ? 8 : 6,
+            isKeyLocked ? "#475569" : (isSelected ? "#facc15" : track.color),
+            isKeyLocked ? "rgba(255, 255, 255, 0.4)" : null
+          );
         });
       } else {
         // Discrete stepped blocks
+        const isTimelapseActive =
+          (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+          this.liveShot > 0;
         const total = this.plan.totalShots;
         const sortedKeys = [...track.keyframes].sort((a, b) => a.shotIndex - b.shotIndex);
 
@@ -1187,7 +1336,15 @@ class TimelineStudioApp {
 
           // Diamond at step point
           const isSelected = this.activeTrackId === track.id && this.selectedKeyId === kCurr.id;
-          this.drawDiamond(ctx, startX, y + rowH / 2, isSelected ? 7 : 5, isSelected ? "#facc15" : track.color);
+          const isKeyLocked = isTimelapseActive && kCurr.shotIndex <= this.liveShot;
+          this.drawDiamond(
+            ctx,
+            startX,
+            y + rowH / 2,
+            isSelected ? 7 : 5,
+            isKeyLocked ? "#475569" : (isSelected ? "#facc15" : track.color),
+            isKeyLocked ? "rgba(255, 255, 255, 0.4)" : null
+          );
         }
       }
     });
@@ -1286,11 +1443,23 @@ class TimelineStudioApp {
         ctx.fill();
       }
 
-      this.drawDiamond(ctx, kx, ky, isSelected ? 8 : 6, isSelected ? "#facc15" : track.color);
+      const isTimelapseActive =
+        (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+        this.liveShot > 0;
+      const isKeyLocked = isTimelapseActive && key.shotIndex <= this.liveShot;
+
+      this.drawDiamond(
+        ctx,
+        kx,
+        ky,
+        isSelected ? 8 : 6,
+        isKeyLocked ? "#475569" : (isSelected ? "#facc15" : track.color),
+        isKeyLocked ? "rgba(255, 255, 255, 0.4)" : null
+      );
     });
   }
 
-  drawDiamond(ctx, x, y, size, fill) {
+  drawDiamond(ctx, x, y, size, fill, stroke = null) {
     ctx.fillStyle = fill;
     ctx.beginPath();
     ctx.moveTo(x, y - size);
@@ -1299,6 +1468,11 @@ class TimelineStudioApp {
     ctx.lineTo(x - size, y);
     ctx.closePath();
     ctx.fill();
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
   }
 
   /* -------------------------------------------------------------------------- */
@@ -1310,7 +1484,7 @@ class TimelineStudioApp {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    const rulerH = 28;
+    const rulerH = this.rulerHeight || 34;
     const rowH = 44;
 
     // In tracks view, activate track when clicked anywhere on its row
@@ -1362,14 +1536,24 @@ class TimelineStudioApp {
       this.detachFollowLiveIfRunning();
       this.setPlayhead(targetShot, true, false);
     } else if (this.dragTarget.type === "key") {
+      const isTimelapseActive =
+        (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+        this.liveShot > 0;
       const track = this.plan.tracks[this.dragTarget.trackId];
       if (track) {
         const key = track.keyframes.find((k) => k.id === this.dragTarget.id);
         if (key) {
-          key.shotIndex = Math.max(1, Math.min(this.plan.totalShots, targetShot));
+          // If key is already executed during an active time-lapse, disallow dragging
+          if (isTimelapseActive && key.shotIndex <= this.liveShot) {
+            return;
+          }
+
+          const minAllowedShot = isTimelapseActive ? this.liveShot + 1 : 1;
+          key.shotIndex = Math.max(minAllowedShot, Math.min(this.plan.totalShots, targetShot));
+
           // If in curve mode on a continuous track, also drag angle vertically
           if (this.viewMode === "curve" && track.type === "continuous") {
-            const rulerH = 28;
+            const rulerH = this.rulerHeight || 34;
             const graphY = rulerH;
             const graphH = this.canvasHeight - rulerH;
             let minVal = -10;
@@ -1409,15 +1593,130 @@ class TimelineStudioApp {
   /* -------------------------------------------------------------------------- */
   /* Track Evaluation Engine (Bezier & Stepped Hold)                            */
   /* -------------------------------------------------------------------------- */
+  easeRatio(u, strength = this.easeStrength) {
+    const clampedU = Math.max(0.0, Math.min(1.0, u));
+    const s = clampedU * clampedU * (3.0 - 2.0 * clampedU);
+    const str = typeof strength === "number" ? strength : 0.40;
+    return (1.0 - str) * clampedU + str * s;
+  }
+
+  setEaseStrength(val) {
+    const num = Math.max(0, Math.min(100, parseInt(val, 10) || 0));
+    this.easeStrength = num / 100.0;
+    if (this.dom.easeStrengthInput) {
+      this.dom.easeStrengthInput.value = num;
+    }
+    if (this.dom.easeStrengthVal) {
+      this.dom.easeStrengthVal.textContent = `${num}%`;
+    }
+    this.renderTimeline();
+    this.updateOverlays();
+    if (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") {
+      this.sendHotUpdate();
+    }
+  }
+
   evaluateTrackAtShot(track, shotIndex) {
     if (!track.keyframes || track.keyframes.length === 0) {
       return this.plan.defaults[track.id] || 0.0;
+    }
+
+    const isTimelapseActive =
+      (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+      this.activePoses &&
+      this.activePoses.length > 0;
+    const K = isTimelapseActive ? (this.liveShot || 0) : 0;
+
+    // 1. If active time-lapse and evaluating executed shot (shotIndex <= K), return historical executed state
+    if (isTimelapseActive && shotIndex <= K) {
+      const idx = shotIndex - 1;
+      if (track.type === "continuous") {
+        if (this.activePoses[idx] && this.activePoses[idx][track.id] !== undefined) {
+          return this.activePoses[idx][track.id];
+        }
+      } else {
+        if (this.activeCameraSettings && this.activeCameraSettings[idx] && this.activeCameraSettings[idx][track.id] !== undefined) {
+          return this.activeCameraSettings[idx][track.id];
+        }
+      }
     }
 
     const sorted = [...track.keyframes].sort((a, b) => a.shotIndex - b.shotIndex);
 
     if (track.type === "continuous") {
       if (sorted.length === 1) return sorted[0].value;
+
+      // 2. If active time-lapse and evaluating future shot (shotIndex > K), anchor boundary to Shot K
+      if (isTimelapseActive && K > 0) {
+        const futureKeys = sorted.filter((k) => k.shotIndex > K);
+        const y_K = this.activePoses[K - 1]?.[track.id] ?? sorted[0].value;
+
+        if (futureKeys.length === 0) {
+          return y_K;
+        }
+
+        const nextKey = futureKeys[0];
+        const nextMode = nextKey.mode || "auto";
+
+        // Segment between K and first future key
+        if (shotIndex <= nextKey.shotIndex) {
+          const L = nextKey.shotIndex - K;
+          if (L <= 0) return nextKey.value;
+          const u = (shotIndex - K) / L;
+
+          if (nextMode === "linear") {
+            return y_K + u * (nextKey.value - y_K);
+          } else if (nextMode === "ease_in_out") {
+            const t = this.easeRatio(u);
+            return y_K + t * (nextKey.value - y_K);
+          } else {
+            // Auto / Natural Bezier: Velocity-Continuous Hermite matching incoming v_K
+            const y_prev = K > 1 ? (this.activePoses[K - 2]?.[track.id] ?? y_K) : y_K;
+            const v_K = y_K - y_prev; // slope at boundary (°/frame)
+            let d0 = v_K * L;
+            const deltaY = nextKey.value - y_K;
+
+            // Fritsch-Carlson monotone clamping to prevent overshoot
+            if (deltaY * d0 <= 0) {
+              d0 = 0.0;
+            } else if (Math.abs(d0) > 3 * Math.abs(deltaY)) {
+              d0 = 3 * deltaY;
+            }
+            const d1 = 0.0;
+
+            const h00 = 2 * u * u * u - 3 * u * u + 1;
+            const h10 = u * u * u - 2 * u * u + u;
+            const h01 = -2 * u * u * u + 3 * u * u;
+            const h11 = u * u * u - u * u;
+
+            return h00 * y_K + h10 * d0 + h01 * nextKey.value + h11 * d1;
+          }
+        }
+
+        // Subsequent future segments: evaluate between future keys
+        let left = nextKey;
+        let right = futureKeys[futureKeys.length - 1];
+        for (let i = 0; i < futureKeys.length - 1; i++) {
+          if (futureKeys[i].shotIndex <= shotIndex && futureKeys[i + 1].shotIndex >= shotIndex) {
+            left = futureKeys[i];
+            right = futureKeys[i + 1];
+            break;
+          }
+        }
+
+        if (left.id === right.id || left.shotIndex === right.shotIndex) {
+          return left.value;
+        }
+
+        const u = (shotIndex - left.shotIndex) / (right.shotIndex - left.shotIndex);
+        const mode = left.mode || "auto";
+        const t = mode === "linear" ? u : this.easeRatio(u);
+        return left.value + t * (right.value - left.value);
+      }
+
+      // 3. Normal planning mode (no active timelapse)
+      if (shotIndex <= sorted[0].shotIndex) return sorted[0].value;
+      if (shotIndex >= sorted[sorted.length - 1].shotIndex) return sorted[sorted.length - 1].value;
 
       let left = sorted[0];
       let right = sorted[sorted.length - 1];
@@ -1435,15 +1734,8 @@ class TimelineStudioApp {
       }
 
       const u = (shotIndex - left.shotIndex) / (right.shotIndex - left.shotIndex);
-      let t = u;
-
-      if (left.mode === "linear") {
-        t = u;
-      } else {
-        // Cubic Hermite / Bezier easing
-        t = u * u * (3.0 - 2.0 * u);
-      }
-
+      const mode = left.mode || "auto";
+      const t = mode === "linear" ? u : this.easeRatio(u);
       return left.value + t * (right.value - left.value);
     } else {
       // Discrete stepped parameter: hold latest keyframe
@@ -1601,6 +1893,14 @@ class TimelineStudioApp {
   }
 
   addKeyTriggerAtPlayhead() {
+    const isTimelapseActive =
+      (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+      this.liveShot > 0;
+    if (isTimelapseActive && this.playhead <= this.liveShot) {
+      this.showToast("Cannot add key trigger to completed frames during active run", "warning");
+      return;
+    }
+
     const track = this.plan.tracks[this.activeTrackId];
     if (!track) return;
 
@@ -1632,6 +1932,14 @@ class TimelineStudioApp {
   }
 
   toggleKeyTriggerAtPlayhead() {
+    const isTimelapseActive =
+      (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+      this.liveShot > 0;
+    if (isTimelapseActive && this.playhead <= this.liveShot) {
+      this.showToast("Cannot modify executed triggers during active run", "warning");
+      return;
+    }
+
     const track = this.plan.tracks[this.activeTrackId];
     if (!track) return;
 
@@ -1648,8 +1956,17 @@ class TimelineStudioApp {
   }
 
   deleteKeyTrigger(trackId, keyId) {
+    const isTimelapseActive =
+      (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+      this.liveShot > 0;
     const track = this.plan.tracks[trackId];
     if (!track) return;
+
+    const key = track.keyframes.find((k) => k.id === keyId);
+    if (isTimelapseActive && key && key.shotIndex <= this.liveShot) {
+      this.showToast("Cannot remove key trigger for an executed shot", "warning");
+      return;
+    }
 
     track.keyframes = track.keyframes.filter((k) => k.id !== keyId);
     this.selectedKeyId = track.keyframes[0]?.id || null;
@@ -1690,6 +2007,13 @@ class TimelineStudioApp {
   }
 
   addKeyTriggerAtPlayheadForTrack(trackId) {
+    const isTimelapseActive =
+      (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+      this.liveShot > 0;
+    if (isTimelapseActive && this.playhead <= this.liveShot) {
+      return null;
+    }
+
     const track = this.plan.tracks[trackId];
     if (!track) return null;
 
@@ -1716,6 +2040,13 @@ class TimelineStudioApp {
   }
 
   setKeyAngle(axis, val) {
+    const isTimelapseActive =
+      (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+      this.liveShot > 0;
+    if (isTimelapseActive && this.playhead <= this.liveShot) {
+      return;
+    }
+
     const track = this.plan.tracks[axis];
     if (!track) return;
 
@@ -1824,17 +2155,38 @@ class TimelineStudioApp {
       }
     }
 
+    const isTimelapseActive =
+      (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+      this.liveShot > 0;
+    const isLocked = isTimelapseActive && this.playhead <= this.liveShot;
+
+    if (this.dom.keyCardStatusBadge) {
+      this.dom.keyCardStatusBadge.style.display = isLocked ? "inline-block" : "none";
+    }
+
+    // Disable / enable angle editing, nudges, and discrete select if locked
+    if (this.dom.keyPanInput) this.dom.keyPanInput.disabled = isLocked;
+    if (this.dom.keyTiltInput) this.dom.keyTiltInput.disabled = isLocked;
+    if (this.dom.keyDiscreteSelect) this.dom.keyDiscreteSelect.disabled = isLocked;
+    if (this.dom.keyEasingSelect) this.dom.keyEasingSelect.disabled = isLocked;
+    if (this.dom.keyAnglesPanel) {
+      const nudgeBtns = this.dom.keyAnglesPanel.querySelectorAll(".btn-group-nudges button");
+      nudgeBtns.forEach((b) => (b.disabled = isLocked));
+    }
+
     if (key) {
-      this.dom.keyTriggerCard.className = "key-trigger-card is-key";
+      this.dom.keyTriggerCard.className = `key-trigger-card is-key ${isLocked ? "is-locked" : ""}`;
       const keyIdx = track.keyframes.findIndex((k) => k.id === key.id) + 1;
       this.dom.keyCardTitle.textContent = `Key Trigger #${keyIdx} (Shot ${key.shotIndex})`;
-      this.dom.btnToggleKeyTrigger.textContent = "Remove Key";
-      this.dom.btnToggleKeyTrigger.className = "btn btn-danger btn-sm";
+      this.dom.btnToggleKeyTrigger.textContent = isLocked ? "🔒 Executed (Locked)" : "Remove Key";
+      this.dom.btnToggleKeyTrigger.className = `btn btn-sm ${isLocked ? "btn-secondary" : "btn-danger"}`;
+      this.dom.btnToggleKeyTrigger.disabled = isLocked;
     } else {
-      this.dom.keyTriggerCard.className = "key-trigger-card";
+      this.dom.keyTriggerCard.className = `key-trigger-card ${isLocked ? "is-locked" : ""}`;
       this.dom.keyCardTitle.textContent = `Shot ${this.playhead} (Interpolated)`;
-      this.dom.btnToggleKeyTrigger.textContent = "+ Key Here";
-      this.dom.btnToggleKeyTrigger.className = "btn btn-primary btn-sm";
+      this.dom.btnToggleKeyTrigger.textContent = isLocked ? "🔒 Shot Completed" : "+ Key Here";
+      this.dom.btnToggleKeyTrigger.className = `btn btn-sm ${isLocked ? "btn-secondary" : "btn-primary"}`;
+      this.dom.btnToggleKeyTrigger.disabled = isLocked;
     }
 
     // Synchronize Section 3 controls with evaluated values at active playhead
@@ -1891,6 +2243,7 @@ class TimelineStudioApp {
     this.updateInspectorUI();
     this.updateOverlays();
     this.updateLiveTrackingUI();
+    this.updatePlayheadTimeBadge();
     this.renderTimeline();
 
     if (loadMedia && !this.isDragging && !this.isPlayingPreview) {
@@ -2041,6 +2394,12 @@ class TimelineStudioApp {
 
     const clipLength = (total / 24).toFixed(1);
     this.dom.calcClipLength.textContent = `${clipLength}s`;
+
+    if (this.dom.calcEndTime) {
+      const baseMs = this.getSequenceBaseTime();
+      const endMs = baseMs + (total * interval * 1000);
+      this.dom.calcEndTime.textContent = this.formatWallClockTime(endMs, true);
+    }
   }
 
   /* -------------------------------------------------------------------------- */
@@ -2099,24 +2458,51 @@ class TimelineStudioApp {
 
   async sendHotUpdate() {
     const total = this.plan.totalShots;
+    const isTimelapseActive =
+      (this.liveState.timelapse.state === "RUNNING" || this.liveState.timelapse.state === "PAUSED") &&
+      this.activePoses &&
+      this.activePoses.length > 0;
+    const K = isTimelapseActive ? (this.liveShot || 0) : 0;
+
     const poses = [];
     const camera_settings = [];
 
     for (let s = 1; s <= total; s++) {
-      const pan = this.evaluateTrackAtShot(this.plan.tracks.pan, s);
-      const tilt = this.evaluateTrackAtShot(this.plan.tracks.tilt, s);
-      const shutter = this.evaluateTrackAtShot(this.plan.tracks.shutter_speed || { id: "shutter_speed" }, s);
-      const iso = this.evaluateTrackAtShot(this.plan.tracks.iso || { id: "iso" }, s);
-      const aperture = this.evaluateTrackAtShot(this.plan.tracks.aperture || { id: "aperture" }, s);
-      const wb = this.evaluateTrackAtShot(this.plan.tracks.white_balance || { id: "white_balance" }, s);
+      if (isTimelapseActive && s <= K) {
+        // Strictly preserve executed history from active run cache
+        const pastPose = this.activePoses[s - 1] || {
+          pan: Number(Number(this.evaluateTrackAtShot(this.plan.tracks.pan, s)).toFixed(2)),
+          tilt: Number(Number(this.evaluateTrackAtShot(this.plan.tracks.tilt, s)).toFixed(2))
+        };
+        const pastSettings = this.activeCameraSettings[s - 1] || {
+          iso: String(this.evaluateTrackAtShot(this.plan.tracks.iso || { id: "iso" }, s)),
+          shutter_speed: String(this.evaluateTrackAtShot(this.plan.tracks.shutter_speed || { id: "shutter_speed" }, s)),
+          aperture: String(this.evaluateTrackAtShot(this.plan.tracks.aperture || { id: "aperture" }, s)),
+          white_balance: String(this.evaluateTrackAtShot(this.plan.tracks.white_balance || { id: "white_balance" }, s))
+        };
+        poses.push({ pan: Number(Number(pastPose.pan).toFixed(2)), tilt: Number(Number(pastPose.tilt).toFixed(2)) });
+        camera_settings.push({
+          iso: String(pastSettings.iso),
+          shutter_speed: String(pastSettings.shutter_speed),
+          aperture: String(pastSettings.aperture),
+          white_balance: String(pastSettings.white_balance)
+        });
+      } else {
+        const pan = this.evaluateTrackAtShot(this.plan.tracks.pan, s);
+        const tilt = this.evaluateTrackAtShot(this.plan.tracks.tilt, s);
+        const shutter = this.evaluateTrackAtShot(this.plan.tracks.shutter_speed || { id: "shutter_speed" }, s);
+        const iso = this.evaluateTrackAtShot(this.plan.tracks.iso || { id: "iso" }, s);
+        const aperture = this.evaluateTrackAtShot(this.plan.tracks.aperture || { id: "aperture" }, s);
+        const wb = this.evaluateTrackAtShot(this.plan.tracks.white_balance || { id: "white_balance" }, s);
 
-      poses.push({ pan: Number(Number(pan).toFixed(2)), tilt: Number(Number(tilt).toFixed(2)) });
-      camera_settings.push({
-        iso: String(iso),
-        shutter_speed: String(shutter),
-        aperture: String(aperture),
-        white_balance: String(wb)
-      });
+        poses.push({ pan: Number(Number(pan).toFixed(2)), tilt: Number(Number(tilt).toFixed(2)) });
+        camera_settings.push({
+          iso: String(iso),
+          shutter_speed: String(shutter),
+          aperture: String(aperture),
+          white_balance: String(wb)
+        });
+      }
     }
 
     try {
@@ -2126,6 +2512,8 @@ class TimelineStudioApp {
         body: JSON.stringify({ poses, camera_settings })
       });
       if (res.ok) {
+        this.activePoses = poses;
+        this.activeCameraSettings = camera_settings;
         this.showToast("Hot-updated active time-lapse targets", "info");
       }
     } catch (e) {
@@ -2921,6 +3309,8 @@ class TimelineStudioApp {
       const data = await res.json();
       if (data.status === "OK") {
         this.capturedShotsMap.clear();
+        this.activePoses = poses;
+        this.activeCameraSettings = camera_settings;
         this.followLive = true;
         this.liveShot = 1;
         this.setPlayhead(1, true, true);
@@ -3543,7 +3933,8 @@ class TimelineStudioApp {
       this.sessionsList.forEach((s) => {
         const isActive = this.activeSession && (this.activeSession.slug === s.slug || this.activeSession.id === s.id);
         const testCount = s.test_shots_count ?? 0;
-        const tlCount = s.timelapse_count ?? 0;
+        const tlCount = s.timelapse_shots_count ?? s.timelapse_count ?? 0;
+        const takesCount = s.takes_count ?? 0;
         const safeName = this.escapeHtml(s.name || s.slug);
         const safeSlug = this.escapeHtml(s.slug);
         const dateStr = this.formatPlanDate(s.updated_at || s.created_at);
@@ -3558,7 +3949,7 @@ class TimelineStudioApp {
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 3px; display: flex; align-items: center; gap: 8px;">
                 <span>📷 ${testCount} test shot${testCount === 1 ? '' : 's'}</span>
                 <span>•</span>
-                <span>🎞️ ${tlCount} capture${tlCount === 1 ? '' : 's'}</span>
+                <span>🎞️ ${tlCount} capture${tlCount === 1 ? '' : 's'}${takesCount > 1 ? ` (${takesCount} takes)` : ''}</span>
                 <span>•</span>
                 <span>${dateStr}</span>
               </div>
@@ -3848,14 +4239,36 @@ window.executeRecalibrateZero = async function() {
   const banner = document.getElementById("execZeroWarningBanner");
   if (banner) banner.style.display = "none";
   try {
-    const res = await fetch("/api/rig/confirm-zero", { method: "POST" });
+    const now = Date.now();
+    const payload = {
+      client_time: now / 1000,
+      client_iso: new Date(now).toISOString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+    };
+    const res = await fetch("/api/rig/confirm-zero", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
     const data = await res.json();
     if (data.status === "OK") {
       if (banner) banner.style.display = "none";
       if (window.app) {
-        window.app.showToast("Zero reference confirmed (0.00°, 0.00°)", "success");
+        window.app.lastZeroTime = now;
+        window.app.projectedStartTime = now;
+        if (data.time_sync) {
+          window.app.systemTime = data.time_sync;
+        }
+        if (window.app.dom.clockSyncStatus) {
+          window.app.dom.clockSyncStatus.textContent = "Synced (" + new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ")";
+          window.app.dom.clockSyncStatus.style.color = "#10b981";
+        }
+        window.app.showToast("Zero reference confirmed & clock synchronized", "success");
         const ref = data.reference || { confirmed: true, reference_confirmed: true };
-        window.app.handleLiveEvent({ reference: ref, motors: data.motors });
+        window.app.handleLiveEvent({ reference: ref, motors: data.motors, system_time: data.time_sync });
+        window.app.updateScheduleCalculations();
+        window.app.updatePlayheadTimeBadge();
+        window.app.renderTimeline();
       }
     } else {
       if (banner) banner.style.display = "flex";

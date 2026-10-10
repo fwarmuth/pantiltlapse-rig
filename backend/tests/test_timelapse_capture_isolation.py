@@ -136,3 +136,47 @@ def test_cancel_waits_for_inflight_capture_before_releasing_recording(tmp_path):
         assert coordinator.active_mode == "IDLE"
 
     asyncio.run(run())
+
+
+def test_timelapse_multi_take_isolation_in_same_session(tmp_path):
+    from session_manager import SessionManager
+
+    async def run():
+        sm = SessionManager(base_dir=tmp_path / "sessions")
+        session = sm.create_session("LakeBreeze")
+
+        rig_mgr = RigManager(storage_dir=tmp_path / "rig")
+        rig_mgr.confirm_reference()
+        coordinator = OperationCoordinator()
+        camera = RecordingCamera(tmp_path / "captures")
+        engine = TimelapseEngine(RecordingSerial(), camera, rig_mgr, coordinator)
+
+        # Run 1: gets next take (take_01)
+        take1_dir = sm.get_next_timelapse_take_dir(session.slug)
+        assert take1_dir.name == "take_01"
+
+        config1 = TimelapseConfig(total_shots=2, interval_s=1.0, settle_time_s=0.0, target_dir=str(take1_dir))
+        res1 = await engine.start(config1)
+        await engine._task
+        assert res1["status"] == "OK"
+
+        # Verify take_01 has captures
+        take1_files = sorted([f.name for f in take1_dir.iterdir() if f.is_file()])
+        assert take1_files == ["0001.jpg", "0002.jpg"]
+
+        # Run 2: gets next take (take_02)
+        take2_dir = sm.get_next_timelapse_take_dir(session.slug)
+        assert take2_dir.name == "take_02"
+
+        config2 = TimelapseConfig(total_shots=3, interval_s=1.0, settle_time_s=0.0, target_dir=str(take2_dir))
+        res2 = await engine.start(config2)
+        await engine._task
+        assert res2["status"] == "OK"
+
+        # Verify take_02 has its captures and take_01 is untouched
+        take2_files = sorted([f.name for f in take2_dir.iterdir() if f.is_file()])
+        assert take2_files == ["0001.jpg", "0002.jpg", "0003.jpg"]
+        assert len([f for f in take1_dir.iterdir() if f.is_file()]) == 2
+
+    asyncio.run(run())
+

@@ -105,3 +105,41 @@ def test_session_api_endpoints():
     assert res_del.status_code == 200
     assert res_del.json()["status"] == "OK"
 
+
+def test_session_takes_and_non_overwriting():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sm = SessionManager(base_dir=tmpdir)
+        session = sm.create_session("MultiTakeTest")
+
+        # Initial take is take_01
+        take1 = sm.get_next_timelapse_take_dir(session.slug)
+        assert take1.name == "take_01"
+
+        # If take_01 has 0 files, calling get_next_timelapse_take_dir reuses take_01
+        take1_again = sm.get_next_timelapse_take_dir(session.slug)
+        assert take1_again.name == "take_01"
+
+        # Now simulate images saved in take_01
+        (take1 / "0001.jpg").write_bytes(b"frame1")
+        (take1 / "0002.jpg").write_bytes(b"frame2")
+
+        # Calling get_next_timelapse_take_dir now allocates take_02
+        take2 = sm.get_next_timelapse_take_dir(session.slug)
+        assert take2.name == "take_02"
+        assert take2.exists()
+
+        # Both takes are listed
+        takes = sm.list_takes(session.slug)
+        assert takes == ["take_01", "take_02"]
+
+        # Latest take dir is take_02
+        latest = sm.get_latest_timelapse_take_dir(session.slug)
+        assert latest.name == "take_02"
+
+        # list_sessions reflects total count across takes
+        sessions = sm.list_sessions()
+        s_data = next(s for s in sessions if s["slug"] == session.slug)
+        assert s_data["timelapse_shots_count"] == 2
+        assert s_data["takes_count"] == 2
+
+
